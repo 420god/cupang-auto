@@ -366,6 +366,7 @@ async function loadMore() {
       state.rows.push(...rows);
       renderRows(rows);
       state.offset += rows.length;
+      loadRowMargins(rows);
     }
 
     $('#sourcingCount').textContent = `${state.rows.length}개 상품` + (state.done ? '' : ' (스크롤하면 더 불러옵니다)');
@@ -425,6 +426,62 @@ function renderRows(rows) {
   }).join('');
 
   tb.insertAdjacentHTML('beforeend', html);
+}
+
+/* 클릭(옵션 펼치기) 없이도 이미 입력해 둔 원가로 상품 목록에 최고 마진율을 채운다 */
+async function loadRowMargins(rows) {
+  const pids = rows.map((p) => p.product_id).filter(Boolean);
+  if (!pids.length) return;
+
+  try {
+    const costed = await api(
+      'user_items?select=item_id,product_id,cost_cny,want_price,exchange_rate,outbound_fee,work_fee,size_type' +
+      `&product_id=in.(${pids.map(encodeURIComponent).join(',')})&cost_cny=not.is.null`
+    ) || [];
+    if (!costed.length) return;
+
+    costed.forEach((u) => { state.userItems[u.item_id] = Object.assign(state.userItems[u.item_id] || {}, u); });
+
+    const needPrice = costed.filter((u) => u.want_price == null).map((u) => u.item_id);
+    const priceMap = {};
+    if (needPrice.length) {
+      const items = await api(
+        `product_items?select=item_id,current_price&item_id=in.(${needPrice.map(encodeURIComponent).join(',')})`
+      ) || [];
+      items.forEach((it) => { priceMap[it.item_id] = it.current_price; });
+    }
+
+    const byProduct = {};
+    costed.forEach((u) => { (byProduct[u.product_id] = byProduct[u.product_id] || []).push(u); });
+
+    rows.forEach((p) => {
+      const items = byProduct[p.product_id];
+      if (!items) return;
+
+      let best = null, bestAmt = null;
+      items.forEach((u) => {
+        const price = num(u.want_price) ?? num(priceMap[u.item_id]);
+        const size = u.size_type || settings.size;
+        const fee = feeFor(p.category_code, size, price);
+        const c = calcMargin({
+          price, commission: settings.commission, fulfillment: fee,
+          costCny: u.cost_cny, rate: u.exchange_rate,
+          outbound: u.outbound_fee, work: u.work_fee
+        });
+        if (c && c.margin !== null && (best === null || c.rate > best)) {
+          best = c.rate; bestAmt = c.margin;
+        }
+      });
+
+      if (best !== null) {
+        const prow = document.querySelector(`tr.prow[data-pid="${CSS.escape(p.product_id)}"]`);
+        if (!prow) return;
+        const cls = best >= 0 ? 'pos' : 'neg';
+        prow.querySelector('.margin-rate').innerHTML = `<span class="${cls}">${best}%</span>`;
+        prow.querySelector('.margin-amt').innerHTML = `<span class="${cls}">${bestAmt.toLocaleString()}</span>`;
+      }
+    });
+  } catch (e) { /* 목록 표시는 계속 정상 동작해야 하므로 조용히 무시 */ }
 }
 
 /* ---------- 옵션 펼치기 ---------- */
