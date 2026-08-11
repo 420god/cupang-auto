@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>소싱 대시보드</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ===================== 로그인 ===================== -->
+<div id="loginView" class="login-wrap">
+  <div class="login-card">
+    <div class="login-brand">
+      <div class="brand-mark"></div>
+      <h1>소싱 대시보드</h1>
+      <p class="muted">쿠팡 상품 데이터 분석</p>
+    </div>
+
+    <label class="field">
+      <span>이메일</span>
+      <input type="email" id="loginEmail" autocomplete="username" placeholder="you@example.com" />
+    </label>
+
+    <label class="field">
+      <span>비밀번호</span>
+      <input type="password" id="loginPassword" autocomplete="current-password" placeholder="••••••••" />
+    </label>
+
+    <button id="loginBtn" class="btn btn-primary btn-block">로그인</button>
+    <button id="signupBtn" class="btn btn-ghost btn-block">회원가입 (초대받은 이메일만)</button>
+
+    <div id="loginMsg" class="msg"></div>
+
+    <details class="cfg">
+      <summary>서버 설정</summary>
+      <label class="field">
+        <span>Supabase URL</span>
+        <input type="text" id="cfgUrl" placeholder="https://xxxx.supabase.co" />
+      </label>
+      <label class="field">
+        <span>Publishable Key</span>
+        <input type="password" id="cfgKey" placeholder="sb_publishable_..." />
+      </label>
+      <button id="cfgSaveBtn" class="btn btn-sm">설정 저장</button>
+    </details>
+  </div>
+</div>
+
+
+<!-- ===================== 앱 ===================== -->
+<div id="appView" class="app hidden">
+
+  <!-- 상단바 -->
+  <header class="topbar">
+    <button id="menuBtn" class="icon-btn only-mobile" aria-label="메뉴">
+      <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+    </button>
+
+    <div class="brand">
+      <div class="brand-mark sm"></div>
+      <span>소싱 대시보드</span>
+    </div>
+
+    <div class="search-box">
+      <svg viewBox="0 0 24 24" class="search-icon"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+      <input type="search" id="searchInput" placeholder="상품명 검색" />
+    </div>
+
+    <div class="topbar-right">
+      <button id="themeBtn" class="icon-btn" aria-label="테마 전환">
+        <svg viewBox="0 0 24 24" class="ico-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>
+        <svg viewBox="0 0 24 24" class="ico-moon"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+      </button>
+      <button id="settingsBtn" class="icon-btn" aria-label="설정">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 008 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H2a2 2 0 110-4h.09A1.65 1.65 0 004.6 8a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 3.6 1.65 1.65 0 0010 2.09V2a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 8v0a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      </button>
+      <button id="logoutBtn" class="btn btn-sm btn-ghost">로그아웃</button>
+    </div>
+  </header>
+
+  <div class="body">
+    <!-- 사이드바 -->
+    <nav id="sidebar" class="sidebar">
+      <button class="nav-item active" data-page="sourcing">
+        <svg viewBox="0 0 24 24"><path d="M3 3h18v4H3zM3 10h18v11H3z"/></svg>
+        <span>소싱</span>
+      </button>
+      <button class="nav-item" data-page="favorites">
+        <svg viewBox="0 0 24 24"><path d="M12 3l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.8 6.2 20.9l1.1-6.5L2.6 9.8l6.5-.9z"/></svg>
+        <span>즐겨찾기</span>
+      </button>
+      <button class="nav-item" data-page="categories">
+        <svg viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>
+        <span>카테고리</span>
+      </button>
+      <button class="nav-item" data-page="queue">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        <span>수집 대기열</span>
+      </button>
+      <div class="nav-spacer"></div>
+      <div class="nav-user">
+        <div class="avatar" id="userAvatar">?</div>
+        <div class="nav-user-txt">
+          <div id="userEmail" class="ellipsis">—</div>
+          <div id="userRole" class="muted xs">—</div>
+        </div>
+      </div>
+    </nav>
+    <div id="scrim" class="scrim"></div>
+
+    <!-- 본문 -->
+    <main class="main">
+
+      <!-- ── 소싱 ── -->
+      <section id="page-sourcing" class="page">
+        <div class="page-head">
+          <div>
+            <h2>소싱</h2>
+            <p class="muted sm" id="sourcingCount">불러오는 중…</p>
+          </div>
+          <div class="page-actions">
+            <button id="filterToggle" class="btn btn-sm">
+              <svg viewBox="0 0 24 24" class="ico"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>
+              필터 <span id="filterCount" class="badge hidden">0</span>
+            </button>
+            <button id="exportBtn" class="btn btn-sm">내보내기</button>
+          </div>
+        </div>
+
+        <!-- 필터 -->
+        <div id="filterPanel" class="filter-panel hidden">
+          <div class="filter-grid">
+            <label class="field">
+              <span>대분류</span>
+              <select id="fRoot"><option value="">전체</option></select>
+            </label>
+            <label class="field">
+              <span>말단 카테고리</span>
+              <select id="fCategory"><option value="">전체</option></select>
+            </label>
+            <label class="field">
+              <span>배송유형</span>
+              <select id="fDelivery">
+                <option value="">전체</option>
+                <option>로켓배송</option>
+                <option>판매자로켓</option>
+                <option>로켓프레시</option>
+                <option>로켓직구</option>
+                <option>판매자배송</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>가격 (원)</span>
+              <div class="range">
+                <input type="number" id="fPriceMin" placeholder="최소" />
+                <em>~</em>
+                <input type="number" id="fPriceMax" placeholder="최대" />
+              </div>
+            </label>
+            <label class="field">
+              <span>판매량 (명)</span>
+              <div class="range">
+                <input type="number" id="fSalesMin" placeholder="최소" />
+                <em>~</em>
+                <input type="number" id="fSalesMax" placeholder="최대" />
+              </div>
+            </label>
+            <label class="field">
+              <span>마진율 (%)</span>
+              <div class="range">
+                <input type="number" id="fMarginMin" placeholder="최소" />
+                <em>~</em>
+                <input type="number" id="fMarginMax" placeholder="최대" />
+              </div>
+            </label>
+            <label class="field">
+              <span>정렬</span>
+              <select id="fSort">
+                <option value="max_sales">판매량 많은순</option>
+                <option value="sum_sales">판매량 합계순</option>
+                <option value="min_price">가격 낮은순</option>
+                <option value="pv_rank">카테고리 순위순</option>
+              </select>
+            </label>
+            <label class="field checkline">
+              <input type="checkbox" id="fFavCatOnly" />
+              <span>즐겨찾기 카테고리만</span>
+            </label>
+          </div>
+          <div class="filter-foot">
+            <button id="filterReset" class="btn btn-sm btn-ghost">초기화</button>
+            <button id="filterApply" class="btn btn-sm btn-primary">적용</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th class="col-img"></th>
+                <th class="col-name">상품 / 옵션</th>
+                <th class="col-num">판매량</th>
+                <th class="col-num">가격</th>
+                <th class="col-num">조회수</th>
+                <th class="col-num">마진율</th>
+                <th class="col-num">마진액</th>
+                <th class="col-mid">배송</th>
+                <th class="col-mid">대분류</th>
+                <th class="col-mid">말단</th>
+                <th class="col-fav"></th>
+              </tr>
+            </thead>
+            <tbody id="sourcingBody"></tbody>
+          </table>
+          <div id="sourcingLoader" class="loader hidden"><div class="spinner"></div>불러오는 중…</div>
+          <div id="sourcingEnd" class="list-end hidden">모두 불러왔습니다</div>
+          <div id="sourcingEmpty" class="empty hidden">
+            <p>조건에 맞는 상품이 없습니다</p>
+            <button class="btn btn-sm" onclick="document.getElementById('filterReset').click()">필터 초기화</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 즐겨찾기 ── -->
+      <section id="page-favorites" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>즐겨찾기</h2>
+            <p class="muted sm" id="favCount">—</p>
+          </div>
+        </div>
+
+        <div class="tabs" id="statusTabs">
+          <button class="tab active" data-status="">전체</button>
+          <button class="tab" data-status="검토중">검토중</button>
+          <button class="tab" data-status="소싱대기">소싱대기</button>
+          <button class="tab" data-status="소싱완료">소싱완료</button>
+          <button class="tab" data-status="구매완료">구매완료</button>
+          <button class="tab" data-status="판매중">판매중</button>
+          <button class="tab" data-status="보류">보류</button>
+        </div>
+
+        <div id="favList" class="fav-list"></div>
+        <div id="favEmpty" class="empty hidden"><p>즐겨찾기한 상품이 없습니다</p></div>
+      </section>
+
+      <!-- ── 카테고리 ── -->
+      <section id="page-categories" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>카테고리</h2>
+            <p class="muted sm" id="catSummary">—</p>
+          </div>
+          <div class="page-actions">
+            <label class="chk">
+              <input type="checkbox" id="catFavOnly" />
+              <span>즐겨찾기만</span>
+            </label>
+            <button id="catQueueBtn" class="btn btn-sm btn-primary hidden">
+              선택 <span id="catSelCount">0</span>건 수집 요청
+            </button>
+            <button id="catDeleteBtn" class="btn btn-sm hidden" style="color:var(--neg);border-color:var(--neg)">
+              선택 삭제
+            </button>
+          </div>
+        </div>
+
+        <div class="legend">
+          <span><i class="dot s-collected"></i>오늘 완료</span>
+          <span><i class="dot s-partial"></i>목록만</span>
+          <span><i class="dot s-stale"></i>과거 수집</span>
+          <span><i class="dot s-never"></i>미수집</span>
+        </div>
+
+        <div id="catGroups" class="cat-groups"></div>
+      </section>
+
+      <!-- ── 대기열 ── -->
+      <section id="page-queue" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>수집 대기열</h2>
+            <p class="muted sm" id="queueSummary">—</p>
+          </div>
+          <div class="page-actions">
+            <button id="queueRefresh" class="btn btn-sm">새로고침</button>
+          </div>
+        </div>
+        <div class="hint-box">
+          웹에서 등록한 요청을 확장프로그램이 읽어 수집합니다.
+          확장프로그램을 켜두면 순서대로 처리됩니다.
+        </div>
+        <div id="queueList" class="queue-list"></div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+
+<!-- ===================== 설정 모달 ===================== -->
+<div id="settingsModal" class="modal hidden">
+  <div class="modal-backdrop" data-close></div>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>설정</h3>
+      <button class="icon-btn" data-close aria-label="닫기">
+        <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <label class="field">
+        <span>환율 (CNY → KRW)</span>
+        <input type="number" id="setRate" step="0.01" />
+      </label>
+      <div class="two">
+        <label class="field">
+          <span>기본 출고비 (원)</span>
+          <input type="number" id="setOutbound" />
+        </label>
+        <label class="field">
+          <span>기본 작업비 (원)</span>
+          <input type="number" id="setWork" />
+        </label>
+      </div>
+      <div class="two">
+        <label class="field">
+          <span>기본 수수료율 (%)</span>
+          <input type="number" id="setCommission" step="0.1" />
+        </label>
+        <label class="field">
+          <span>기본 사이즈</span>
+          <select id="setSize">
+            <option value="MINI">극소형</option>
+            <option value="SMALL">소형</option>
+            <option value="MEDIUM">중형</option>
+            <option value="LARGE1">대형1</option>
+            <option value="LARGE2">대형2</option>
+            <option value="XLARGE">특대형</option>
+          </select>
+        </label>
+      </div>
+      <p class="muted xs">
+        여기서 바꾼 값은 앞으로 계산할 때 기본값으로 쓰입니다.
+        이미 입력한 상품의 환율은 그대로 유지됩니다.
+      </p>
+      <div id="settingsMsg" class="msg"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close>취소</button>
+      <button id="settingsSave" class="btn btn-primary">저장</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

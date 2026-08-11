@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<title>쿠팡윙 상품 수집기</title>
+<style>
+  body { width: 420px; font-family: -apple-system, "Malgun Gothic", sans-serif; padding: 14px; margin: 0; }
+  body.windowed { width: auto; max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 15px; margin: 0 0 4px; }
+  .sub { font-size: 11px; color: #888; margin-bottom: 10px; }
+  .steps { background: #f5f7fa; border-radius: 6px; padding: 10px 12px; font-size: 11.5px; line-height: 1.7; color: #444; margin-bottom: 10px; }
+  .steps b { color: #1a1a1a; }
+  .warn { background: #fff6e5; border-left: 3px solid #e8a33d; padding: 8px 10px; font-size: 11.5px; line-height: 1.6; color: #6b4b12; margin-bottom: 10px; border-radius: 4px; }
+  label { font-size: 12px; color: #555; display: block; margin: 10px 0 4px; }
+  textarea { width: 100%; height: 52px; box-sizing: border-box; font-size: 12px; padding: 6px; resize: vertical; font-family: monospace; }
+  button { width: 100%; padding: 9px; font-size: 13px; border: none; border-radius: 6px; cursor: pointer; margin-top: 6px; }
+  .secondary { background: #eef2f9; color: #2b5cb8; }
+  .primary { background: #3777f0; color: #fff; }
+  .primary:disabled { background: #aac2ef; cursor: not-allowed; }
+  .danger { background: #f8e7e5; color: #b3372c; display: none; }
+  .success { background: #2a9d5c; color: #fff; display: none; }
+  .success { background: #2a9d5c; color: #fff; display: none; }
+  .row { display: flex; gap: 6px; }
+  .row button { margin-top: 6px; }
+  #catBox { display: none; margin-top: 8px; border: 1px solid #e3e6ea; border-radius: 6px; }
+  #catHeader { display: flex; align-items: center; justify-content: space-between; padding: 7px 9px; background: #fafbfc; border-bottom: 1px solid #e3e6ea; font-size: 11.5px; color: #555; }
+  #catFilter { width: 100%; box-sizing: border-box; border: none; border-bottom: 1px solid #e3e6ea; padding: 7px 9px; font-size: 12px; outline: none; }
+  #catList { max-height: 230px; overflow-y: auto; padding: 4px 0; }
+  .cat { display: flex; align-items: flex-start; gap: 7px; padding: 4px 9px; font-size: 12px; line-height: 1.4; }
+  .cat:hover { background: #f7f9fc; }
+  .cat input { margin: 2px 0 0; flex-shrink: 0; }
+  .cat .code { color: #999; font-size: 10.5px; font-family: monospace; }
+  #status { font-size: 12px; margin-top: 10px; white-space: pre-wrap; line-height: 1.6; color: #333; max-height: 180px; overflow-y: auto; }
+  #status.error { color: #c0392b; }
+  .progress-bar { height: 6px; background: #eee; border-radius: 3px; margin-top: 8px; overflow: hidden; display: none; }
+  .progress-fill { height: 100%; background: #3777f0; width: 0%; transition: width .2s; }
+  details { margin-top: 10px; font-size: 12px; border: 1px solid #eceff3; border-radius: 6px; padding: 8px 10px; }
+  summary { cursor: pointer; color: #2b5cb8; font-weight: 600; outline: none; }
+  details[open] summary { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+  <h1>쿠팡윙 상품 수집기</h1>
+  <div class="sub" id="modeLabel"></div>
+
+  <div class="steps">
+    <b>준비</b> — 쿠팡 윙 새로고침(F5) → "쿠팡 인기 상품 검색"에서 아무 카테고리나 한 번 검색<br />
+    상세 보강을 쓰려면 <b>www.coupang.com 탭도 하나 열어두세요.</b>
+  </div>
+
+  <button id="openWindowBtn" class="secondary">별도 창으로 열기 (장시간 수집 시 권장)</button>
+
+  <button id="checkBtn" class="secondary">① 요청 템플릿 확인</button>
+  <button id="scanBtn" class="secondary">② 전체 카테고리 불러오기</button>
+
+  <div id="catBox">
+    <div id="catHeader">
+      <span id="catCount">선택 0 / 전체 0</span>
+      <span>
+        <a href="#" id="selLeaf" style="margin-right:8px;">말단만</a>
+        <a href="#" id="selAll" style="margin-right:8px;">전체선택</a>
+        <a href="#" id="selNone">전체해제</a>
+      </span>
+    </div>
+    <input type="text" id="catFilter" placeholder="이름 또는 코드로 검색해서 걸러내기..." />
+    <div id="catList"></div>
+  </div>
+
+  <label style="display:flex; align-items:flex-start; gap:7px; margin:12px 0 0; font-size:12.5px;">
+    <input type="checkbox" id="detailEnabled" checked style="margin-top:2px;" />
+    <span><b>판매량 · 배송유형까지 함께 수집</b>
+      <br /><span class="code" style="font-size:11px; color:#888;">
+      상품 수집이 끝나면 소비자 페이지에서 이어서 보강합니다</span>
+    </span>
+  </label>
+
+  <div class="warn" id="crawlWarn" style="display:none;">
+    수집량이 많아 시간이 오래 걸립니다. 창을 닫으면 중단되니
+    <b>별도 창으로 열기</b>를 쓰세요. 데이터는 계속 저장되어 중단해도 그때까지 받을 수 있습니다.
+  </div>
+
+  <button id="startBtn" class="primary">수집 시작</button>
+  <button id="stopBtn" class="danger">중지</button>
+  <div class="progress-bar" id="bar"><div class="progress-fill" id="barFill"></div></div>
+  <div id="status"></div>
+  <button id="downloadBtn" class="success">CSV 다운로드 (전체 통합)</button>
+  <button id="healthBtn" class="secondary">수집 결과 검증 리포트</button>
+  <button id="htmlViewBtn" class="secondary">이미지 갤러리로 보기 (HTML)</button>
+
+  <details>
+    <summary>수집 옵션</summary>
+
+    <div class="row" style="align-items:center; gap:8px; margin-top:8px;">
+      <label style="margin:0; flex:1;">카테고리별 상위 N개만
+        <input type="number" id="detailTopN" value="0" min="0"
+               style="width:70px; padding:5px; font-size:12px;" />
+      </label>
+      <label style="margin:0; flex:1;">요청 간격(ms)
+        <input type="number" id="detailDelay" value="1500" min="300" step="100"
+               style="width:80px; padding:5px; font-size:12px;" />
+      </label>
+    </div>
+    <div class="hint">상위 N이 0이면 전체입니다. 기본적으로 <b>상세 보강 대상</b>에만 적용됩니다.</div>
+
+    <label style="display:flex; align-items:flex-start; gap:7px; margin:6px 0 0; font-size:12px;">
+      <input type="checkbox" id="applyTopNToRows" style="margin-top:2px;" />
+      <span>상위 N을 CSV 출력에도 적용
+        <br /><span class="code" style="font-size:11px; color:#888;">
+        체크하면 CSV와 갤러리에도 카테고리별 상위 N개만 나옵니다 (수집 자체는 전체를 받습니다)</span>
+      </span>
+    </label>
+
+    <div class="row" style="align-items:center; gap:8px; margin-top:8px;">
+      <label style="margin:0; flex:1;">시작 동시 수
+        <input type="number" id="startConc" value="2" min="1" max="10"
+               style="width:60px; padding:5px; font-size:12px;" />
+      </label>
+      <label style="margin:0; flex:1;">최대 동시 수
+        <input type="number" id="maxConc" value="4" min="1" max="10"
+               style="width:60px; padding:5px; font-size:12px;" />
+      </label>
+      <label style="margin:0; flex:1;">분당 상한
+        <input type="number" id="rpmLimit" value="50" min="5" max="300" step="5"
+               style="width:70px; padding:5px; font-size:12px;" />
+      </label>
+    </div>
+    <label style="display:flex; align-items:flex-start; gap:7px; margin:8px 0 0; font-size:12px;">
+      <input type="checkbox" id="calibrate" checked style="margin-top:2px;" />
+      <span>임계점 자동 탐색 (권장)
+        <br /><span class="code" style="font-size:11px; color:#888;">
+        분당 상한의 30%에서 시작해 응답이 나빠지는 지점을 찾은 뒤, 그 직전의 75%를 안전선으로 고정합니다</span>
+      </span>
+    </label>
+
+    <div class="hint">
+      5개 신호(응답추세 · 서버첫응답 · 방어쿠키 · 리다이렉트 · 능동탐침)로 4단계 경보를 판정합니다.
+      주의는 간격 완화, 경고는 동시 수 감소, 위험은 60초 냉각, 차단은 장기 정지로 대응합니다.
+      분당 상한은 동시 수와 무관하게 지켜지는 절대 한도입니다.
+      안전을 원하면 <b>시작 1 · 최대 3 · 분당 30</b>을 권장합니다.
+    </div>
+
+    <label style="display:flex; align-items:flex-start; gap:7px; margin:8px 0 0; font-size:12px;">
+      <input type="checkbox" id="earlyStop" checked style="margin-top:2px;" />
+      <span>조기 중단 (권장)
+        <br /><span class="code" style="font-size:11px; color:#888;">
+        필요한 정보를 찾으면 나머지를 받지 않아 전송량이 크게 줄어듭니다</span>
+      </span>
+    </label>
+
+    <label style="display:flex; align-items:flex-start; gap:7px; margin:8px 0 0; font-size:12px;">
+      <input type="checkbox" id="detailPerOption" checked style="margin-top:2px;" />
+      <span>옵션(itemId)별로 조회
+        <br /><span class="code" style="font-size:11px; color:#888;">
+        해제하면 상품 단위로 1회만 조회해 요청 수가 줄어듭니다</span>
+      </span>
+    </label>
+
+
+
+    <div style="margin-top:12px; padding-top:10px; border-top:1px dashed #dde2e8;">
+      <div style="font-size:12px; font-weight:600; color:#444; margin-bottom:6px;">
+        이미지 크기
+      </div>
+      <div class="row" style="align-items:center; gap:8px;">
+        <label style="margin:0; flex:1;">원본 화질(px)
+          <input type="number" id="imgSize" value="400" min="60" max="1000" step="20"
+                 style="width:80px; padding:5px; font-size:12px;" />
+        </label>
+        <label style="margin:0; flex:1;">셀 표시(px)
+          <input type="number" id="cellImgSize" value="150" min="20" max="400" step="10"
+                 style="width:80px; padding:5px; font-size:12px;" />
+        </label>
+      </div>
+      <label style="margin:8px 0 0; display:block;">사용할 프로그램
+        <select id="imgMode" style="width:100%; padding:6px; font-size:12px; margin-top:4px;">
+          <option value="compat" selected>양쪽 호환 (권장) — 셀 크기에 맞춰 표시</option>
+          <option value="sheets">구글 시트 — 픽셀 크기 지정</option>
+          <option value="excel">엑셀 365 — 픽셀 크기 지정</option>
+        </select>
+      </label>
+      <div class="hint">
+        엑셀과 구글 시트는 IMAGE 함수 형식이 서로 다릅니다.
+        <b>#VALUE! 오류가 뜨면 "양쪽 호환"을 선택</b>하고, 행 높이·열 너비로 크기를 조절하세요.<br /><br />
+        <b>원본 화질</b>은 받아올 이미지 해상도입니다. 크게 잡을수록 선명하지만 느려집니다.<br />
+        <b>셀 표시</b>는 픽셀 지정 모드에서만 적용되며, HTML 갤러리에는 항상 반영됩니다.
+      </div>
+    </div>
+
+    <div style="margin-top:12px; padding-top:10px; border-top:1px dashed #dde2e8;">
+      <div style="font-size:12px; font-weight:600; color:#444; margin-bottom:6px;">
+        사전 필터 (상세 조회 대상 줄이기)
+      </div>
+      <div class="hint" style="margin-top:0;">
+        상품 수집 결과 중 조건에 맞는 것만 상세 조회합니다. <b>0이면 제한 없음</b>입니다.
+      </div>
+
+      <div class="row" style="align-items:center; gap:8px; margin-top:6px;">
+        <label style="margin:0; flex:1;">순위 상한
+          <input type="number" id="fRankMax" value="0" min="0" style="width:65px; padding:4px; font-size:12px;" />
+        </label>
+        <label style="margin:0; flex:1;">리뷰수 최소
+          <input type="number" id="fReviewMin" value="0" min="0" style="width:65px; padding:4px; font-size:12px;" />
+        </label>
+        <label style="margin:0; flex:1;">리뷰수 최대
+          <input type="number" id="fReviewMax" value="0" min="0" style="width:65px; padding:4px; font-size:12px;" />
+        </label>
+      </div>
+
+      <div class="row" style="align-items:center; gap:8px; margin-top:6px;">
+        <label style="margin:0; flex:1;">조회수 최소
+          <input type="number" id="fPvMin" value="0" min="0" style="width:75px; padding:4px; font-size:12px;" />
+        </label>
+        <label style="margin:0; flex:1;">조회수 최대
+          <input type="number" id="fPvMax" value="0" min="0" style="width:75px; padding:4px; font-size:12px;" />
+        </label>
+      </div>
+
+      <div class="row" style="align-items:center; gap:8px; margin-top:6px;">
+        <label style="margin:0; flex:1;">가격 최소
+          <input type="number" id="fPriceMin" value="0" min="0" style="width:80px; padding:4px; font-size:12px;" />
+        </label>
+        <label style="margin:0; flex:1;">가격 최대
+          <input type="number" id="fPriceMax" value="0" min="0" style="width:80px; padding:4px; font-size:12px;" />
+        </label>
+      </div>
+
+      <div class="row" style="align-items:center; gap:8px; margin-top:6px;">
+        <label style="margin:0; flex:1;">판매량 최소
+          <input type="number" id="fSalesMin" value="0" min="0" style="width:80px; padding:4px; font-size:12px;" />
+        </label>
+        <label style="margin:0; flex:1;">판매량 최대
+          <input type="number" id="fSalesMax" value="0" min="0" style="width:80px; padding:4px; font-size:12px;" />
+        </label>
+      </div>
+
+      <label style="display:flex; align-items:center; gap:7px; margin:8px 0 0; font-size:12px;">
+        <input type="checkbox" id="fExcludeInvalid" />
+        <span>등록 불가 상품 제외</span>
+      </label>
+
+      <button id="filterPreviewBtn" class="secondary">필터 적용 결과 미리보기</button>
+    </div>
+
+    <button id="probeBtn" class="secondary">빠른 점검 (데이터 없는 카테고리 자동 제외)</button>
+    <button id="exportCatBtn" class="secondary">말단 카테고리 목록 내보내기 (CSV)</button>
+
+    <label for="codes">직접 카테고리 코드 입력 (한 줄에 하나씩)</label>
+    <textarea id="codes" placeholder="83274&#10;109024"></textarea>
+  </details>
+
+
+
+  <details>
+    <summary>데이터베이스 저장 (Supabase)</summary>
+    <div class="hint" style="margin-top:6px;">
+      수집한 데이터를 웹 데이터베이스에 저장합니다.
+      <b>secret 키는 절대 넣지 마세요.</b> publishable 키만 사용합니다.
+    </div>
+
+    <label for="sbUrl">Project URL</label>
+    <input type="text" id="sbUrl" placeholder="https://xxxx.supabase.co"
+           style="width:100%; box-sizing:border-box; padding:7px; font-size:12px;" />
+
+    <label for="sbKey" style="margin-top:6px;">Publishable Key</label>
+    <input type="password" id="sbKey" placeholder="sb_publishable_..."
+           style="width:100%; box-sizing:border-box; padding:7px; font-size:12px;" />
+
+    <label for="sbEmail" style="margin-top:6px;">관리자 이메일</label>
+    <input type="text" id="sbEmail" placeholder="admin@example.com"
+           style="width:100%; box-sizing:border-box; padding:7px; font-size:12px;" />
+
+    <label for="sbPassword" style="margin-top:6px;">비밀번호</label>
+    <input type="password" id="sbPassword" placeholder="비밀번호"
+           style="width:100%; box-sizing:border-box; padding:7px; font-size:12px;" />
+
+    <button id="sbSaveBtn" class="secondary">설정 저장 &amp; 로그인</button>
+    <button id="sbTestBtn" class="secondary">연결 테스트</button>
+
+    <div id="sbStatus" class="hint" style="margin-top:8px;"></div>
+
+    <button id="sbCatUploadBtn" class="secondary">카테고리 전체 업로드</button>
+    <div class="hint" style="margin-top:4px;">
+      "② 전체 카테고리 불러오기" 후 누르면 카테고리 트리 전체가 웹사이트에 등록됩니다.
+      한 번만 하면 되고, 카테고리가 개편될 때만 다시 하면 됩니다.
+    </div>
+
+    <button id="sbUploadBtn" class="primary">수집 데이터 업로드</button>
+    <button id="sbFeeUploadBtn" class="secondary">요금표 업로드</button>
+
+    <div style="margin-top:12px; padding-top:10px; border-top:1px dashed #dde2e8;">
+      <div style="font-size:12px; font-weight:600; color:#444; margin-bottom:6px;">
+        대기열 자동 처리
+      </div>
+      <div class="hint" style="margin-top:0;">
+        웹사이트에서 등록한 수집 요청을 30초마다 확인해 자동으로 처리합니다.
+        <b>이 창을 열어두어야</b> 동작하므로 "별도 창으로 열기"를 권장합니다.
+      </div>
+      <button id="sbQueueStartBtn" class="primary">대기열 감시 시작</button>
+      <button id="sbQueueStopBtn" class="danger hidden">감시 중지</button>
+    </div>
+
+    <div class="hint">
+      업로드는 <b>덮어쓰기(upsert)</b> 방식입니다. 같은 상품은 최신 값으로 갱신되고,
+      변경 이력은 하루에 한 번만 기록됩니다.
+      개인 소싱 데이터(원가·메모·즐겨찾기)는 업로드가 건드리지 않습니다.
+    </div>
+  </details>
+
+  <details>
+    <summary>입출고비 계산</summary>
+    <div class="hint" style="margin-top:6px;">
+      카테고리별 요금표를 미리 수집해두고, 엑셀에서 <b>wantPrice</b>나 <b>sizeType</b>을 바꾸면
+      입출고비가 자동으로 다시 계산됩니다.
+    </div>
+
+    <label style="margin:8px 0 0; display:block;">기본 사이즈 유형
+      <select id="defaultSize" style="width:100%; padding:6px; font-size:12px; margin-top:4px;">
+        <option value="MINI" selected>극소형 (MINI)</option>
+        <option value="SMALL">소형 (SMALL)</option>
+        <option value="MEDIUM">중형 (MEDIUM)</option>
+        <option value="LARGE1">대형1 (LARGE1)</option>
+        <option value="LARGE2">대형2 (LARGE2)</option>
+        <option value="XLARGE">특대형 (XLARGE)</option>
+      </select>
+    </label>
+
+    <label style="display:flex; align-items:flex-start; gap:7px; margin:8px 0 0; font-size:12px;">
+      <input type="checkbox" id="lowAsp" style="margin-top:2px;" />
+      <span>저가 상품 전용 할인 요금표 사용
+        <br /><span class="code" style="font-size:11px; color:#888;">
+        14,000원 미만 상품 중 일부 카테고리에 적용되는 할인 요금입니다</span>
+      </span>
+    </label>
+
+    <button id="feeCollectBtn" class="secondary">① 요금표 수집 (카테고리별)</button>
+    <button id="feeExportBtn" class="secondary">② 요금표 CSV 내보내기</button>
+
+    <div class="hint">
+      <b>사용법</b><br />
+      1. 상품 수집 후 ①로 요금표를 모읍니다<br />
+      2. ②로 요금표 CSV를 받습니다<br />
+      3. 상품 CSV와 요금표 CSV를 같은 엑셀 통합문서로 합치고,
+         요금표 시트 이름을 <b>요금표</b>로 지정합니다<br />
+      4. wantPrice나 sizeType을 바꾸면 입출고비가 자동 재계산됩니다
+    </div>
+  </details>
+
+  <details>
+    <summary>상세 보강 단독 실행</summary>
+    <div class="hint" style="margin-top:6px;">
+      이미 수집한 상품 데이터에 판매량·배송유형만 따로 보강할 때 사용합니다.
+    </div>
+    <button id="detailFromDataBtn" class="secondary">수집된 데이터에서 대상 뽑기</button>
+    <label for="detailIds">대상 목록</label>
+    <textarea id="detailIds" placeholder="7537619448,19806755919"></textarea>
+    <div class="hint">형식: <code>productId,itemId,vendorItemId</code> (itemId부터 생략 가능)</div>
+    <button id="detailStartBtn" class="primary">상세 수집만 실행</button>
+    <button id="detailStopBtn" class="danger">중지</button>
+    <button id="detailDownloadBtn" class="success">상세 CSV만 다운로드</button>
+  </details>
+
+  <details>
+    <summary>문제 진단</summary>
+    <button id="apiLogBtn" class="secondary">캡처된 API 호출 목록</button>
+    <button id="templateBtn" class="secondary">템플릿 내용 보기</button>
+    <button id="treeRawBtn" class="secondary">카테고리 응답 원문 보기</button>
+    <button id="diagCatBtn" class="secondary">카테고리 1개 정밀 진단</button>
+    <button id="inspectBtn" class="secondary">상품 원본 필드 전체 보기</button>
+    <button id="consumerBtn" class="secondary">소비자 상품페이지 API 캡처 보기</button>
+    <input type="text" id="prodId" placeholder="productId 또는 productId,itemId,vendorItemId"
+           style="width:100%; box-sizing:border-box; padding:7px; font-size:12px; margin-top:6px;" />
+    <button id="productProbeBtn" class="secondary">상품페이지 원문 점검</button>
+    <button id="urlTestBtn" class="secondary">상품 URL 변형 테스트</button>
+    <button id="detailTestBtn" class="secondary">상품 1건 상세 파싱 테스트</button>
+    <button id="speedLogBtn" class="secondary">속도 제어 이벤트 로그</button>
+    <button id="imgTestBtn" class="secondary">이미지 주소 형식 검증</button>
+    <button id="feeCaptureBtn" class="secondary">입출고비 API 캡처 보기</button>
+    <button id="resetDetailBtn" class="secondary">저장된 상세 데이터 초기화</button>
+    <button id="resetRowsBtn" class="secondary">저장된 상품 수집 데이터 초기화</button>
+  </details>
+
+<script src="supabase.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

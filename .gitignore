@@ -1,0 +1,16 @@
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# 혹시라도 실수로 만들어질 수 있는 로컬 설정/키 파일
+*.local
+.env
+.env.*
+secrets*
+
+# 확장프로그램 빌드 산출물 (있다면)
+*.zip
+*.crx
+*.pem
