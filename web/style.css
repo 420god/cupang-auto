@@ -349,6 +349,7 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 .cat-chip:hover { border-color: var(--accent); background: var(--accent-soft); }
 .cat-chip.sel   { border-color: var(--accent); background: var(--accent-soft); }
 .cat-chip .cat-name { flex: 1; min-width: 0; font-size: 12.5px; }
+.cat-chip .cat-path { font-size: 10px; color: var(--text-3); opacity: .75; margin-top: 1px; }
 .cat-chip .cat-date { font-size: 10.5px; color: var(--text-3); margin-top: 1px; }
 .cat-chip .star { padding: 2px; }
 

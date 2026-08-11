@@ -864,6 +864,7 @@ async function loadCategories() {
       <i class="dot s-${r.status}"></i>
       <div class="cat-name">
         <div class="ellipsis">${esc(r.name)}</div>
+        <div class="cat-path ellipsis" title="${esc(r.full_path || '')}">${esc(r.full_path || '')}</div>
         <div class="cat-date">${
           r.last_detail_at ? new Date(r.last_detail_at).toLocaleDateString('ko-KR')
           : (r.last_list_at ? new Date(r.last_list_at).toLocaleDateString('ko-KR') + ' (목록)' : '미수집')
