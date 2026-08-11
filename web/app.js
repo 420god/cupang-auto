@@ -5,6 +5,13 @@
 const CFG = { url: '', key: '' };
 const AUTH = { token: '', refresh: '', expires: 0, userId: '', email: '', isAdmin: false };
 
+/* 단일 관리자 전용 배포 — 로그인 화면 없이 자동 로그인한다.
+   publishable key는 공개돼도 되지만 비밀번호는 그대로 노출되니 다른 사용자를 들일 계획이면 제거할 것. */
+const DEFAULT_SB_URL = 'https://winpzjbisxxsstmynywp.supabase.co';
+const DEFAULT_SB_KEY = 'sb_publishable_AlaigI_h6rAmahLF3b7kMA_lxMJNUD1';
+const ADMIN_EMAIL = 'main@gmail.com';
+const ADMIN_PASSWORD = '0000';
+
 let settings = {
   rate: 320,
   outbound: 300,
@@ -87,8 +94,8 @@ function debounce(fn, ms) {
 
 /* ===================== Supabase ===================== */
 function loadCfg() {
-  CFG.url = localStorage.getItem('sb_url') || '';
-  CFG.key = localStorage.getItem('sb_key') || '';
+  CFG.url = localStorage.getItem('sb_url') || DEFAULT_SB_URL;
+  CFG.key = localStorage.getItem('sb_key') || DEFAULT_SB_KEY;
   AUTH.token   = localStorage.getItem('sb_token')   || '';
   AUTH.refresh = localStorage.getItem('sb_refresh') || '';
   AUTH.expires = Number(localStorage.getItem('sb_expires') || 0);
@@ -1173,6 +1180,8 @@ $('#themeBtn').onclick = () => {
     localStorage.getItem('theme') ||
     (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 
+  $('#loginView').classList.add('hidden');
+
   loadCfg();
   $('#cfgUrl').value = CFG.url;
   $('#cfgKey').value = CFG.key;
@@ -1182,7 +1191,22 @@ $('#themeBtn').onclick = () => {
       await ensureAuth();
       await enterApp();
       return;
-    } catch (e) { /* 로그인 화면 유지 */ }
+    } catch (e) { /* 세션 만료 - 관리자 자동 로그인으로 진행 */ }
   }
+
+  if (CFG.url && CFG.key) {
+    try {
+      const d = await authRequest('token?grant_type=password', {
+        email: ADMIN_EMAIL, password: ADMIN_PASSWORD
+      });
+      applySession(d);
+      await enterApp();
+      return;
+    } catch (e) {
+      showLoginMsg('자동 로그인 실패: ' + e.message, true);
+    }
+  }
+
+  $('#loginView').classList.remove('hidden');
   if (!CFG.url) $('.cfg').setAttribute('open', '');
 })();
