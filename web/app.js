@@ -442,7 +442,7 @@ async function loadRowMargins(rows) {
 
   try {
     const costed = await api(
-      'user_items?select=item_id,product_id,cost_cny,want_price,exchange_rate,outbound_fee,work_fee,size_type' +
+      'user_items?select=item_id,product_id,cost_cny,want_price,exchange_rate,outbound_fee,work_fee' +
       `&product_id=in.(${pids.map(encodeURIComponent).join(',')})&cost_cny=not.is.null`
     ) || [];
     if (!costed.length) return;
