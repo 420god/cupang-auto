@@ -338,7 +338,7 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 .cat-group-head .caret { color: var(--text-3); transition: transform .15s; }
 .cat-group.open .cat-group-head .caret { transform: rotate(90deg); }
 .cat-stat { margin-left: auto; display: flex; gap: 9px; font-size: 11.5px; color: var(--text-2); }
-.cat-items { display: none; padding: 11px; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 8px; }
+.cat-items { display: none; padding: 11px; grid-template-columns: repeat(auto-fill, minmax(235px, 1fr)); gap: 8px; }
 .cat-group.open .cat-items { display: grid; }
 
 .cat-chip {
@@ -349,7 +349,11 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 .cat-chip:hover { border-color: var(--accent); background: var(--accent-soft); }
 .cat-chip.sel   { border-color: var(--accent); background: var(--accent-soft); }
 .cat-chip .cat-name { flex: 1; min-width: 0; font-size: 12.5px; }
-.cat-chip .cat-path { font-size: 10px; color: var(--text-3); opacity: .75; margin-top: 1px; }
+.cat-chip .cat-path {
+  font-size: 10px; color: var(--text-3); opacity: .75; margin-top: 1px;
+  white-space: normal; line-height: 1.3; word-break: break-all;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 .cat-chip .cat-date { font-size: 10.5px; color: var(--text-3); margin-top: 1px; }
 .cat-chip .star { padding: 2px; }
 
