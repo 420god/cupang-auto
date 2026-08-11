@@ -158,6 +158,36 @@ async function api(path, opts) {
   return text ? JSON.parse(text) : null;
 }
 
+/* Supabase 프로젝트의 Max Rows 설정(기본 1000)에 걸리지 않도록
+   Range 헤더로 전체를 끝까지 페이지네이션해서 가져온다. */
+async function apiAll(path, pageSize) {
+  const size = pageSize || 1000;
+  await ensureAuth();
+  let offset = 0;
+  let out = [];
+  for (;;) {
+    const res = await fetch(`${CFG.url}/rest/v1/${path}`, {
+      headers: {
+        apikey: CFG.key,
+        authorization: 'Bearer ' + AUTH.token,
+        'content-type': 'application/json',
+        range: `${offset}-${offset + size - 1}`
+      }
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let m = text.slice(0, 240);
+      try { const j = JSON.parse(text); m = j.message || j.hint || m; } catch (e) {}
+      throw new Error(`HTTP ${res.status}: ${m}`);
+    }
+    const rows = text ? JSON.parse(text) : [];
+    out = out.concat(rows);
+    if (rows.length < size) break;
+    offset += size;
+  }
+  return out;
+}
+
 /* ===================== 계산 ===================== */
 function feeFor(catCode, size, price) {
   const u = state.catUnits[catCode];
@@ -304,7 +334,7 @@ async function loadFeeTables() {
 
 async function loadCategoryOptions() {
   try {
-    const rows = await api('categories?select=category_code,name,full_path,root_name,unit1,unit2&order=full_path&limit=5000');
+    const rows = await apiAll('categories?select=category_code,name,full_path,root_name,unit1,unit2&order=full_path');
     const roots = new Set();
     const sel = $('#fCategory');
     (rows || []).forEach((c) => {
@@ -830,7 +860,7 @@ async function loadCategories() {
   box.innerHTML = '<div class="loader"><div class="spinner"></div>불러오는 중…</div>';
 
   try {
-    const rows = await api('v_category_status?select=*&order=full_path&limit=5000') || [];
+    const rows = await apiAll('v_category_status?select=*&order=full_path') || [];
     const favOnly = $('#catFavOnly').checked;
     const list = favOnly ? rows.filter((r) => r.is_favorite) : rows;
 
