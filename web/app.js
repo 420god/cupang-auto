@@ -33,7 +33,7 @@ const state = {
   userItems: {},      // item_id -> {want_price, cost_cny, ...}
   feeCache: {},       // "unit1|unit2|CAP" -> [{min_price, final_amount}]
   catUnits: {},       // category_code -> {unit1, unit2}
-  catStatusRows: null, // v_category_status 캐시 (탭 클릭마다 재요청 방지)
+  catStatusRows: null, // 카테고리 탭 데이터 캐시 (탭 클릭마다 재요청 방지)
   openProducts: new Set()
 };
 
@@ -45,6 +45,19 @@ function esc(v) {
   return String(v == null ? '' : v)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function kstDateStr(d) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(d);
+}
+/* v_category_status 뷰의 status 계산 로직을 클라이언트에서 그대로 재현.
+   뷰를 계속 쓰면 8000여 행마다 is_favorite용 상관 서브쿼리가 돌아 느려진다 —
+   그 필드는 이제 state.favCatCodes로 대체했으니 categories 원본 테이블만 읽는다. */
+function catStatus(r) {
+  const today = kstDateStr(new Date());
+  if (r.last_detail_at && kstDateStr(new Date(r.last_detail_at)) === today) return 'collected';
+  if (r.last_list_at && kstDateStr(new Date(r.last_list_at)) === today) return 'partial';
+  if (r.last_list_at || r.last_detail_at) return 'stale';
+  return 'never';
 }
 const num = (v) => (typeof v === 'number' && !isNaN(v)) ? v : null;
 const won = (v) => num(v) === null ? '—' : v.toLocaleString() + '원';
@@ -891,7 +904,9 @@ async function loadCategories(force) {
   box.innerHTML = '<div class="loader"><div class="spinner"></div>불러오는 중…</div>';
 
   try {
-    state.catStatusRows = await apiAll('v_category_status?select=*&order=full_path') || [];
+    const rows = await apiAll('categories?select=category_code,name,full_path,root_name,last_list_at,last_detail_at&order=full_path') || [];
+    rows.forEach((r) => { r.status = catStatus(r); });
+    state.catStatusRows = rows;
     renderCategories();
   } catch (e) {
     box.innerHTML = `<p class="muted">불러오지 못했습니다: ${esc(e.message)}</p>`;
