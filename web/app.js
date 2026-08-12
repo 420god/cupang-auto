@@ -33,6 +33,7 @@ const state = {
   userItems: {},      // item_id -> {want_price, cost_cny, ...}
   feeCache: {},       // "unit1|unit2|CAP" -> [{min_price, final_amount}]
   catUnits: {},       // category_code -> {unit1, unit2}
+  catStatusRows: null, // v_category_status 캐시 (탭 클릭마다 재요청 방지)
   openProducts: new Set()
 };
 
@@ -159,21 +160,22 @@ async function api(path, opts) {
 }
 
 /* Supabase 프로젝트의 Max Rows 설정(기본 1000)에 걸리지 않도록
-   Range 헤더로 전체를 끝까지 페이지네이션해서 가져온다. */
+   Range 헤더로 전체를 끝까지 페이지네이션해서 가져온다.
+   첫 페이지에서 Content-Range로 전체 개수를 받아 나머지 페이지는 병렬로 요청 —
+   순차로 하면 8000여 행 기준 페이지 수만큼 왕복이 생겨 느리다. */
 async function apiAll(path, pageSize) {
   const size = pageSize || 1000;
   await ensureAuth();
-  let offset = 0;
-  let out = [];
-  for (;;) {
-    const res = await fetch(`${CFG.url}/rest/v1/${path}`, {
-      headers: {
-        apikey: CFG.key,
-        authorization: 'Bearer ' + AUTH.token,
-        'content-type': 'application/json',
-        range: `${offset}-${offset + size - 1}`
-      }
-    });
+  const headers = {
+    apikey: CFG.key,
+    authorization: 'Bearer ' + AUTH.token,
+    'content-type': 'application/json'
+  };
+
+  async function fetchPage(offset, withCount) {
+    const h = Object.assign({}, headers, { range: `${offset}-${offset + size - 1}` });
+    if (withCount) h.prefer = 'count=exact';
+    const res = await fetch(`${CFG.url}/rest/v1/${path}`, { headers: h });
     const text = await res.text();
     if (!res.ok) {
       let m = text.slice(0, 240);
@@ -181,9 +183,28 @@ async function apiAll(path, pageSize) {
       throw new Error(`HTTP ${res.status}: ${m}`);
     }
     const rows = text ? JSON.parse(text) : [];
-    out = out.concat(rows);
-    if (rows.length < size) break;
-    offset += size;
+    const cr = res.headers.get('content-range'); // "0-999/8154"
+    const total = (cr && cr.indexOf('/') !== -1) ? parseInt(cr.split('/')[1], 10) : null;
+    return { rows, total };
+  }
+
+  const first = await fetchPage(0, true);
+  let out = first.rows;
+
+  if (first.total != null && first.total > out.length) {
+    const offsets = [];
+    for (let o = size; o < first.total; o += size) offsets.push(o);
+    const pages = await Promise.all(offsets.map((o) => fetchPage(o, false)));
+    pages.forEach((p) => { out = out.concat(p.rows); });
+  } else if (first.total == null && first.rows.length === size) {
+    // count 헤더를 못 받는 경우 순차 폴백
+    let offset = size;
+    for (;;) {
+      const p = await fetchPage(offset, false);
+      out = out.concat(p.rows);
+      if (p.rows.length < size) break;
+      offset += size;
+    }
   }
   return out;
 }
@@ -291,6 +312,15 @@ async function enterApp() {
   $('#userEmail').textContent = AUTH.email;
   $('#userAvatar').textContent = (AUTH.email[0] || '?').toUpperCase();
 
+  /* 상품 목록(resetAndLoad)은 설정·카테고리·즐겨찾기와 무관하게 그릴 수 있으므로
+     그것들을 기다리지 않고 바로 시작한다 — 이전엔 순서대로 기다리느라 로딩이 길었다.
+     margin 계산(loadRowMargins)만 settings/feeCache가 필요해서 별도로 대기시킨다. */
+  state.readyForMargins = Promise.all([loadSettings(), loadFeeTables()]);
+  resetAndLoad();
+
+  loadFavCategories();
+  loadCategoryOptions();
+
   try {
     const prof = await api('profiles?select=is_admin,prefs');
     if (prof && prof[0]) {
@@ -301,10 +331,6 @@ async function enterApp() {
       }
     }
   } catch (e) { /* 무시 */ }
-
-  await Promise.all([loadSettings(), loadFavCategories(), loadCategoryOptions()]);
-  loadFeeTables();
-  resetAndLoad();
 }
 
 async function loadSettings() {
@@ -471,10 +497,14 @@ async function loadRowMargins(rows) {
   if (!pids.length) return;
 
   try {
-    const costed = await api(
-      'user_items?select=item_id,product_id,cost_cny,want_price,exchange_rate,outbound_fee,work_fee' +
-      `&product_id=in.(${pids.map(encodeURIComponent).join(',')})&cost_cny=not.is.null`
-    ) || [];
+    const [, costedRaw] = await Promise.all([
+      state.readyForMargins,
+      api(
+        'user_items?select=item_id,product_id,cost_cny,want_price,exchange_rate,outbound_fee,work_fee' +
+        `&product_id=in.(${pids.map(encodeURIComponent).join(',')})&cost_cny=not.is.null`
+      )
+    ]);
+    const costed = costedRaw || [];
     if (!costed.length) return;
 
     costed.forEach((u) => { state.userItems[u.item_id] = Object.assign(state.userItems[u.item_id] || {}, u); });
@@ -855,14 +885,25 @@ async function patchUserItem(iid, patch) {
 /* ===================== 카테고리 ===================== */
 const selectedCats = new Set();
 
-async function loadCategories() {
+async function loadCategories(force) {
   const box = $('#catGroups');
+  if (!force && state.catStatusRows) { renderCategories(); return; }
   box.innerHTML = '<div class="loader"><div class="spinner"></div>불러오는 중…</div>';
 
   try {
-    const rows = await apiAll('v_category_status?select=*&order=full_path') || [];
+    state.catStatusRows = await apiAll('v_category_status?select=*&order=full_path') || [];
+    renderCategories();
+  } catch (e) {
+    box.innerHTML = `<p class="muted">불러오지 못했습니다: ${esc(e.message)}</p>`;
+  }
+}
+
+function renderCategories() {
+  const box = $('#catGroups');
+  try {
+    const rows = state.catStatusRows || [];
     const favOnly = $('#catFavOnly').checked;
-    const list = favOnly ? rows.filter((r) => r.is_favorite) : rows;
+    const list = favOnly ? rows.filter((r) => state.favCatCodes.has(r.category_code)) : rows;
 
     const groups = {};
     list.forEach((r) => {
@@ -900,7 +941,7 @@ async function loadCategories() {
           : (r.last_list_at ? new Date(r.last_list_at).toLocaleDateString('ko-KR') + ' (목록)' : '미수집')
         }</div>
       </div>
-      <button class="star cat-star ${r.is_favorite ? 'on' : ''}" data-code="${esc(r.category_code)}" title="즐겨찾기">
+      <button class="star cat-star ${state.favCatCodes.has(r.category_code) ? 'on' : ''}" data-code="${esc(r.category_code)}" title="즐겨찾기">
         <svg viewBox="0 0 24 24"><path d="M12 3l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.8 6.2 20.9l1.1-6.5L2.6 9.8l6.5-.9z"/></svg>
       </button>
       ${AUTH.isAdmin ? `<button class="icon-btn cat-del" data-code="${esc(r.category_code)}" data-name="${esc(r.name)}" title="삭제">
@@ -953,6 +994,7 @@ $('#catGroups').addEventListener('click', async (ev) => {
       });
       del.closest('.cat-chip').remove();
       selectedCats.delete(code);
+      if (state.catStatusRows) state.catStatusRows = state.catStatusRows.filter((r) => r.category_code !== code);
       toast(`"${name}" 카테고리를 삭제했습니다`);
     } catch (e) {
       toast('삭제 실패: ' + e.message, 4000);
@@ -975,7 +1017,7 @@ $('#catGroups').addEventListener('click', async (ev) => {
   }
 });
 
-$('#catFavOnly').onchange = loadCategories;
+$('#catFavOnly').onchange = renderCategories;
 
 $('#catDeleteBtn').onclick = async () => {
   if (!selectedCats.size) return;
@@ -991,7 +1033,7 @@ $('#catDeleteBtn').onclick = async () => {
     $('#catQueueBtn').classList.add('hidden');
     $('#catDeleteBtn').classList.add('hidden');
     toast(`${n}개 카테고리를 삭제했습니다`);
-    loadCategories();
+    loadCategories(true);
   } catch (e) {
     toast('삭제 실패: ' + e.message, 4000);
   }
