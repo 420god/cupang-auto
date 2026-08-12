@@ -46,14 +46,15 @@ function esc(v) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
-function kstDateStr(d) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(d);
-}
+/* new Intl.DateTimeFormat()은 인스턴스 생성 비용이 커서 행마다 새로 만들면
+   8000여 행 기준 수백 ms가 그냥 날아간다 — 하나만 만들어 재사용한다. */
+const KST_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' });
+const kstDateStr = (d) => KST_FMT.format(d);
 /* v_category_status 뷰의 status 계산 로직을 클라이언트에서 그대로 재현.
    뷰를 계속 쓰면 8000여 행마다 is_favorite용 상관 서브쿼리가 돌아 느려진다 —
-   그 필드는 이제 state.favCatCodes로 대체했으니 categories 원본 테이블만 읽는다. */
-function catStatus(r) {
-  const today = kstDateStr(new Date());
+   그 필드는 이제 state.favCatCodes로 대체했으니 categories 원본 테이블만 읽는다.
+   today는 호출부에서 한 번만 계산해 넘긴다 (행마다 다시 계산하지 않도록). */
+function catStatus(r, today) {
   if (r.last_detail_at && kstDateStr(new Date(r.last_detail_at)) === today) return 'collected';
   if (r.last_list_at && kstDateStr(new Date(r.last_list_at)) === today) return 'partial';
   if (r.last_list_at || r.last_detail_at) return 'stale';
@@ -905,7 +906,8 @@ async function loadCategories(force) {
 
   try {
     const rows = await apiAll('categories?select=category_code,name,full_path,root_name,last_list_at,last_detail_at&order=full_path') || [];
-    rows.forEach((r) => { r.status = catStatus(r); });
+    const today = kstDateStr(new Date());
+    rows.forEach((r) => { r.status = catStatus(r, today); });
     state.catStatusRows = rows;
     renderCategories();
   } catch (e) {
