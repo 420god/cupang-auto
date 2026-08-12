@@ -664,6 +664,8 @@ function renderOptions(items, pid, catCode) {
         }</option>`).join('')}
     </select>
   </td>
+  <td data-label="입출고비" class="calc-out out-fulfillment">${fee != null ? won(fee) : '<span class="dim">요금표 없음</span>'}</td>
+  <td data-label="수수료" class="calc-out out-commission">${c ? won(c.commission) : '—'}</td>
   <td data-label="정산" class="calc-out out-settle">${c ? won(c.settlement) : '—'}</td>
   <td data-label="마진" class="calc-out out-margin">${marginTxt}</td>
   <td data-label="즐겨찾기">
@@ -678,7 +680,7 @@ function renderOptions(items, pid, catCode) {
 <table class="opt-table">
   <thead><tr>
     <th>옵션</th><th>판매량</th><th>현재가</th><th>배송</th>
-    <th>원가(¥)</th><th>희망가</th><th>사이즈</th><th>정산예상</th><th>실마진</th><th></th>
+    <th>원가(¥)</th><th>희망가</th><th>사이즈</th><th>입출고비</th><th>수수료</th><th>정산예상</th><th>실마진</th><th></th>
   </tr></thead>
   <tbody>${rows}</tbody>
 </table>`;
@@ -728,6 +730,8 @@ function recalcRow(tr, save) {
     outbound: cur.outbound_fee, work: cur.work_fee
   });
 
+  tr.querySelector('.out-fulfillment').innerHTML = fee != null ? won(fee) : '<span class="dim">요금표 없음</span>';
+  tr.querySelector('.out-commission').textContent = c ? won(c.commission) : '—';
   tr.querySelector('.out-settle').textContent = c ? won(c.settlement) : '—';
   tr.querySelector('.out-margin').innerHTML = (c && c.margin !== null)
     ? `<span class="${c.margin >= 0 ? 'pos' : 'neg'}">${c.margin.toLocaleString()}원 · ${c.rate}%</span>`
