@@ -108,6 +108,17 @@ function debounce(fn, ms) {
   };
 }
 
+/* debounce와 달리 타이머를 key별로 따로 관리한다.
+   행이 여러 개인 표에서 하나의 공유 타이머를 쓰면 A행을 고치고 바로 B행을 고쳤을 때
+   A행의 저장이 취소되고 사라진다 — key(보통 item_id)로 분리해서 막는다. */
+function debounceKeyed(fn, ms) {
+  const timers = {};
+  return function (key, ...rest) {
+    clearTimeout(timers[key]);
+    timers[key] = setTimeout(() => { delete timers[key]; fn(key, ...rest); }, ms);
+  };
+}
+
 /* ===================== Supabase ===================== */
 function loadCfg() {
   CFG.url = localStorage.getItem('sb_url') || DEFAULT_SB_URL;
@@ -226,6 +237,12 @@ async function apiAll(path, pageSize) {
 
 /* ===================== 계산 ===================== */
 const LOW_ASP_PRICE_LIMIT = 14000; // 저가 상품 전용 할인 요금표 적용 상한 (docs/api-notes.md 2-4)
+
+/* DB 컬럼 한도 안에서 넉넉히 잡은 입력 상한.
+   user_items.want_price는 int(최대 약 21억), cost_cny는 numeric(10,2)(최대 99,999,999.99) —
+   이 이상 입력하면 저장이 "value out of range" 400으로 매번 실패하면서 헛돌기만 한다. */
+const MAX_WANT_PRICE = 2000000000;
+const MAX_COST_CNY = 9999999;
 
 function pickFeeTier(tiers, price) {
   let hit = tiers[0];
@@ -667,11 +684,11 @@ function renderOptions(items, pid, catCode) {
   <td data-label="현재가">${won(it.current_price)}</td>
   <td data-label="배송">${deliveryTag(it.delivery_badge)}</td>
   <td data-label="원가(¥)">
-    <input type="number" class="w-cost in-cost" step="0.01" placeholder="0"
+    <input type="number" class="w-cost in-cost" step="0.01" min="0" max="${MAX_COST_CNY}" placeholder="0"
            value="${u.cost_cny != null ? u.cost_cny : ''}" />
   </td>
   <td data-label="희망가">
-    <input type="number" class="w-price in-want" placeholder="현재가"
+    <input type="number" class="w-price in-want" min="0" max="${MAX_WANT_PRICE}" placeholder="현재가"
            value="${u.want_price != null ? u.want_price : ''}" />
   </td>
   <td data-label="사이즈">
@@ -705,7 +722,7 @@ function renderOptions(items, pid, catCode) {
 }
 
 /* ---------- 옵션 입력 → 즉시 재계산 + 저장 ---------- */
-const saveUserItem = debounce(async (iid, pid, patch) => {
+const saveUserItem = debounceKeyed(async (iid, pid, patch) => {
   try {
     await api('user_items?on_conflict=user_id,item_id', {
       method: 'POST',
@@ -737,6 +754,24 @@ function recalcRow(tr, save) {
   const cost = costEl.value === '' ? null : parseFloat(costEl.value);
   const want = wantEl.value === '' ? null : parseInt(wantEl.value, 10);
   const size = sizeEl.value;
+
+  /* DB 컬럼 한도를 넘는 값은 저장이 매번 400으로 실패해서 헛돌기만 하므로
+     여기서 걸러서 계산·저장 둘 다 건너뛴다 (실수로 자릿수를 잘못 입력했을 때 보호) */
+  const costTooBig = cost !== null && (cost > MAX_COST_CNY || cost < 0);
+  const wantTooBig = want !== null && (want > MAX_WANT_PRICE || want < 0);
+  costEl.classList.toggle('input-invalid', costTooBig);
+  wantEl.classList.toggle('input-invalid', wantTooBig);
+
+  if (costTooBig || wantTooBig) {
+    const label = wantTooBig ? '희망가' : '원가';
+    const limit = wantTooBig ? MAX_WANT_PRICE : MAX_COST_CNY;
+    tr.querySelector('.out-fulfillment').innerHTML = '<span class="dim">—</span>';
+    tr.querySelector('.out-commission').textContent = '—';
+    tr.querySelector('.out-settle').textContent = '—';
+    tr.querySelector('.out-margin').innerHTML =
+      `<span class="neg">${label}는 ${limit.toLocaleString()} 이하로 입력하세요</span>`;
+    return;
+  }
 
   const cur = state.userItems[iid] || {};
   const basePrice = num(want) ?? num(cur._current_price) ?? currentPriceOf(tr);
@@ -892,11 +927,15 @@ $('#favList').addEventListener('change', async (ev) => {
   }
 });
 
-$('#favList').addEventListener('input', debounce(async (ev) => {
+const saveFavMemo = debounceKeyed(async (iid, memo) => {
+  await patchUserItem(iid, { memo });
+}, 800);
+
+$('#favList').addEventListener('input', (ev) => {
   const card = ev.target.closest('.fav-card');
   if (!card || !ev.target.matches('.fav-memo')) return;
-  await patchUserItem(card.dataset.iid, { memo: ev.target.value });
-}, 800));
+  saveFavMemo(card.dataset.iid, ev.target.value);
+});
 
 $('#favList').addEventListener('click', async (ev) => {
   if (!ev.target.matches('.fav-remove')) return;

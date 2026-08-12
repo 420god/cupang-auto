@@ -288,6 +288,7 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 .w-price { width: 96px; }
 .w-size  { width: 92px; }
 .calc-out { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.input-invalid { border-color: var(--neg) !important; background: var(--neg-soft); }
 
 /* ---------- 즐겨찾기 ---------- */
 .tabs { display: flex; gap: 5px; margin-bottom: 14px; overflow-x: auto; padding-bottom: 3px; }
