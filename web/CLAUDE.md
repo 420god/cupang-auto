@@ -29,7 +29,7 @@ calcMargin({price, commission, fulfillment, costCny, rate, outbound, work})
 
 ## 알려진 미해결 (건드릴 때 참고)
 
-- **배송유형 필터가 실제로는 안 먹는다.** `products` 테이블에 배송유형 컬럼이 없다(옵션 단위라서). `buildQuery()`에 `f.delivery` 처리가 빠져 있는 게 아니라 애초에 반영할 컬럼이 없다. 고치려면: (a) products에 대표 배송유형 컬럼 추가 + extension에서 채우기, 또는 (b) product_items를 조인하는 쿼리로 변경.
+- ~~배송유형 필터가 안 먹는다~~ → **해결(004).** `products.delivery_badges` 배열을 DB 트리거가 채우고, `buildQuery()`가 `delivery_badges=cs.{"유형"}`으로 거른다. 목록의 배송 칸도 `deliveryCell()`이 그 배열을 전부 보여준다(옵션에 판매자배송·판매자로켓이 섞여 있으면 둘 다 표시). **`state.hasDeliveryCol`은 004 미실행 DB에서 400을 한 번 받고 예전 `has_rocket` 표시로 되돌리기 위한 것** — 004가 확실히 실행됐다면 지워도 되지만, 남겨두면 배포 순서가 어긋나도 목록이 안 깨진다.
 - **마진율 필터·정렬도 안 먹는다.** `item_calc` 테이블이 비어 있어서다. `products.max_sales`처럼 미리 계산해 저장해야 정렬이 가능한데, 지금은 옵션을 펼쳐야만(`loadOptions`) 그때 계산된다.
 - 자세한 배경은 `../CLAUDE.md`의 "지금 상태" 및 `../docs/decisions.md` 참조.
 

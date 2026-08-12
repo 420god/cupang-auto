@@ -35,7 +35,8 @@ const state = {
   feeCacheLow: {},    // 같은 키, 저가 상품 전용 할인가(전용할인가) 표 — 일부 카테고리만 있음
   catUnits: {},       // category_code -> {unit1, unit2}
   catStatusRows: null, // 카테고리 탭 데이터 캐시 (탭 클릭마다 재요청 방지)
-  openProducts: new Set()
+  openProducts: new Set(),
+  hasDeliveryCol: true // products.delivery_badges 존재 여부 (004 미실행 DB 대비, 첫 조회에서 판별)
 };
 
 /* ===================== 유틸 ===================== */
@@ -97,6 +98,21 @@ function deliveryTag(badge) {
   else if (badge.includes('판매자로켓')) cls = 'tag-merchant';
   else if (badge.includes('로켓')) cls = 'tag-rocket';
   return `<span class="tag ${cls}">${esc(badge)}</span>`;
+}
+
+/* 상품 목록의 배송 칸. products.delivery_badges에 그 상품의 옵션들에 실제로
+   존재하는 배송유형이 들어 있다(DB 트리거가 채움 — db/migrations/004).
+   섞여 있으면 전부 보여준다. 004를 아직 실행하지 않은 DB에서는 컬럼이 없어
+   state.hasDeliveryCol이 false가 되고, 예전처럼 has_rocket으로 폴백한다. */
+function deliveryCell(p) {
+  const b = p.delivery_badges;
+  if (Array.isArray(b) && b.length) return b.map(deliveryTag).join(' ');
+  if (!state.hasDeliveryCol) {
+    return p.has_rocket
+      ? '<span class="tag tag-rocket">로켓</span>'
+      : '<span class="tag tag-seller">일반</span>';
+  }
+  return '<span class="dim">—</span>';
 }
 
 function debounce(fn, ms) {
@@ -407,25 +423,22 @@ async function loadFeeTables() {
   } catch (e) { /* 요금표 없으면 입출고비 0 */ }
 }
 
+/* 카테고리가 8000여 개라 <option>을 하나씩 createElement+appendChild 하면
+   그때마다 레이아웃이 걸려 눈에 띄게 버벅인다 — 문자열로 만들어 한 번에 넣는다.
+   full_path는 정렬에만 쓰이고 화면에는 안 쓰므로 select 목록에서 뺐다(전송량 감소). */
 async function loadCategoryOptions() {
   try {
-    const rows = await apiAll('categories?select=category_code,name,full_path,root_name,unit1,unit2&order=full_path');
+    const rows = await apiAll('categories?select=category_code,name,root_name,unit1,unit2&order=full_path');
     const roots = new Set();
-    const sel = $('#fCategory');
-    (rows || []).forEach((c) => {
+    const opts = new Array(rows ? rows.length : 0);
+    (rows || []).forEach((c, i) => {
       if (c.root_name) roots.add(c.root_name);
       state.catUnits[c.category_code] = { unit1: c.unit1, unit2: c.unit2 };
-      const o = document.createElement('option');
-      o.value = c.category_code;
-      o.textContent = c.name || c.category_code;
-      sel.appendChild(o);
+      opts[i] = `<option value="${esc(c.category_code)}">${esc(c.name || c.category_code)}</option>`;
     });
-    const rsel = $('#fRoot');
-    Array.from(roots).sort().forEach((r) => {
-      const o = document.createElement('option');
-      o.value = r; o.textContent = r;
-      rsel.appendChild(o);
-    });
+    $('#fCategory').insertAdjacentHTML('beforeend', opts.join(''));
+    $('#fRoot').insertAdjacentHTML('beforeend',
+      Array.from(roots).sort().map((r) => `<option value="${esc(r)}">${esc(r)}</option>`).join(''));
   } catch (e) { /* 무시 */ }
 }
 
@@ -441,7 +454,8 @@ function buildQuery() {
   const f = state.filters;
   const parts = [
     'select=product_id,product_name,brand_name,category_code,category_path,rep_image_path,' +
-    'max_sales,sum_sales,min_price,max_price,option_count,has_rocket,pv_rank,pv_lower,pv_upper',
+    'max_sales,sum_sales,min_price,max_price,option_count,has_rocket,pv_rank,pv_lower,pv_upper' +
+    (state.hasDeliveryCol ? ',delivery_badges' : ''),
     'is_active=eq.true'
   ];
 
@@ -452,6 +466,10 @@ function buildQuery() {
   if (f.priceMax)   parts.push(`min_price=lte.${f.priceMax}`);
   if (f.salesMin)   parts.push(`max_sales=gte.${f.salesMin}`);
   if (f.salesMax)   parts.push(`max_sales=lte.${f.salesMax}`);
+  /* 옵션 중 하나라도 그 배송유형이면 걸린다 (배열 포함 검색, GIN 인덱스 사용) */
+  if (f.delivery && state.hasDeliveryCol) {
+    parts.push('delivery_badges=cs.' + encodeURIComponent(`{"${f.delivery}"}`));
+  }
 
   if (f.favCatOnly && state.favCatCodes.size) {
     parts.push(`category_code=in.(${Array.from(state.favCatCodes).join(',')})`);
@@ -471,7 +489,17 @@ async function loadMore() {
   $('#sourcingLoader').classList.remove('hidden');
 
   try {
-    const rows = await api(buildQuery());
+    let rows;
+    try {
+      rows = await api(buildQuery());
+    } catch (err) {
+      /* 004 마이그레이션 전 DB에는 delivery_badges 컬럼이 없다 —
+         한 번만 감지해서 예전 방식(has_rocket)으로 되돌리고 다시 시도한다. */
+      if (state.hasDeliveryCol && /delivery_badges/.test(err.message)) {
+        state.hasDeliveryCol = false;
+        rows = await api(buildQuery());
+      } else throw err;
+    }
     if (!rows || rows.length < state.limit) state.done = true;
 
     if (rows && rows.length) {
@@ -529,7 +557,7 @@ function renderRows(rows) {
   <td class="col-num" data-label="조회수">${pv}</td>
   <td class="col-num margin-rate" data-label="마진율"><span class="dim">—</span></td>
   <td class="col-num margin-amt"  data-label="마진액"><span class="dim">—</span></td>
-  <td class="col-mid" data-label="배송">${p.has_rocket ? '<span class="tag tag-rocket">로켓</span>' : '<span class="tag tag-seller">일반</span>'}</td>
+  <td class="col-delivery" data-label="배송">${deliveryCell(p)}</td>
   <td class="col-mid" data-label="대분류">${esc(root)}</td>
   <td class="col-mid" data-label="말단">${esc(leaf)}</td>
   <td class="col-fav"></td>
@@ -632,18 +660,18 @@ $('#sourcingBody').addEventListener('click', async (ev) => {
 async function loadOptions(pid, catCode, detailEl) {
   const box = detailEl.querySelector('.detail-inner');
   try {
-    const items = await api(
-      `product_items?select=item_id,vendor_item_id,item_name,image_path,current_price,` +
-      `sales_number,sales_text,delivery_badge,shipping_fee,seller_name,is_soldout` +
-      `&product_id=eq.${encodeURIComponent(pid)}&is_active=eq.true&order=sales_number.desc.nullslast`
-    );
+    /* user_items도 product_id를 갖고 있으므로 옵션 목록을 기다렸다가 item_id로
+       조회할 필요가 없다 — 두 요청을 동시에 보내 펼치는 시간을 절반으로 줄인다. */
+    const [items, mine] = await Promise.all([
+      api(
+        `product_items?select=item_id,vendor_item_id,item_name,image_path,current_price,` +
+        `sales_number,sales_text,delivery_badge,shipping_fee,seller_name,is_soldout` +
+        `&product_id=eq.${encodeURIComponent(pid)}&is_active=eq.true&order=sales_number.desc.nullslast`
+      ),
+      api(`user_items?select=*&product_id=eq.${encodeURIComponent(pid)}`)
+    ]);
 
-    const ids = (items || []).map((i) => i.item_id);
-    let mine = [];
-    if (ids.length) {
-      mine = await api(`user_items?select=*&item_id=in.(${ids.map(encodeURIComponent).join(',')})`) || [];
-    }
-    mine.forEach((m) => { state.userItems[m.item_id] = m; });
+    (mine || []).forEach((m) => { state.userItems[m.item_id] = m; });
 
     box.innerHTML = renderOptions(items || [], pid, catCode);
     updateProductMargin(pid);
@@ -1224,22 +1252,24 @@ $('#searchInput').addEventListener('input', debounce((ev) => {
   if (state.page === 'sourcing') resetAndLoad();
 }, 400));
 
-/* 무한 스크롤 */
-$('.main').addEventListener('scroll', () => {
-  if (state.page !== 'sourcing') return;
-  const el = $('.main');
-  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 320) loadMore();
-});
+/* 무한 스크롤 — 스크롤 이벤트는 초당 수십 번 오므로 엘리먼트를 매번 찾지 않는다 */
+const MAIN_EL = $('.main');
+MAIN_EL.addEventListener('scroll', () => {
+  if (state.page !== 'sourcing' || state.loading || state.done) return;
+  if (MAIN_EL.scrollTop + MAIN_EL.clientHeight >= MAIN_EL.scrollHeight - 320) loadMore();
+}, { passive: true });
 
 /* ===================== 내보내기 ===================== */
 $('#exportBtn').onclick = () => {
   if (!state.rows.length) return toast('내보낼 데이터가 없습니다');
-  const head = ['상품ID','상품명','브랜드','최대판매량','합계판매량','최저가','최고가','옵션수','순위','카테고리'];
+  const head = ['상품ID','상품명','브랜드','최대판매량','합계판매량','최저가','최고가','옵션수','순위','배송유형','카테고리'];
   const lines = [head.join(',')];
   state.rows.forEach((p) => {
     lines.push([
       p.product_id, p.product_name, p.brand_name, p.max_sales, p.sum_sales,
-      p.min_price, p.max_price, p.option_count, p.pv_rank, p.category_path
+      p.min_price, p.max_price, p.option_count, p.pv_rank,
+      Array.isArray(p.delivery_badges) ? p.delivery_badges.join(' / ') : '',
+      p.category_path
     ].map((v) => {
       const s = String(v == null ? '' : v);
       return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;

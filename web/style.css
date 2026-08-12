@@ -244,6 +244,9 @@ input[type="checkbox"] { width: auto; accent-color: var(--accent); cursor: point
 .col-num { text-align: right !important; white-space: nowrap; }
 .grid td.col-num { text-align: right; font-variant-numeric: tabular-nums; }
 .col-mid { white-space: nowrap; }
+/* 배송유형은 옵션에 섞여 있으면 여러 개가 찍히므로 줄바꿈을 허용한다 */
+.col-delivery { display: table-cell; }
+.grid td.col-delivery { line-height: 1.9; max-width: 150px; }
 .col-fav { width: 42px; }
 
 .thumb {
@@ -444,11 +447,12 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
   .grid tbody tr.prow td { border: none; padding: 0; }
   .grid td.col-img { position: absolute; left: 13px; top: 13px; width: 48px; }
   .grid td.col-name { margin-bottom: 7px; padding-right: 34px !important; }
-  .grid td.col-num, .grid td.col-mid {
+  .grid td.col-num, .grid td.col-mid, .grid td.col-delivery {
     display: inline-block; width: auto; text-align: left !important;
     margin-right: 12px; font-size: 12.5px;
   }
-  .grid td.col-num::before, .grid td.col-mid::before {
+  .grid td.col-delivery { max-width: none; line-height: inherit; }
+  .grid td.col-num::before, .grid td.col-mid::before, .grid td.col-delivery::before {
     content: attr(data-label) " "; color: var(--text-3); font-size: 11px;
   }
   .grid td.col-fav { position: absolute; right: 8px; top: 11px; width: auto; }
