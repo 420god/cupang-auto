@@ -330,6 +330,39 @@ function buildCategoryRows(cats) {
   });
 }
 
+/* 1000행 제한을 넘겨서 전부 가져오기 (limit/offset 페이지네이션) */
+async function sbFetchAll(pathBase, pageSize) {
+  pageSize = pageSize || 1000;
+  let all = [];
+  let offset = 0;
+  for (;;) {
+    const sep = pathBase.indexOf('?') === -1 ? '?' : '&';
+    const rows = await sbRequest(`${pathBase}${sep}limit=${pageSize}&offset=${offset}`);
+    if (!rows || !rows.length) break;
+    all = all.concat(rows);
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+/* 이미 DB에 채워진 카테고리 unit 매핑 / 요금표 unit 조합을 조회 (중복 수집 방지용) */
+async function sbFetchKnownFeeState() {
+  const catRows = await sbFetchAll(
+    'categories?select=kan_category_id,unit1,unit2&kan_category_id=not.is.null&unit1=not.is.null'
+  );
+  const catMap = {};
+  catRows.forEach((r) => {
+    if (r.kan_category_id) catMap[String(r.kan_category_id)] = { unit1: r.unit1, unit2: r.unit2 };
+  });
+
+  const feeRows = await sbFetchAll('fulfillment_fees?select=unit1,unit2,is_low_asp');
+  const feeSet = new Set();
+  feeRows.forEach((r) => feeSet.add(`${r.unit1}|${r.unit2}|${r.is_low_asp ? 1 : 0}`));
+
+  return { catMap, feeSet };
+}
+
 /* 카테고리 수집 시각 갱신 */
 async function sbMarkCategoryCollected(categoryCode, stage) {
   const patch = {};

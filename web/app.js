@@ -31,7 +31,8 @@ const state = {
   search: '',
   favCatCodes: new Set(),
   userItems: {},      // item_id -> {want_price, cost_cny, ...}
-  feeCache: {},       // "unit1|unit2|CAP" -> [{min_price, final_amount}]
+  feeCache: {},       // "unit1|unit2|CAP" -> [{min_price, final_amount}]  (정가/할인가 표)
+  feeCacheLow: {},    // 같은 키, 저가 상품 전용 할인가(전용할인가) 표 — 일부 카테고리만 있음
   catUnits: {},       // category_code -> {unit1, unit2}
   catStatusRows: null, // 카테고리 탭 데이터 캐시 (탭 클릭마다 재요청 방지)
   openProducts: new Set()
@@ -224,14 +225,29 @@ async function apiAll(path, pageSize) {
 }
 
 /* ===================== 계산 ===================== */
+const LOW_ASP_PRICE_LIMIT = 14000; // 저가 상품 전용 할인 요금표 적용 상한 (docs/api-notes.md 2-4)
+
+function pickFeeTier(tiers, price) {
+  let hit = tiers[0];
+  for (const t of tiers) { if (price >= t.min_price) hit = t; else break; }
+  return hit;
+}
+
+/* 항상 최종가격(할인 적용가) 기준. 14,000원 미만이고 전용할인가 표(feeCacheLow)가
+   있는 카테고리면 그걸 우선 쓰고, 없으면 일반 할인가 표로 폴백한다. */
 function feeFor(catCode, size, price) {
   const u = state.catUnits[catCode];
   if (!u || price == null) return null;
-  const tiers = state.feeCache[`${u.unit1}|${u.unit2}|${size}`];
+  const key = `${u.unit1}|${u.unit2}|${size}`;
+
+  if (price < LOW_ASP_PRICE_LIMIT) {
+    const lowTiers = state.feeCacheLow[key];
+    if (lowTiers && lowTiers.length) return pickFeeTier(lowTiers, price).final_amount;
+  }
+
+  const tiers = state.feeCache[key];
   if (!tiers || !tiers.length) return null;
-  let hit = tiers[0];
-  for (const t of tiers) { if (price >= t.min_price) hit = t; else break; }
-  return hit.final_amount;
+  return pickFeeTier(tiers, price).final_amount;
 }
 
 function calcMargin(o) {
@@ -363,12 +379,14 @@ async function loadSettings() {
 
 async function loadFeeTables() {
   try {
-    const rows = await api('fulfillment_fees?select=unit1,unit2,capacity_type,min_price,final_amount&is_low_asp=eq.false&order=min_price');
+    const rows = await apiAll('fulfillment_fees?select=unit1,unit2,capacity_type,min_price,final_amount,is_low_asp&order=min_price');
     (rows || []).forEach((r) => {
       const k = `${r.unit1}|${r.unit2}|${r.capacity_type}`;
-      (state.feeCache[k] = state.feeCache[k] || []).push(r);
+      const bucket = r.is_low_asp ? state.feeCacheLow : state.feeCache;
+      (bucket[k] = bucket[k] || []).push(r);
     });
     Object.values(state.feeCache).forEach((a) => a.sort((x, y) => x.min_price - y.min_price));
+    Object.values(state.feeCacheLow).forEach((a) => a.sort((x, y) => x.min_price - y.min_price));
   } catch (e) { /* 요금표 없으면 입출고비 0 */ }
 }
 

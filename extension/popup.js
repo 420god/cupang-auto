@@ -22,7 +22,7 @@ const imgTestBtn = document.getElementById('imgTestBtn');
 const feeCaptureBtn = document.getElementById('feeCaptureBtn');
 const feeCollectBtn = document.getElementById('feeCollectBtn');
 const feeExportBtn = document.getElementById('feeExportBtn');
-const lowAspEl = document.getElementById('lowAsp');
+const feeForceRefreshEl = document.getElementById('feeForceRefresh');
 const defaultSizeEl = document.getElementById('defaultSize');
 const sbUrlEl = document.getElementById('sbUrl');
 const sbKeyEl = document.getElementById('sbKey');
@@ -1608,9 +1608,11 @@ const CAPACITY_LABELS = {
 };
 const CAPACITY_ORDER = ['MINI', 'SMALL', 'MEDIUM', 'LARGE1', 'LARGE2', 'XLARGE'];
 
-/* feeTables: { "Apparel|Women Clothes": { MINI:[{minPrice,base,final}], ... } }
-   catUnitMap: { "8699": {unit1, unit2, kanName, fullPath} }                     */
+/* feeTables:    { "Apparel|Women Clothes": { MINI:[{minPrice,base,final}], ... } }  정가/할인가 표
+   feeTablesLow: 같은 구조, 저가 상품 전용 할인가(전용할인가) 표 — 일부 카테고리만 있음
+   catUnitMap:   { "8699": {unit1, unit2, kanName, fullPath} }                     */
 let feeTables = {};
+let feeTablesLow = {};
 let catUnitMap = {};
 
 function feeUnitKey(u1, u2) { return String(u1 || '') + '|' + String(u2 || ''); }
@@ -1915,8 +1917,9 @@ async function saveProgress() {
 
 async function loadProgress() {
   try {
-    const ft = await chrome.storage.local.get(['cwc_feeTables', 'cwc_catUnitMap']);
+    const ft = await chrome.storage.local.get(['cwc_feeTables', 'cwc_feeTablesLow', 'cwc_catUnitMap']);
     if (ft.cwc_feeTables) feeTables = ft.cwc_feeTables;
+    if (ft.cwc_feeTablesLow) feeTablesLow = ft.cwc_feeTablesLow;
     if (ft.cwc_catUnitMap) catUnitMap = ft.cwc_catUnitMap;
 
     const { cwc_details } = await chrome.storage.local.get('cwc_details');
@@ -2283,13 +2286,32 @@ startBtn.addEventListener('click', async () => {
 
   const r2 = await runDetailCollection(idLines);
 
+  /* 상세수집 직후 해당 카테고리들의 입출고비 요금표를 자동으로 받는다.
+     이미 DB에 있는 카테고리는 collectFeeDataForCategories가 알아서 건너뛴다. */
+  const feeKanIds = Array.from(new Set(
+    collectedRows.map((r) => r.categoryId).filter((v) => v !== undefined && v !== null && v !== '')
+  )).map(String);
+  let feeSummary = null;
+  if (feeKanIds.length) {
+    setStatus('입출고비 요금표 확인 중...');
+    try {
+      feeSummary = await collectFeeDataForCategories(feeKanIds, { statusFn: setStatus });
+    } catch (e) { /* 요금표 수집 실패해도 전체 흐름은 계속 진행 */ }
+  }
+
   const detailCount = Object.keys(detailsMap).length;
   setStatus(
     `전체 완료.\n\n` +
     `상품 데이터 ${collectedRows.length}행\n` +
     `상세 보강 ${detailCount}건` +
     (r2 && r2.stopped ? ' (중지됨)' : '') +
-    `\n\n"CSV 다운로드"를 누르면 판매량·배송유형까지 합쳐진 파일을 받습니다.`
+    (feeSummary
+      ? `\n입출고비 요금표: 신규 ${feeSummary.tableOk - feeSummary.tableSkipped}건 · DB에 이미 있음 ${feeSummary.tableSkipped}건` +
+        (feeSummary.tableFail ? ` · 실패 ${feeSummary.tableFail}건` : '') +
+        ` · 전용할인가 ${feeSummary.lowTableOk}건`
+      : '') +
+    `\n\n"CSV 다운로드"를 누르면 판매량·배송유형까지 합쳐진 파일을 받습니다.\n` +
+    `"수집 데이터 업로드"를 누르면 요금표도 함께 올라갑니다.`
   );
 
   if (collectedRows.length > 0) downloadBtn.style.display = 'block';
@@ -3734,7 +3756,133 @@ feeCaptureBtn.addEventListener('click', async () => {
 });
 
 
-/* ===================== 요금표 수집 ===================== */
+/* ===================== 요금표 수집 =====================
+   카테고리(KAN ID) 목록을 받아 unit1/unit2 매핑 → 요금표(극소형~특대형)를 채운다.
+   정가/할인가 표(feeTables)와 저가 상품 전용 할인가 표(feeTablesLow)를 항상 둘 다 시도한다 —
+   전용할인가가 있으면 그게 실제 최종 청구액이라 항상 우선해야 하고, 없는 카테고리도 많아서
+   (일부 카테고리 전용) 그건 실패로 치지 않는다.
+   force가 아니면 로컬 캐시뿐 아니라 DB에도 이미 있으면 건너뛴다 — 같은 카테고리를
+   수집할 때마다 매번 다시 받지 않기 위함. */
+async function collectFeeDataForCategories(kanIds, opts) {
+  opts = opts || {};
+  const statusFn = opts.statusFn || setStatus;
+  const summary = {
+    unitOk: 0, unitFail: 0, unitSkipped: 0,
+    tableOk: 0, tableFail: 0, tableSkipped: 0,
+    lowTableOk: 0, lowTableSkipped: 0,
+    failLog: []
+  };
+
+  kanIds = Array.from(new Set((kanIds || []).map(String))).filter(Boolean);
+  if (!kanIds.length) return summary;
+
+  const force = !!(feeForceRefreshEl && feeForceRefreshEl.checked);
+
+  let dbState = { catMap: {}, feeSet: new Set() };
+  if (!force) {
+    try { dbState = await sbFetchKnownFeeState(); } catch (e) { /* DB 조회 실패해도 API로 계속 진행 */ }
+  }
+
+  const tab = opts.tab || await getWingTab();
+
+  /* 1) KAN -> unit1/unit2 */
+  for (let i = 0; i < kanIds.length; i++) {
+    const id = kanIds[i];
+    if (!force && catUnitMap[id]) { summary.unitOk++; continue; }
+    if (!force && dbState.catMap[id]) {
+      catUnitMap[id] = dbState.catMap[id];
+      summary.unitOk++; summary.unitSkipped++;
+      continue;
+    }
+
+    statusFn(`요금 카테고리 조회 (${i + 1}/${kanIds.length}) · KAN ${id}\n성공 ${summary.unitOk} · 실패 ${summary.unitFail}`);
+
+    let r = null;
+    try {
+      const [x] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id }, func: pageFetchUnitCategory, args: [id]
+      });
+      r = x && x.result;
+    } catch (e) { r = { ok: false, error: e.message }; }
+
+    if (r && r.ok && r.unit1) {
+      catUnitMap[id] = { unit1: r.unit1, unit2: r.unit2, kanName: r.kanName, fullPath: r.fullPath };
+      summary.unitOk++;
+    } else {
+      summary.unitFail++;
+      summary.failLog.push(`KAN ${id}: ${r ? (r.error || ('HTTP ' + r.status)) : '실패'}`);
+    }
+    await new Promise((rr) => setTimeout(rr, 250));
+  }
+
+  /* 2) 고유 unit 조합별 요금표 (이번 호출의 카테고리에 해당하는 것만) — 정가/할인가 + 전용할인가 둘 다 */
+  const unitKeys = {};
+  kanIds.forEach((id) => {
+    const v = catUnitMap[id];
+    if (v && v.unit1) unitKeys[feeUnitKey(v.unit1, v.unit2)] = { unit1: v.unit1, unit2: v.unit2 };
+  });
+  const keys = Object.keys(unitKeys);
+  const variants = [
+    { low: false, store: feeTables },
+    { low: true, store: feeTablesLow }
+  ];
+
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    const u = unitKeys[k];
+
+    for (const variant of variants) {
+      if (!force && variant.store[k]) {
+        if (variant.low) summary.lowTableOk++; else summary.tableOk++;
+        continue;
+      }
+      if (!force && dbState.feeSet.has(`${u.unit1}|${u.unit2}|${variant.low ? 1 : 0}`)) {
+        if (variant.low) { summary.lowTableOk++; summary.lowTableSkipped++; }
+        else { summary.tableOk++; summary.tableSkipped++; }
+        continue;
+      }
+
+      statusFn(
+        `요금표 조회 (${i + 1}/${keys.length}) · ${u.unit1} / ${u.unit2}` +
+        (variant.low ? ' (전용할인가)' : '') + `\n` +
+        `카테고리 매핑 ${summary.unitOk}건 · 요금표 ${summary.tableOk}건 · 전용할인가 ${summary.lowTableOk}건`
+      );
+
+      let r = null;
+      try {
+        const [x] = await chrome.scripting.executeScript({
+          target: { tabId: tab.id }, func: pageFetchFeeTable, args: [u.unit1, u.unit2, variant.low]
+        });
+        r = x && x.result;
+      } catch (e) { r = { ok: false, error: e.message }; }
+
+      if (r && r.ok) {
+        const parsed = parseFeeResponse(r.json);
+        if (Object.keys(parsed).length > 0) {
+          variant.store[k] = parsed;
+          if (variant.low) summary.lowTableOk++; else summary.tableOk++;
+        } else if (!variant.low) {
+          // 전용할인가는 일부 카테고리에만 있으므로 데이터가 없는 게 정상 — 실패로 세지 않는다
+          summary.tableFail++;
+          summary.failLog.push(`${k}: 요금 데이터 없음`);
+        }
+      } else if (!variant.low) {
+        summary.tableFail++;
+        summary.failLog.push(`${k}: ${r ? (r.error || ('HTTP ' + r.status)) : '실패'}`);
+      }
+      await new Promise((rr) => setTimeout(rr, 400));
+    }
+  }
+
+  try {
+    await chrome.storage.local.set({
+      cwc_feeTables: feeTables, cwc_feeTablesLow: feeTablesLow, cwc_catUnitMap: catUnitMap
+    });
+  } catch (e) { /* 무시 */ }
+
+  return summary;
+}
+
 feeCollectBtn.addEventListener('click', async () => {
   if (collectedRows.length === 0) {
     setStatus('먼저 상품 수집을 실행하세요. (카테고리 정보가 필요합니다)', true);
@@ -3756,96 +3904,21 @@ feeCollectBtn.addEventListener('click', async () => {
   }
 
   feeCollectBtn.disabled = true;
-  const useLowAsp = lowAspEl && lowAspEl.checked;
-
-  let unitOk = 0, unitFail = 0, tableOk = 0, tableFail = 0;
-  const failLog = [];
-
   try {
-    const tab = await getWingTab();
-
-    /* 1) KAN -> unit1/unit2 */
-    for (let i = 0; i < kanIds.length; i++) {
-      const id = kanIds[i];
-      if (catUnitMap[id]) { unitOk++; continue; }
-
-      setStatus(`요금 카테고리 조회 (${i + 1}/${kanIds.length}) · KAN ${id}\n성공 ${unitOk} · 실패 ${unitFail}`);
-
-      let r = null;
-      try {
-        const [x] = await chrome.scripting.executeScript({
-          target: { tabId: tab.id }, func: pageFetchUnitCategory, args: [id]
-        });
-        r = x && x.result;
-      } catch (e) { r = { ok: false, error: e.message }; }
-
-      if (r && r.ok && r.unit1) {
-        catUnitMap[id] = { unit1: r.unit1, unit2: r.unit2, kanName: r.kanName, fullPath: r.fullPath };
-        unitOk++;
-      } else {
-        unitFail++;
-        failLog.push(`KAN ${id}: ${r ? (r.error || ('HTTP ' + r.status)) : '실패'}`);
-      }
-      await new Promise((rr) => setTimeout(rr, 250));
-    }
-
-    /* 2) 고유 unit 조합별 요금표 */
-    const unitKeys = {};
-    Object.values(catUnitMap).forEach((v) => {
-      unitKeys[feeUnitKey(v.unit1, v.unit2)] = { unit1: v.unit1, unit2: v.unit2 };
-    });
-    const keys = Object.keys(unitKeys);
-
-    for (let i = 0; i < keys.length; i++) {
-      const k = keys[i];
-      if (feeTables[k]) { tableOk++; continue; }
-      const u = unitKeys[k];
-
-      setStatus(
-        `요금표 조회 (${i + 1}/${keys.length}) · ${u.unit1} / ${u.unit2}\n` +
-        `카테고리 매핑 ${unitOk}건 완료 · 요금표 ${tableOk}건`
-      );
-
-      let r = null;
-      try {
-        const [x] = await chrome.scripting.executeScript({
-          target: { tabId: tab.id }, func: pageFetchFeeTable, args: [u.unit1, u.unit2, useLowAsp]
-        });
-        r = x && x.result;
-      } catch (e) { r = { ok: false, error: e.message }; }
-
-      if (r && r.ok) {
-        const parsed = parseFeeResponse(r.json);
-        if (Object.keys(parsed).length > 0) {
-          feeTables[k] = parsed;
-          tableOk++;
-        } else {
-          tableFail++;
-          failLog.push(`${k}: 요금 데이터 없음`);
-        }
-      } else {
-        tableFail++;
-        failLog.push(`${k}: ${r ? (r.error || ('HTTP ' + r.status)) : '실패'}`);
-      }
-      await new Promise((rr) => setTimeout(rr, 400));
-    }
-
-    try {
-      await chrome.storage.local.set({ cwc_feeTables: feeTables, cwc_catUnitMap: catUnitMap });
-    } catch (e) { /* 무시 */ }
+    const summary = await collectFeeDataForCategories(kanIds, { statusFn: setStatus });
 
     const sizes = new Set();
     Object.values(feeTables).forEach((t) => Object.keys(t).forEach((c) => sizes.add(c)));
 
     setStatus(
       `요금표 수집 완료\n\n` +
-      `카테고리 매핑: 성공 ${unitOk} · 실패 ${unitFail}\n` +
-      `요금표: 성공 ${tableOk} · 실패 ${tableFail}\n` +
+      `카테고리 매핑: 성공 ${summary.unitOk}(DB에 이미 있음 ${summary.unitSkipped}) · 실패 ${summary.unitFail}\n` +
+      `요금표(정가/할인가): 성공 ${summary.tableOk}(DB에 이미 있음 ${summary.tableSkipped}) · 실패 ${summary.tableFail}\n` +
+      `전용할인가(저가 상품): ${summary.lowTableOk}건(DB에 이미 있음 ${summary.lowTableSkipped}) · 없는 카테고리는 정상\n` +
       `사이즈 유형: ${Array.from(sizes).map((c) => CAPACITY_LABELS[c] || c).join(', ')}\n` +
-      (useLowAsp ? '\n저가 상품 전용 할인 요금표를 사용했습니다.\n' : '') +
-      (failLog.length ? `\n[실패 내역]\n${failLog.slice(0, 10).join('\n')}` : '') +
-      `\n\n이제 CSV를 받으면 입출고비 컬럼이 포함됩니다.`,
-      tableOk === 0
+      (summary.failLog.length ? `\n[실패 내역]\n${summary.failLog.slice(0, 10).join('\n')}` : '') +
+      `\n\n"수집 데이터 업로드"를 누르면 요금표도 함께 올라갑니다.`,
+      summary.tableOk === 0 && summary.tableSkipped === 0
     );
   } catch (err) {
     setStatus('오류: ' + err.message, true);
@@ -4021,12 +4094,21 @@ sbUploadBtn.addEventListener('click', async () => {
       }
     }
 
+    // 입출고비 요금표 (신규로 수집된 것만 남아있음 — 이미 DB에 있던 건 자동 수집 단계에서 건너뜀)
+    const feeRows = buildFeeRows(feeTables, false).concat(buildFeeRows(feeTablesLow, true));
+    const fParts = chunk(feeRows, CHUNK);
+    for (let i = 0; i < fParts.length; i++) {
+      sbSetStatus(`요금표 업로드 중... (${i + 1}/${fParts.length}) · ${feeRows.length}행`);
+      await sbUpsert('fulfillment_fees', fParts[i], 'unit1,unit2,capacity_type,min_price,is_low_asp');
+    }
+
     sbSetStatus(
       `✅ 업로드 완료\n` +
       `  카테고리 ${payload.categories.length}건\n` +
       `  상품 ${payload.products.length}건\n` +
       `  옵션 ${payload.items.length}건\n` +
-      `  이력 ${payload.history.length}건 (같은 날 중복은 자동 제외)`
+      `  이력 ${payload.history.length}건 (같은 날 중복은 자동 제외)\n` +
+      `  요금표 ${feeRows.length}행`
     );
   } catch (err) {
     sbSetStatus('오류: ' + err.message, true);
@@ -4036,17 +4118,15 @@ sbUploadBtn.addEventListener('click', async () => {
 });
 
 sbFeeUploadBtn.addEventListener('click', async () => {
-  const keys = Object.keys(feeTables);
-  if (keys.length === 0) {
-    sbSetStatus('먼저 "요금표 수집"을 실행하세요.', true);
+  if (Object.keys(feeTables).length === 0 && Object.keys(feeTablesLow).length === 0) {
+    sbSetStatus('먼저 "요금표 수동 수집"을 실행하세요.', true);
     return;
   }
 
   sbFeeUploadBtn.disabled = true;
   try {
     await sbEnsureAuth();
-    const isLow = lowAspEl && lowAspEl.checked;
-    const rows = buildFeeRows(feeTables, isLow);
+    const rows = buildFeeRows(feeTables, false).concat(buildFeeRows(feeTablesLow, true));
 
     const parts = chunk(rows, 500);
     for (let i = 0; i < parts.length; i++) {
@@ -4256,6 +4336,21 @@ async function processJob(job) {
       }
     }
 
+    /* 2.5단계: 입출고비 요금표 자동 수집 (이미 DB에 있는 카테고리는 건너뜀) */
+    if (detailDone) {
+      const feeKanIds = Array.from(new Set(
+        collectedRows.map((r) => r.categoryId).filter((v) => v !== undefined && v !== null && v !== '')
+      )).map(String);
+      if (feeKanIds.length) {
+        sbSetStatus(`[대기열] ${label} — 입출고비 요금표 확인 중...`);
+        try {
+          await collectFeeDataForCategories(feeKanIds, { statusFn: sbSetStatus, tab });
+        } catch (e) {
+          sbSetStatus(`[대기열] ${label} — 요금표 수집 생략 (${e.message})`);
+        }
+      }
+    }
+
     /* 3단계: DB 업로드 */
     sbSetStatus(`[대기열] ${label} — 데이터베이스 업로드 중...`);
     const up = buildSupabasePayload(collectedRows, detailsMap, catUnitMap);
@@ -4269,6 +4364,14 @@ async function processJob(job) {
     }
     for (const part of chunk(up.history, 500)) {
       try { await sbInsertIgnore('item_history', part); } catch (e) { /* 중복 무시 */ }
+    }
+
+    /* 요금표 업로드 (신규로 수집된 것만 남아있음 — 이미 DB에 있던 건 위에서 건너뜀) */
+    {
+      const feeRows = buildFeeRows(feeTables, false).concat(buildFeeRows(feeTablesLow, true));
+      for (const part of chunk(feeRows, 500)) {
+        await sbUpsert('fulfillment_fees', part, 'unit1,unit2,capacity_type,min_price,is_low_asp');
+      }
     }
 
     if (detailDone) await sbMarkCategoryCollected(job.category_code, 'detail');

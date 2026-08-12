@@ -309,8 +309,10 @@
   <details>
     <summary>입출고비 계산</summary>
     <div class="hint" style="margin-top:6px;">
-      카테고리별 요금표를 미리 수집해두고, 엑셀에서 <b>wantPrice</b>나 <b>sizeType</b>을 바꾸면
-      입출고비가 자동으로 다시 계산됩니다.
+      상세수집이 끝나면 해당 카테고리의 정가/할인가 요금표(극소형~특대형)와, 있다면
+      14,000원 미만 저가 상품 전용 할인가(전용할인가) 표까지 자동으로 받아 수집 데이터
+      업로드 때 같이 올립니다. 이미 DB에 있는 카테고리는 다시 받지 않습니다.
+      웹사이트는 전용할인가가 있으면 그걸 우선 쓰고, 없으면 일반 할인가를 씁니다.
     </div>
 
     <label style="margin:8px 0 0; display:block;">기본 사이즈 유형
@@ -325,23 +327,20 @@
     </label>
 
     <label style="display:flex; align-items:flex-start; gap:7px; margin:8px 0 0; font-size:12px;">
-      <input type="checkbox" id="lowAsp" style="margin-top:2px;" />
-      <span>저가 상품 전용 할인 요금표 사용
+      <input type="checkbox" id="feeForceRefresh" style="margin-top:2px;" />
+      <span>요금표 강제 재수집
         <br /><span class="code" style="font-size:11px; color:#888;">
-        14,000원 미만 상품 중 일부 카테고리에 적용되는 할인 요금입니다</span>
+        배송비가 바뀌었을 수 있을 때 체크. 이미 DB에 있어도 다시 받아 최신 값으로 덮어씁니다</span>
       </span>
     </label>
 
-    <button id="feeCollectBtn" class="secondary">① 요금표 수집 (카테고리별)</button>
-    <button id="feeExportBtn" class="secondary">② 요금표 CSV 내보내기</button>
+    <button id="feeCollectBtn" class="secondary">요금표 수동 수집 (카테고리별)</button>
+    <button id="feeExportBtn" class="secondary">요금표 CSV 내보내기</button>
 
     <div class="hint">
       <b>사용법</b><br />
-      1. 상품 수집 후 ①로 요금표를 모읍니다<br />
-      2. ②로 요금표 CSV를 받습니다<br />
-      3. 상품 CSV와 요금표 CSV를 같은 엑셀 통합문서로 합치고,
-         요금표 시트 이름을 <b>요금표</b>로 지정합니다<br />
-      4. wantPrice나 sizeType을 바꾸면 입출고비가 자동 재계산됩니다
+      평소엔 아무것도 안 눌러도 됩니다 — 상세수집 후 자동 수집·자동 업로드됩니다.<br />
+      아래 버튼은 수동으로 다시 모으거나 엑셀용 CSV가 필요할 때만 씁니다.
     </div>
   </details>
 
