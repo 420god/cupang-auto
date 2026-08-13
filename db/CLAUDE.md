@@ -9,6 +9,7 @@ migrations/003_cascade_fix.sql       products→categories FK를 cascade로 재�
 migrations/004_delivery_badges.sql   products.delivery_badges(배열) + 자동갱신 트리거 + 조회 인덱스
 migrations/005_rocket_growth_sales.sql  로켓그로스 판매현황 일별 스냅샷 테이블(GCP VPS가 upsert)
 migrations/006_commission_rates.sql  categories.commission_rate를 WING 수수료안내 페이지 기준으로 채움
+migrations/007_drop_global_commission_default.sql  settings.fee_defaults에서 commission_rate 키 제거(전역 가정치 폐기)
 ```
 
 **이미 실행된 파일은 절대 수정하지 않는다.** 스키마를 바꿔야 하면 `004_설명.sql`처럼 새 번호로 추가한다. 모든 마이그레이션은 `if not exists`/`drop ... if exists`를 써서 **여러 번 실행해도 안전**하게 만든다 — 이 관례를 유지할 것.
@@ -31,7 +32,7 @@ migrations/006_commission_rates.sql  categories.commission_rate를 WING 수수�
 
 ## 미해결 (스키마 관점)
 
-- `commission_rate`: 006 마이그레이션으로 채우는 코드는 생겼지만(WING 수수료안내 페이지 기준, 2019-11-25 자료라 오래됨), **아직 실제 DB에 실행 안 됨** — 실행 전까지는 여전히 전부 null이고 웹은 전역 10.8%로 폴백한다(`web/app.js`의 `commissionFor()`). 또한 006은 표에 있는 root_name(대분류)만 채우므로, 카테고리 체계가 표와 다른 대분류는 실행 후에도 null로 남는다 — 정상이다.
+- `commission_rate`: 006(실행 완료, 2026-08-13) + 007로 채워졌고 전역 폴백은 완전히 없앴다. 매칭 안 된 카테고리(root_name이 WING 수수료안내 페이지의 15개 대분류에 없는 경우, 예: 이 프로젝트엔 없는 도서/음반/식품)는 여전히 null로 남고, 웹은 그런 카테고리를 "수수료 정보 없음"으로 표시하며 마진 계산을 하지 않는다(`web/app.js`의 `commissionFor()`/`calcMargin()`) — 폴백으로 부정확한 숫자를 보여주지 않기로 한 의도적 설계.
 - `item_calc`가 비어 있다. 웹에서 저장하는 코드 자체가 없어서 — 스키마 문제가 아니라 애플리케이션 로직 미구현.
 - `product_count`/`item_count`는 `refresh_all_category_stats()` 함수는 있지만 아무도 호출 안 함. 트리거로 자동화하거나 수집 후 명시적으로 호출해야 함.
 
