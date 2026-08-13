@@ -1216,10 +1216,13 @@ $('#queueRefresh').onclick = loadQueue;
 
 /* ===================== 판매현황 =====================
    로켓그로스 Open API(공식) 기반 — 위 소싱 기능들과는 완전히 별개 데이터 소스.
-   web/api/sales-today.js(Vercel 서버리스 함수)가 서명·집계까지 끝내서 vendorItemId별
-   {productName, quantity, revenue}만 반환한다. 여기서는 그 결과를 product_items.vendor_item_id로
-   조인해 item_id를 찾고, 기존 feeFor()+calcMargin()으로 수수료·입출고비·마진을 추정한다.
-   쿠팡이 당일 확정 수수료·정산액을 API로 안 주기 때문에 전부 추정치다(docs/api-notes.md 4-4). */
+   웹은 쿠팡 API를 직접 호출하지 않는다 — 고정 IP가 없는 Vercel에서 호출하면
+   쿠팡 WAF가 막는다(docs/api-notes.md 4-6/4-7). 대신 GCP VPS(고정 IP)에서 도는
+   scripts/rocket-growth-sync.js가 주기적으로 쿠팡을 호출해 Supabase의
+   rocket_growth_sales_daily 테이블에 upsert해두고, 여기서는 그 테이블만 읽는다.
+   그 결과를 product_items.vendor_item_id로 조인해 item_id를 찾고, 기존
+   feeFor()+calcMargin()으로 수수료·입출고비·마진을 추정한다. 쿠팡이 당일 확정
+   수수료·정산액을 API로 안 주기 때문에 전부 추정치다(docs/api-notes.md 4-4). */
 function setSalesRange(daysBack) {
   const to = new Date();
   const from = new Date(to.getTime() - daysBack * 86400000);
@@ -1246,20 +1249,27 @@ async function loadSales() {
   $('#salesLoader').classList.remove('hidden');
 
   try {
-    const q = `from=${encodeURIComponent(fromEl.value)}&to=${encodeURIComponent(toEl.value)}`;
-    const res = await fetch('/api/sales-today?' + q);
-    const text = await res.text();
-    let data;
-    try { data = JSON.parse(text); }
-    catch (e) { throw new Error('서버 응답을 해석할 수 없습니다 (배포 환경이 아니면 /api 함수가 동작하지 않습니다)'); }
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    const rows = await api(
+      `rocket_growth_sales_daily?select=vendor_item_id,product_name,quantity,revenue` +
+      `&sale_date=gte.${fromEl.value}&sale_date=lte.${toEl.value}`
+    ) || [];
 
-    const rangeTxt = data.from === data.to ? data.from : `${data.from} ~ ${data.to}`;
-    $('#salesSummary').textContent = `${rangeTxt} 기준 (로켓그로스 Open API) · 주문 ${cnt(data.orderCount)}건`;
+    const rangeTxt = fromEl.value === toEl.value ? fromEl.value : `${fromEl.value} ~ ${toEl.value}`;
+    $('#salesSummary').textContent = `${rangeTxt} 기준 (로켓그로스 Open API)`;
 
-    const items = data.items || [];
-    $('#statQuantity').textContent = cnt(data.totalQuantity || 0);
-    $('#statRevenue').textContent = won(data.totalRevenue || 0);
+    const byVendorItem = {};
+    rows.forEach((r) => {
+      const cur = (byVendorItem[r.vendor_item_id] = byVendorItem[r.vendor_item_id] ||
+        { vendorItemId: r.vendor_item_id, productName: r.product_name, quantity: 0, revenue: 0 });
+      cur.quantity += r.quantity;
+      cur.revenue += r.revenue;
+    });
+    const items = Object.values(byVendorItem);
+
+    const totalQuantity = items.reduce((s, it) => s + it.quantity, 0);
+    const totalRevenue = items.reduce((s, it) => s + it.revenue, 0);
+    $('#statQuantity').textContent = cnt(totalQuantity);
+    $('#statRevenue').textContent = won(totalRevenue);
 
     if (!items.length) {
       $('#statCommission').textContent = '—';
@@ -1268,15 +1278,10 @@ async function loadSales() {
       $('#statMarginNote').textContent = '';
       $('#salesStats').classList.remove('hidden');
       $('#salesEmpty').classList.remove('hidden');
-      if (data.debug) {
-        $('#salesMsg').innerHTML = `<b>진단용 원본 응답</b> (요청: ${esc(data.debug.requestUrl)})<br>` +
-          `<pre style="white-space:pre-wrap;word-break:break-all;margin:6px 0 0">${esc(data.debug.rawText)}</pre>`;
-        $('#salesMsg').classList.remove('hidden');
-      }
       return;
     }
 
-    await renderSales(data, items);
+    await renderSales(items);
   } catch (e) {
     $('#salesMsg').textContent = '판매현황을 불러오지 못했습니다: ' + e.message;
     $('#salesMsg').classList.remove('hidden');
@@ -1285,7 +1290,7 @@ async function loadSales() {
   }
 }
 
-async function renderSales(data, items) {
+async function renderSales(items) {
   const vendorItemIds = items.map((it) => it.vendorItemId);
 
   const pItemsRaw = await api(

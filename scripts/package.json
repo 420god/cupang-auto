@@ -1,0 +1,8 @@
+{
+  "name": "coupang-sourcing-scripts",
+  "private": true,
+  "description": "GCP VPS 등에서 cron으로 돌리는 독립 실행 스크립트 모음. web/extension과 별개.",
+  "dependencies": {
+    "dotenv": "^16.0.0"
+  }
+}
