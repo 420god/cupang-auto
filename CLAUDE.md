@@ -60,11 +60,12 @@ web/app.js              renderRows() 등        → 그 테이블을 읽어서 �
 - **판매수수료 데이터 없음.** 전부 고정 10.8%로 계산 중. `docs/decisions.md` 참조.
 - **`item_calc` 테이블 비어있음.** 웹은 마진을 클라이언트에서 실시간 계산만 하고 `user_items`에만 저장. 마진율 정렬/필터가 실제로는 안 먹는다.
 - 이미지 CDN 주소(`thumbnail6.coupangcdn.com/...`) 미검증.
-- **로켓그로스 Open API 연동 "판매현황" 탭 — 코드 구현 완료, 실사용 미검증 (2026-08-13).** 내부 역공학 API(위 항목들)와는 별개로 쿠팡 공식 Open API(HMAC 인증)를 붙여 `web/`에 "오늘 판매량/매출/추정 수수료/추정 이익" 탭을 추가했다. 설계·조사 배경은 `docs/api-notes.md` "4. 로켓그로스 Open API" 섹션 참조.
-  - 구현: `web/api/sales-today.js`(Vercel 서버리스 함수, 오늘자 로켓그로스 주문 조회를 HMAC 서명해 호출·vendorItemId별 집계) + `web/index.html`(사이드바 "판매현황" 탭, 소싱 다음 순서) + `web/app.js`의 `loadSales()`/`renderSales()`(그 결과를 `product_items.vendor_item_id`→`item_id`→`products.category_code`/`user_items.cost_cny`로 조인해 기존 `feeFor()`+`calcMargin()`으로 수수료·입출고비·이익 추정).
-  - 수수료·정산액은 로켓그로스 Open API에 직접 주는 필드가 없어서(주문 API는 수량·단가까지만) 기존 10.8% 가정 수수료율 기반 실시간 추정치다 — 사용자와 합의된 방식.
-  - **로컬 정적 서버(`web-static`, python http.server)로 UI·에러처리 흐름만 검증함(2026-08-13)**: 탭 전환, `/api/sales-today` 404 시 사용자에게 친절한 에러 메시지로 표시, 콘솔에 처리되지 않은 JS 에러 없음 — 여기까지 확인. **실제 쿠팡 계정 데이터로는 아직 한 번도 검증 안 됨.**
-  - **남은 것**: Vercel 프로젝트 환경변수에 `COUPANG_ACCESS_KEY`/`COUPANG_SECRET_KEY`/`COUPANG_VENDOR_ID` 등록 후 재배포 → 실제 판매현황 탭에서 데이터가 맞게 나오는지 확인. accessKey/secretKey/vendorId는 사용자가 이미 발급받음(2026-08-13). HMAC 서명 로직은 공식 문서 스펙대로 작성했지만 실제 키로 첫 호출까지는 아직 안 해봐서, 401(서명 오류)이 나면 여기서부터 디버깅 시작할 것.
+- **로켓그로스 Open API 연동 "판매현황" 탭 — 아키텍처 전환 후 재구현, 실사용 아직 미검증 (2026-08-13).** 내부 역공학 API(위 항목들)와는 별개로 쿠팡 공식 Open API(HMAC 인증)를 붙여 `web/`에 "판매량/매출/추정 수수료/추정 이익" 탭을 추가했다. 설계·조사 배경은 `docs/api-notes.md` "4. 로켓그로스 Open API" 섹션 참조. 자세한 삽질 이력은 [[project-coupang-rocket-growth-openapi]] 메모리에 더 자세히 있음.
+  - **1차 시도(Vercel 서버리스 + 유료 고정IP 프록시)는 실패로 판명**: Vercel 함수(`web/api/sales-today.js`)는 고정 IP가 없어 쿠팡이 403으로 막음 → Webshare 프록시로 우회 시도했으나, 프록시 IP를 2개나 바꿔봐도 전부 쿠팡 WAF가 "Access denied" HTML로 차단(데이터센터 프록시 IP 자체가 대역 단위로 블랙리스트된 것으로 추정). 이 코드는 폴백용으로 지우지 않고 남겨둠(`PROXY_URL` 포함).
+  - **2차 시도(현재, 커밋 `aa7e988`)로 전환**: 애초에 서버리스+프록시 구매가 아니라 "고정 IP 있는 서버 하나에서 직접 호출"이 정상적인 방식임을 확인 → **GCP `e2-micro` 무료 티어 VPS**(리전 `us-west1`, 외부IP `35.233.169.220`, 고정 IP로 예약 완료)를 만들어 거기서 직접 쿠팡을 호출하는 방식으로 변경. `scripts/rocket-growth-sync.js`가 그 서버에서 cron으로 돌면서 쿠팡 주문을 `rocket_growth_sales_daily`(`db/migrations/005`) 테이블에 upsert하고, `web/app.js`의 `loadSales()`는 이제 그 테이블만 읽는다(더는 브라우저/Vercel에서 쿠팡 API를 실시간 호출하지 않음).
+  - 수수료·정산액은 API에 없어서 여전히 기존 10.8% 가정 수수료율 기반 추정치(`feeFor()`+`calcMargin()` 재사용).
+  - **로컬 정적 서버로 새 코드 경로만 검증함(2026-08-13)**: `loadSales()`가 Supabase 테이블을 조회하도록 바뀐 게 정상 동작 확인 — 실제 계정으로는 `rocket_growth_sales_daily?...` 쿼리가 "테이블을 찾을 수 없음"으로 정상적으로(예상대로) 실패함, UI 크래시 없음.
+  - **남은 것(전부 미완료)**: ① Supabase에 마이그레이션 005 아직 미실행 — SQL Editor에서 실행 필요. ② VPS에 Node 설치 + `scripts/` 배포(`npm install`) + `scripts/.env.example`을 `.env`로 복사해서 실제 값 채우기(`COUPANG_*`, `SB_ADMIN_EMAIL/PASSWORD`) + cron 등록 아직 안 함. ③ WING에 등록한 `35.233.169.220`의 반영(최대 24시간) 확인 안 됨. ④ 이 전체 파이프라인이 실제 데이터로 한 번도 안 돌아봄.
 
 세션 시작 시 남은 미확인 항목(마이그레이션 실행 여부 등)부터 사용자에게 확인할 것.
 변경사항을 배포까지 했다면 이 섹션(및 필요시 최근 커밋 요약)을 갱신해서 다음 대화가 이어받을 수 있게 할 것.
