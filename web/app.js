@@ -741,7 +741,7 @@ function renderOptions(items, pid, catCode) {
     </select>
   </td>
   <td data-label="입출고비" class="calc-out out-fulfillment">${fee != null ? won(fee) : '<span class="dim">요금표 없음</span>'}</td>
-  <td data-label="수수료" class="calc-out out-commission">${commissionRate == null ? noCommissionTxt : (c ? won(c.commission) : '—')}</td>
+  <td data-label="수수료" class="calc-out out-commission">${commissionRate == null ? noCommissionTxt : (c ? `${won(c.commission)} (${commissionRate}%)` : '—')}</td>
   <td data-label="정산" class="calc-out out-settle">${commissionRate == null ? noCommissionTxt : (c ? won(c.settlement) : '—')}</td>
   <td data-label="마진" class="calc-out out-margin">${marginTxt}</td>
   <td data-label="즐겨찾기">
@@ -831,7 +831,7 @@ function recalcRow(tr, save) {
     tr.querySelector('.out-settle').textContent = '—';
     tr.querySelector('.out-margin').innerHTML = '<span class="dim">수수료 정보 없음</span>';
   } else {
-    tr.querySelector('.out-commission').textContent = c ? won(c.commission) : '—';
+    tr.querySelector('.out-commission').textContent = c ? `${won(c.commission)} (${commissionRate}%)` : '—';
     tr.querySelector('.out-settle').textContent = c ? won(c.settlement) : '—';
     tr.querySelector('.out-margin').innerHTML = (c && c.margin !== null)
       ? `<span class="${c.margin >= 0 ? 'pos' : 'neg'}">${c.margin.toLocaleString()}원 · ${c.rate}%</span>`
@@ -1368,7 +1368,7 @@ async function renderSales(items) {
     if (fulfillmentSum != null) totalFulfillment += fulfillmentSum;
     if (marginSum != null) { totalMargin += marginSum; costedCount++; }
 
-    return { it, commissionSum, fulfillmentSum, marginSum };
+    return { it, commissionSum, fulfillmentSum, marginSum, commissionRate };
   });
 
   $('#statCommission').textContent = won(totalCommission);
@@ -1394,13 +1394,13 @@ async function renderSales(items) {
   <td class="col-num"><span class="dim">수수료 정보 없음</span></td>
 </tr>`;
     }
-    const { commissionSum, fulfillmentSum, marginSum } = r;
+    const { commissionSum, fulfillmentSum, marginSum, commissionRate } = r;
     return `
 <tr>
   <td>${esc(it.productName || '(이름 없음)')}</td>
   <td class="col-num">${cnt(it.quantity)}</td>
   <td class="col-num">${won(it.revenue)}</td>
-  <td class="col-num">${commissionSum != null ? won(Math.round(commissionSum)) : '—'}</td>
+  <td class="col-num">${commissionSum != null ? `${won(Math.round(commissionSum))} (${commissionRate}%)` : '—'}</td>
   <td class="col-num">${fulfillmentSum != null ? won(Math.round(fulfillmentSum)) : '<span class="dim">요금표 없음</span>'}</td>
   <td class="col-num">${
     marginSum != null

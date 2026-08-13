@@ -10,6 +10,7 @@ migrations/004_delivery_badges.sql   products.delivery_badges(배열) + 자동�
 migrations/005_rocket_growth_sales.sql  로켓그로스 판매현황 일별 스냅샷 테이블(GCP VPS가 upsert)
 migrations/006_commission_rates.sql  categories.commission_rate를 WING 수수료안내 페이지 기준으로 채움
 migrations/007_drop_global_commission_default.sql  settings.fee_defaults에서 commission_rate 키 제거(전역 가정치 폐기)
+migrations/008_root_name_trigger.sql  categories.root_name 자동유지 트리거 + 백필 + commission_rate 재적용
 ```
 
 **이미 실행된 파일은 절대 수정하지 않는다.** 스키마를 바꿔야 하면 `004_설명.sql`처럼 새 번호로 추가한다. 모든 마이그레이션은 `if not exists`/`drop ... if exists`를 써서 **여러 번 실행해도 안전**하게 만든다 — 이 관례를 유지할 것.
