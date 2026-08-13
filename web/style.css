@@ -382,6 +382,8 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 .q-failed  { background: var(--neg-soft);  color: var(--neg); }
 
 /* ---------- 판매현황 ---------- */
+.sales-range { flex-wrap: wrap; }
+.sales-presets { display: flex; gap: 5px; }
 .in-date { width: auto; max-width: 152px; }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .stat-card {

@@ -1220,9 +1220,24 @@ $('#queueRefresh').onclick = loadQueue;
    {productName, quantity, revenue}만 반환한다. 여기서는 그 결과를 product_items.vendor_item_id로
    조인해 item_id를 찾고, 기존 feeFor()+calcMargin()으로 수수료·입출고비·마진을 추정한다.
    쿠팡이 당일 확정 수수료·정산액을 API로 안 주기 때문에 전부 추정치다(docs/api-notes.md 4-4). */
+function setSalesRange(daysBack) {
+  const to = new Date();
+  const from = new Date(to.getTime() - daysBack * 86400000);
+  $('#salesFrom').value = kstDateStr(from);
+  $('#salesTo').value = kstDateStr(to);
+}
+
+$('#page-sales').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('[data-preset]');
+  if (!btn) return;
+  setSalesRange(parseInt(btn.dataset.preset, 10) || 0);
+  loadSales();
+});
+
 async function loadSales() {
-  const dateEl = $('#salesDate');
-  if (!dateEl.value) dateEl.value = kstDateStr(new Date());
+  const fromEl = $('#salesFrom');
+  const toEl = $('#salesTo');
+  if (!fromEl.value || !toEl.value) setSalesRange(0); // 최초 진입 시 기본값: 오늘
 
   $('#salesMsg').classList.add('hidden');
   $('#salesStats').classList.add('hidden');
@@ -1231,14 +1246,16 @@ async function loadSales() {
   $('#salesLoader').classList.remove('hidden');
 
   try {
-    const res = await fetch('/api/sales-today?date=' + encodeURIComponent(dateEl.value));
+    const q = `from=${encodeURIComponent(fromEl.value)}&to=${encodeURIComponent(toEl.value)}`;
+    const res = await fetch('/api/sales-today?' + q);
     const text = await res.text();
     let data;
     try { data = JSON.parse(text); }
     catch (e) { throw new Error('서버 응답을 해석할 수 없습니다 (배포 환경이 아니면 /api 함수가 동작하지 않습니다)'); }
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
-    $('#salesSummary').textContent = `${data.date} 기준 (로켓그로스 Open API) · 주문 ${cnt(data.orderCount)}건`;
+    const rangeTxt = data.from === data.to ? data.from : `${data.from} ~ ${data.to}`;
+    $('#salesSummary').textContent = `${rangeTxt} 기준 (로켓그로스 Open API) · 주문 ${cnt(data.orderCount)}건`;
 
     const items = data.items || [];
     $('#statQuantity').textContent = cnt(data.totalQuantity || 0);

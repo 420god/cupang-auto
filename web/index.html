@@ -123,9 +123,17 @@
             <h2>판매현황</h2>
             <p class="muted sm" id="salesSummary">오늘 (로켓그로스 Open API)</p>
           </div>
-          <div class="page-actions">
-            <input type="date" id="salesDate" class="in-date" />
-            <button id="salesRefresh" class="btn btn-sm">조회</button>
+          <div class="page-actions sales-range">
+            <div class="sales-presets">
+              <button type="button" class="btn btn-sm btn-ghost" data-preset="0">오늘</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-preset="1">어제</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-preset="7">최근 7일</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-preset="30">최근 30일</button>
+            </div>
+            <input type="date" id="salesFrom" class="in-date" />
+            <em>~</em>
+            <input type="date" id="salesTo" class="in-date" />
+            <button id="salesRefresh" class="btn btn-sm btn-primary">조회</button>
           </div>
         </div>
 

@@ -42,11 +42,27 @@ function todayKst() {
   return `${get('year')}${get('month')}${get('day')}`;
 }
 
-/* ?date=YYYY-MM-DD(HTML date input 형식) → yyyymmdd. 형식이 안 맞거나 없으면 오늘(KST). */
-function resolveDate(query) {
-  const raw = query && query.date;
-  if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw.replace(/-/g, '');
-  return todayKst();
+const isValidDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+const toCompact = (s) => s.replace(/-/g, '');
+
+/* ?from=YYYY-MM-DD&to=YYYY-MM-DD(HTML date input 형식) → {from, to}(yyyymmdd).
+   하나만 오거나 둘 다 없으면 오늘(KST) 하루로 채운다. 로켓그로스 주문 API는
+   최대 30일 범위만 허용하므로 그보다 넓으면 에러로 알려준다(쿠팡 쪽 원본 에러보다 명확하게). */
+function resolveRange(query) {
+  const today = todayKst();
+  let from = (query && isValidDate(query.from)) ? toCompact(query.from) : null;
+  let to = (query && isValidDate(query.to)) ? toCompact(query.to) : null;
+  if (!from && !to) { from = today; to = today; }
+  else if (!from) from = to;
+  else if (!to) to = from;
+
+  if (from > to) { const t = from; from = to; to = t; }
+
+  const days = (Date.UTC(+to.slice(0, 4), +to.slice(4, 6) - 1, +to.slice(6, 8)) -
+    Date.UTC(+from.slice(0, 4), +from.slice(4, 6) - 1, +from.slice(6, 8))) / 86400000;
+  if (days > 30) return { error: '조회 기간은 최대 30일까지만 가능합니다.' };
+
+  return { from, to };
 }
 
 module.exports = async function handler(req, res) {
@@ -64,7 +80,12 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const date = resolveDate(req.query);
+  const range = resolveRange(req.query);
+  if (range.error) {
+    res.status(400).json({ error: range.error });
+    return;
+  }
+  const { from, to } = range;
   const path = `/v2/providers/rg_open_api/apis/api/v1/vendors/${COUPANG_VENDOR_ID}/rg/orders`;
 
   let nextToken = '';
@@ -72,7 +93,7 @@ module.exports = async function handler(req, res) {
 
   try {
     for (let page = 0; page < MAX_PAGES; page++) {
-      const query = `paidDateFrom=${date}&paidDateTo=${date}` +
+      const query = `paidDateFrom=${from}&paidDateTo=${to}` +
         (nextToken ? `&nextToken=${encodeURIComponent(nextToken)}` : '');
       const { header } = authHeader('GET', path, query, COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY);
 
@@ -122,7 +143,8 @@ module.exports = async function handler(req, res) {
   });
 
   res.status(200).json({
-    date,
+    from,
+    to,
     totalQuantity,
     totalRevenue,
     orderCount: orders.length,
