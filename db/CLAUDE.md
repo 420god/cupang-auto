@@ -3,10 +3,12 @@
 ## 마이그레이션 규칙
 
 ```
-migrations/001_init.sql            기본 테이블 10개 + RLS + 뷰 2개
-migrations/002_web_features.sql    카테고리 상태 컬럼, 대기열, 초대 테이블, 뷰 1개 추가
-migrations/003_cascade_fix.sql     products→categories FK를 cascade로 재생성
-migrations/004_delivery_badges.sql products.delivery_badges(배열) + 자동갱신 트리거 + 조회 인덱스
+migrations/001_init.sql              기본 테이블 10개 + RLS + 뷰 2개
+migrations/002_web_features.sql      카테고리 상태 컬럼, 대기열, 초대 테이블, 뷰 1개 추가
+migrations/003_cascade_fix.sql       products→categories FK를 cascade로 재생성
+migrations/004_delivery_badges.sql   products.delivery_badges(배열) + 자동갱신 트리거 + 조회 인덱스
+migrations/005_rocket_growth_sales.sql  로켓그로스 판매현황 일별 스냅샷 테이블(GCP VPS가 upsert)
+migrations/006_commission_rates.sql  categories.commission_rate를 WING 수수료안내 페이지 기준으로 채움
 ```
 
 **이미 실행된 파일은 절대 수정하지 않는다.** 스키마를 바꿔야 하면 `004_설명.sql`처럼 새 번호로 추가한다. 모든 마이그레이션은 `if not exists`/`drop ... if exists`를 써서 **여러 번 실행해도 안전**하게 만든다 — 이 관례를 유지할 것.
@@ -29,7 +31,7 @@ migrations/004_delivery_badges.sql products.delivery_badges(배열) + 자동갱�
 
 ## 미해결 (스키마 관점)
 
-- `commission_rate` 컬럼이 전부 null. 수수료 표 파싱해서 채우는 마이그레이션/스크립트가 없다.
+- `commission_rate`: 006 마이그레이션으로 채우는 코드는 생겼지만(WING 수수료안내 페이지 기준, 2019-11-25 자료라 오래됨), **아직 실제 DB에 실행 안 됨** — 실행 전까지는 여전히 전부 null이고 웹은 전역 10.8%로 폴백한다(`web/app.js`의 `commissionFor()`). 또한 006은 표에 있는 root_name(대분류)만 채우므로, 카테고리 체계가 표와 다른 대분류는 실행 후에도 null로 남는다 — 정상이다.
 - `item_calc`가 비어 있다. 웹에서 저장하는 코드 자체가 없어서 — 스키마 문제가 아니라 애플리케이션 로직 미구현.
 - `product_count`/`item_count`는 `refresh_all_category_stats()` 함수는 있지만 아무도 호출 안 함. 트리거로 자동화하거나 수집 후 명시적으로 호출해야 함.
 
