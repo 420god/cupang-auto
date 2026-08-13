@@ -670,18 +670,30 @@ $('#sourcingBody').addEventListener('click', async (ev) => {
 async function loadOptions(pid, catCode, detailEl) {
   const box = detailEl.querySelector('.detail-inner');
   try {
-    /* user_items도 product_id를 갖고 있으므로 옵션 목록을 기다렸다가 item_id로
-       조회할 필요가 없다 — 두 요청을 동시에 보내 펼치는 시간을 절반으로 줄인다. */
-    const [items, mine] = await Promise.all([
+    /* user_items를 따로 조회하지 않고 product_items에 PostgREST 리소스 임베딩으로
+       한 번에 묶어서 받는다(FK: user_items.item_id -> product_items.item_id).
+       예전엔 두 요청을 Promise.all로 동시에 보냈는데, 그래도 요청 2개 자체의
+       왕복 오버헤드(연결·헤더 등)는 남아있었다 — 1개로 줄이면 그만큼 더 빨라진다.
+       RLS가 이미 user_items를 본인 것만 보이게 걸러주므로 item당 최대 1개만 온다.
+
+       readyForMargins도 같이 기다린다(네트워크 요청과 동시에 — 이미 끝나 있으면
+       비용 0). 이게 없으면 페이지 열자마자 바로 클릭했을 때 카테고리 로딩이
+       아직 안 끝나 commissionFor()/feeFor()가 전부 null을 주고, detail은 한 번
+       열리면 dataset.loaded로 캐시돼서 다시 안 그려지니 "수수료 정보 없음"이
+       영영 안 고쳐진다(소싱 목록의 loadRowMargins도 같은 이유로 이걸 기다림). */
+    const [items] = await Promise.all([
       api(
         `product_items?select=item_id,vendor_item_id,item_name,image_path,current_price,` +
-        `sales_number,sales_text,delivery_badge,shipping_fee,seller_name,is_soldout` +
+        `sales_number,sales_text,delivery_badge,shipping_fee,seller_name,is_soldout,user_items(*)` +
         `&product_id=eq.${encodeURIComponent(pid)}&is_active=eq.true&order=sales_number.desc.nullslast`
       ),
-      api(`user_items?select=*&product_id=eq.${encodeURIComponent(pid)}`)
+      state.readyForMargins
     ]);
 
-    (mine || []).forEach((m) => { state.userItems[m.item_id] = m; });
+    (items || []).forEach((it) => {
+      const mine = it.user_items && it.user_items[0];
+      if (mine) state.userItems[it.item_id] = mine;
+    });
 
     box.innerHTML = renderOptions(items || [], pid, catCode);
     updateProductMargin(pid);
