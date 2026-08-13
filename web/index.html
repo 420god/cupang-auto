@@ -86,6 +86,10 @@
         <svg viewBox="0 0 24 24"><path d="M3 3h18v4H3zM3 10h18v11H3z"/></svg>
         <span>소싱</span>
       </button>
+      <button class="nav-item" data-page="sales">
+        <svg viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-5 3 3 5-7"/></svg>
+        <span>판매현황</span>
+      </button>
       <button class="nav-item" data-page="favorites">
         <svg viewBox="0 0 24 24"><path d="M12 3l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.8 6.2 20.9l1.1-6.5L2.6 9.8l6.5-.9z"/></svg>
         <span>즐겨찾기</span>
@@ -111,6 +115,68 @@
 
     <!-- 본문 -->
     <main class="main">
+
+      <!-- ── 판매현황 ── -->
+      <section id="page-sales" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>판매현황</h2>
+            <p class="muted sm" id="salesSummary">오늘 (로켓그로스 Open API)</p>
+          </div>
+          <div class="page-actions">
+            <button id="salesRefresh" class="btn btn-sm">새로고침</button>
+          </div>
+        </div>
+
+        <div class="hint-box">
+          수수료·입출고비·이익은 쿠팡이 확정 정산액을 실시간으로 제공하지 않아
+          <b>가정 수수료율(기본 10.8%)과 요금표 기준 추정치</b>입니다. 실제 정산액과 다를 수 있습니다.
+        </div>
+
+        <div id="salesStats" class="stat-grid hidden">
+          <div class="stat-card">
+            <div class="stat-label">오늘 판매수량</div>
+            <div class="stat-value" id="statQuantity">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">오늘 매출</div>
+            <div class="stat-value" id="statRevenue">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">추정 수수료</div>
+            <div class="stat-value" id="statCommission">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">추정 입출고비</div>
+            <div class="stat-value" id="statFulfillment">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">추정 이익</div>
+            <div class="stat-value" id="statMargin">—</div>
+            <div class="stat-note muted xs" id="statMarginNote"></div>
+          </div>
+        </div>
+
+        <div id="salesMsg" class="hint-box hidden"></div>
+
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>상품 / 옵션</th>
+                <th class="col-num">판매수량</th>
+                <th class="col-num">매출</th>
+                <th class="col-num">추정 수수료</th>
+                <th class="col-num">추정 입출고비</th>
+                <th class="col-num">추정 이익</th>
+              </tr>
+            </thead>
+            <tbody id="salesBody"></tbody>
+          </table>
+          <div id="salesLoader" class="loader hidden"><div class="spinner"></div>불러오는 중…</div>
+          <div id="salesEmpty" class="empty hidden"><p>오늘 판매된 상품이 없습니다</p></div>
+        </div>
+      </section>
 
       <!-- ── 소싱 ── -->
       <section id="page-sourcing" class="page">

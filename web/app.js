@@ -1214,6 +1214,134 @@ $('#queueList').addEventListener('click', async (ev) => {
 
 $('#queueRefresh').onclick = loadQueue;
 
+/* ===================== 판매현황 =====================
+   로켓그로스 Open API(공식) 기반 — 위 소싱 기능들과는 완전히 별개 데이터 소스.
+   web/api/sales-today.js(Vercel 서버리스 함수)가 서명·집계까지 끝내서 vendorItemId별
+   {productName, quantity, revenue}만 반환한다. 여기서는 그 결과를 product_items.vendor_item_id로
+   조인해 item_id를 찾고, 기존 feeFor()+calcMargin()으로 수수료·입출고비·마진을 추정한다.
+   쿠팡이 당일 확정 수수료·정산액을 API로 안 주기 때문에 전부 추정치다(docs/api-notes.md 4-4). */
+async function loadSales() {
+  $('#salesMsg').classList.add('hidden');
+  $('#salesStats').classList.add('hidden');
+  $('#salesEmpty').classList.add('hidden');
+  $('#salesBody').innerHTML = '';
+  $('#salesLoader').classList.remove('hidden');
+
+  try {
+    const res = await fetch('/api/sales-today');
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); }
+    catch (e) { throw new Error('서버 응답을 해석할 수 없습니다 (배포 환경이 아니면 /api 함수가 동작하지 않습니다)'); }
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+    $('#salesSummary').textContent = `${data.date} 기준 (로켓그로스 Open API) · 주문 ${cnt(data.orderCount)}건`;
+
+    const items = data.items || [];
+    $('#statQuantity').textContent = cnt(data.totalQuantity || 0);
+    $('#statRevenue').textContent = won(data.totalRevenue || 0);
+
+    if (!items.length) {
+      $('#statCommission').textContent = '—';
+      $('#statFulfillment').textContent = '—';
+      $('#statMargin').textContent = '—';
+      $('#statMarginNote').textContent = '';
+      $('#salesStats').classList.remove('hidden');
+      $('#salesEmpty').classList.remove('hidden');
+      return;
+    }
+
+    await renderSales(data, items);
+  } catch (e) {
+    $('#salesMsg').textContent = '판매현황을 불러오지 못했습니다: ' + e.message;
+    $('#salesMsg').classList.remove('hidden');
+  } finally {
+    $('#salesLoader').classList.add('hidden');
+  }
+}
+
+async function renderSales(data, items) {
+  const vendorItemIds = items.map((it) => it.vendorItemId);
+
+  const pItemsRaw = await api(
+    `product_items?select=item_id,vendor_item_id,product_id&vendor_item_id=in.(${vendorItemIds.map(encodeURIComponent).join(',')})`
+  ) || [];
+  const byVendorItem = {};
+  pItemsRaw.forEach((r) => { byVendorItem[r.vendor_item_id] = r; });
+
+  const productIds = Array.from(new Set(pItemsRaw.map((r) => r.product_id).filter(Boolean)));
+  const itemIds = pItemsRaw.map((r) => r.item_id).filter(Boolean);
+
+  const [productsRaw, userItemsRaw] = await Promise.all([
+    productIds.length
+      ? api(`products?select=product_id,category_code&product_id=in.(${productIds.map(encodeURIComponent).join(',')})`)
+      : [],
+    itemIds.length
+      ? api(`user_items?select=item_id,cost_cny,exchange_rate,outbound_fee,work_fee,size_type&item_id=in.(${itemIds.map(encodeURIComponent).join(',')})`)
+      : []
+  ]);
+
+  const catByProduct = {};
+  (productsRaw || []).forEach((p) => { catByProduct[p.product_id] = p.category_code; });
+  const userItemByItem = {};
+  (userItemsRaw || []).forEach((u) => { userItemByItem[u.item_id] = u; });
+
+  await state.readyForMargins; // settings.commission / feeCache 로딩 대기 (enterApp에서 이미 시작됨)
+
+  let totalCommission = 0, totalFulfillment = 0, totalMargin = 0, costedCount = 0;
+
+  const rows = items.map((it) => {
+    const link = byVendorItem[it.vendorItemId];
+    const itemId = link && link.item_id;
+    const productId = link && link.product_id;
+    const catCode = productId ? catByProduct[productId] : null;
+    const u = (itemId && userItemByItem[itemId]) || {};
+
+    const avgPrice = it.quantity ? it.revenue / it.quantity : 0;
+    const size = u.size_type || settings.size;
+    const fee = catCode ? feeFor(catCode, size, avgPrice) : null;
+
+    const c = calcMargin({
+      price: avgPrice, commission: settings.commission, fulfillment: fee,
+      costCny: u.cost_cny, rate: u.exchange_rate,
+      outbound: u.outbound_fee, work: u.work_fee
+    });
+
+    const commissionSum = c ? c.commission * it.quantity : null;
+    const fulfillmentSum = (fee != null) ? fee * it.quantity : null;
+    const marginSum = (c && c.margin !== null) ? c.margin * it.quantity : null;
+
+    if (commissionSum != null) totalCommission += commissionSum;
+    if (fulfillmentSum != null) totalFulfillment += fulfillmentSum;
+    if (marginSum != null) { totalMargin += marginSum; costedCount++; }
+
+    return { it, commissionSum, fulfillmentSum, marginSum };
+  });
+
+  $('#statCommission').textContent = won(totalCommission);
+  $('#statFulfillment').textContent = won(totalFulfillment);
+  $('#statMargin').innerHTML = `<span class="${totalMargin >= 0 ? 'pos' : 'neg'}">${totalMargin.toLocaleString()}원</span>`;
+  const uncosted = items.length - costedCount;
+  $('#statMarginNote').textContent = uncosted > 0 ? `원가 미입력 상품 ${uncosted}개는 이익 합계에서 제외됨` : '';
+  $('#salesStats').classList.remove('hidden');
+
+  $('#salesBody').innerHTML = rows.map(({ it, commissionSum, fulfillmentSum, marginSum }) => `
+<tr>
+  <td>${esc(it.productName || '(이름 없음)')}</td>
+  <td class="col-num">${cnt(it.quantity)}</td>
+  <td class="col-num">${won(it.revenue)}</td>
+  <td class="col-num">${commissionSum != null ? won(Math.round(commissionSum)) : '—'}</td>
+  <td class="col-num">${fulfillmentSum != null ? won(Math.round(fulfillmentSum)) : '<span class="dim">요금표 없음</span>'}</td>
+  <td class="col-num">${
+    marginSum != null
+      ? `<span class="${marginSum >= 0 ? 'pos' : 'neg'}">${Math.round(marginSum).toLocaleString()}원</span>`
+      : '<span class="dim">원가 입력 필요</span>'
+  }</td>
+</tr>`).join('');
+}
+
+$('#salesRefresh').onclick = loadSales;
+
 /* ===================== 필터 · 검색 ===================== */
 $('#filterToggle').onclick = () => $('#filterPanel').classList.toggle('hidden');
 
@@ -1331,6 +1459,7 @@ $$('.nav-item').forEach((btn) => {
     state.page = page;
     closeSidebar();
 
+    if (page === 'sales')      loadSales();
     if (page === 'favorites')  loadFavorites();
     if (page === 'categories') loadCategories();
     if (page === 'queue')      loadQueue();

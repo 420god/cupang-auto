@@ -112,3 +112,47 @@ GET https://www.coupang.com/vp/products/{productId}?itemId={itemId}
 ```
 
 ---
+
+## 4. 로켓그로스 Open API (판매현황 탭용, 2026-08-13 조사)
+
+> 위 1~3번은 로그인 쿠키 기반 **내부 역공학 API**. 이 섹션은 완전히 별개인 **쿠팡 공식 Open API**(`developers.coupang.com`, WING에서 발급받는 accessKey/secretKey로 HMAC 서명).
+> Base URL 공통: `https://api-gateway.coupang.com`. 인증은 HMAC-SHA256, `Authorization: CEA algorithm=HmacSHA256, access-key=..., signed-date=..., signature=...` 형태(정확한 서명 생성 규칙은 코드 작성 시 `developers.coupangcorp.com`의 "Creating HMAC Signature" 문서로 재검증할 것 — 아직 실제 키로 테스트 못 해봄).
+
+### 4-1. 로켓그로스 주문 조회 (판매량·매출용 — 이게 핵심)
+```
+GET /v2/providers/rg_open_api/apis/api/v1/vendors/{vendorId}/rg/orders
+쿼리: paidDateFrom, paidDateTo (yyyymmdd, 필수, 최대 30일 범위), nextToken (페이징)
+```
+응답 `data[]` → `orderId`, `paidAt`, `orderItems[]`(`vendorItemId`, `productName`, `salesQuantity`, `unitSalesPrice`, `currency`).
+**수수료·정산액 필드 없음.** 매출(수량×단가)까지만 나온다. 분당 50회 제한, 한국 구매자만.
+
+### 4-2. 로켓창고 재고 조회
+```
+GET /v2/providers/rg_open_api/apis/api/v1/vendors/{vendorId}/rg/inventory/summaries
+쿼리: vendorItemId(선택), nextToken
+```
+`totalOrderableQuantity`(주문가능수량), `salesCountMap.SALES_COUNT_LAST_THIRTY_DAYS`(최근 30일 판매량). 판매현황 탭엔 필수 아님, 재고 표시용.
+
+### 4-3. 상품 등록/수정/조회/카테고리 API들
+`seller_api` 계열(`/v2/providers/seller_api/apis/api/v1/marketplace/seller-products` 등). 상품 등록·관리용이고 **판매현황·정산과 무관** — 조사만 하고 이번 작업엔 안 씀.
+
+### 4-4. 수수료·정산 — 직접 주는 API가 로켓그로스엔 없음 (중요)
+검색으로 찾은 것은 `marketplace_openapi` 계열 두 개뿐:
+```
+GET /v2/providers/openapi/apis/api/v1/revenue-history                 (매출내역조회, recognitionDateFrom/To)
+GET /v2/providers/marketplace_openapi/apis/api/v1/settlement-histories (정산내역조회, revenueRecognitionYearMonth=YYYY-MM, 월 단위)
+```
+- 이게 **일반 마켓플레이스용인지 로켓그로스 계정에도 데이터가 나오는지 미확인**. 실제 키 받으면 먼저 테스트해볼 것.
+- 정산내역조회는 **월 단위**라 애초에 "오늘 확정 수수료"라는 개념이 존재하지 않을 가능성이 높음(정산은 며칠~한 달 지연).
+
+**그래서 사용자와 합의한 방식(2026-08-13):** 판매현황 탭은 4-1의 실시간 주문 데이터에 **가정 수수료율 10.8%**(위 3번 마진계산 공식과 동일 기본값)를 적용한 **추정치**로 표시한다. 나중에 정산내역조회가 실제로 로켓그로스에서 동작하면 그 값으로 검증/보정하는 걸 별도 작업으로 남겨둔다.
+
+### 4-5. 이익 계산에 필요한 나머지 조각
+원가는 애초에 쿠팡 API 어디에도 없다 — 이미 있는 `user_items.cost_cny`를 써야 한다. 주문 API의 `vendorItemId`로 `product_items.vendor_item_id`를 조인하면 연결된다. 마진 계산은 3번의 `calcMargin()`을 그대로 재사용(별도 계산식 새로 만들지 말 것 — `web/CLAUDE.md` 규칙).
+
+### 4-6. 아키텍처 — secretKey는 브라우저에 두면 안 됨
+`web/`은 정적 사이트지만 배포처가 **Vercel**로 확인됨(`docs/decisions.md` 참조) → `web/api/sales-today.js` 하나 추가하면 번들러 없이 서버리스 함수로 동작. secretKey는 Vercel 환경변수에만 두고, 이 함수가 서명·호출까지 하고 집계 결과만 클라이언트에 반환한다. 클라이언트(app.js)는 그 결과 + Supabase 원가를 합쳐 화면에 그린다.
+
+**막힌 것(2026-08-13 기준): 사용자가 아직 accessKey/secretKey/vendorId 미발급.** WING 로그인 후 Open API 신청은 사용자만 할 수 있어서 여기서 막힘. 발급받으면 `web/api/sales-today.js` 실제 구현·서명 검증 진행.
+
+---

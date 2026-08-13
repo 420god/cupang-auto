@@ -2077,7 +2077,87 @@ stopBtn.addEventListener('click', () => {
   setStatus(statusEl.textContent + '\n\n중지 요청됨... 현재 카테고리를 마치고 멈춥니다.');
 });
 
-async function runCategoryCollection() {
+/* 카테고리 하나를 상세수집 → 요금표 자동수집 → DB 업로드까지 끝까지 처리한다.
+   수동 "카테고리 수집"과 대기열 processJob이 이 함수를 공유한다 — 카테고리 하나가
+   끝날 때마다 곧바로 업로드하는 방식이라, 전체를 다 모았다가 마지막에 한 번에
+   올리는 것보다 중간에 중단돼도 이미 끝난 카테고리는 안전하게 저장돼 있다.
+   rows: 이 카테고리의 1단계 결과(상품 행들). tab: 이미 열어둔 윙 탭(있으면 재사용). */
+async function finishCategoryPipeline(catCode, rows, opts) {
+  opts = opts || {};
+  const withDetail = opts.withDetail !== false;
+  const statusFn = opts.statusFn || setStatus;
+  const label = opts.label || catCode;
+  const tab = opts.tab;
+
+  let detailDone = false;
+  if (withDetail && rows.length) {
+    const topN = parseInt(detailTopNEl.value, 10) || 0;
+    const perOption = detailPerOptionEl.checked;
+    const idLines = uniqueProductIdsFromRows(topN, perOption, rows);
+
+    if (idLines.length > 0) {
+      try {
+        await getConsumerTab();
+        const r2 = await runDetailCollection(idLines);
+        detailDone = !!(r2 && r2.ok && !r2.stopped);
+      } catch (e) {
+        statusFn(`${label} — 상세 보강 생략 (${e.message})`);
+      }
+    }
+  }
+
+  if (detailDone) {
+    const feeKanIds = Array.from(new Set(
+      rows.map((r) => r.categoryId).filter((v) => v !== undefined && v !== null && v !== '')
+    )).map(String);
+    if (feeKanIds.length) {
+      statusFn(`${label} — 입출고비 요금표 확인 중...`);
+      try {
+        await collectFeeDataForCategories(feeKanIds, { statusFn, tab });
+      } catch (e) {
+        statusFn(`${label} — 요금표 수집 생략 (${e.message})`);
+      }
+    }
+  }
+
+  if (!sbConfigured()) return { detailDone, uploaded: false };
+
+  try {
+    await sbEnsureAuth();
+    statusFn(`${label} — 데이터베이스 업로드 중...`);
+    const up = buildSupabasePayload(rows, detailsMap, catUnitMap);
+
+    for (const st of [
+      { t: 'categories',    r: up.categories, c: 'category_code' },
+      { t: 'products',      r: up.products,   c: 'product_id' },
+      { t: 'product_items', r: up.items,      c: 'item_id' }
+    ]) {
+      for (const part of chunk(st.r, 500)) await sbUpsert(st.t, part, st.c);
+    }
+    for (const part of chunk(up.history, 500)) {
+      try { await sbInsertIgnore('item_history', part); } catch (e) { /* 중복 무시 */ }
+    }
+
+    const feeRows = buildFeeRows(feeTables, false).concat(buildFeeRows(feeTablesLow, true));
+    for (const part of chunk(feeRows, 500)) {
+      await sbUpsert('fulfillment_fees', part, 'unit1,unit2,capacity_type,min_price,is_low_asp');
+    }
+
+    if (detailDone) {
+      try { await sbMarkCategoryCollected(catCode, 'detail'); } catch (e) { /* 무시 */ }
+    }
+
+    return {
+      detailDone, uploaded: true,
+      productCount: up.products.length, itemCount: up.items.length
+    };
+  } catch (e) {
+    statusFn(`${label} — 업로드 실패 (${e.message})`);
+    return { detailDone, uploaded: false, error: e.message };
+  }
+}
+
+async function runCategoryCollection(withDetail) {
   const targets = getSelected();
   if (targets.length === 0) {
     setStatus('수집할 카테고리가 없습니다. "② 전체 카테고리 불러오기"를 하거나 코드를 직접 입력하세요.', true);
@@ -2095,7 +2175,27 @@ async function runCategoryCollection() {
 
   const failures = [];
   const emptyCats = [];
+  const pipelineFails = [];
+  let detailDoneCount = 0;
+  let uploadedCount = 0;
   const startedAt = Date.now();
+
+  /* withDetail이면 카테고리마다 곧바로 2단계(상세)→요금표→업로드까지 끝낸다.
+     소비자 탭이 아예 없으면 카테고리마다 반복 실패하므로 미리 한 번만 확인해둔다. */
+  let canDetail = !!withDetail;
+  if (canDetail) {
+    try {
+      await getConsumerTab();
+    } catch (e) {
+      canDetail = false;
+      setStatus(
+        `❌ 2단계를 실행할 수 없어 1단계(목록)만 진행합니다.\n${e.message}\n\n` +
+        `www.coupang.com 탭을 하나 열어둔 뒤 "상세 보강 단독 실행"에서 이어서 진행하세요.`,
+        true
+      );
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
 
   try {
     const tab = await getWingTab();
@@ -2135,6 +2235,7 @@ async function runCategoryCollection() {
         payload = { ok: false, error: e.message };
       }
 
+      const catRows = [];
       if (!payload || !payload.ok) {
         failures.push(`${label}: ${payload ? payload.error : '알 수 없는 오류'}`);
       } else if (payload.empty) {
@@ -2144,7 +2245,7 @@ async function runCategoryCollection() {
           const hierarchy = it.displayCategoryInfos && it.displayCategoryInfos[0]
             ? it.displayCategoryInfos[0].categoryHierarchy
             : '';
-          collectedRows.push({
+          const row = {
             categoryCode: t.code,
             categoryName: t.name || '',
             categoryHierarchy: hierarchy,
@@ -2165,12 +2266,28 @@ async function runCategoryCollection() {
             itemId: it.itemId,
             productId: it.productId,
             vendorItemId: it.vendorItemId
-          });
+          };
+          collectedRows.push(row);
+          catRows.push(row);
         }
       }
 
       barFill.style.width = Math.round(((i + 1) / targets.length) * 100) + '%';
       await saveProgress();
+      if (sbConfigured() && catRows.length) {
+        try { await sbMarkCategoryCollected(t.code, 'list'); } catch (e) { /* 무시 */ }
+      }
+
+      if (canDetail && catRows.length && !stopRequested) {
+        try {
+          const r = await finishCategoryPipeline(t.code, catRows, { statusFn: setStatus, label, tab });
+          if (r.detailDone) detailDoneCount++;
+          if (r.uploaded) uploadedCount++;
+          else if (r.error) pipelineFails.push(`${label}: ${r.error}`);
+        } catch (e) {
+          pipelineFails.push(`${label}: ${e.message}`);
+        }
+      }
 
       if (i < targets.length - 1 && !stopRequested) {
         await new Promise((r) => setTimeout(r, 500));
@@ -2182,18 +2299,34 @@ async function runCategoryCollection() {
     let summary = stopRequested
       ? `중지되었습니다. 총 ${collectedRows.length}개 수집.`
       : `완료! 총 ${collectedRows.length}개 상품 수집.`;
+    if (canDetail) {
+      summary += `\n상세 보강 완료 카테고리 ${detailDoneCount}건`;
+      if (sbConfigured()) summary += ` · DB 업로드 완료 ${uploadedCount}건`;
+    }
     if (emptyCats.length) {
       summary += `\n\n데이터 없음 ${emptyCats.length}건 (카테고리는 있으나 인기상품 데이터가 없음):\n` +
         emptyCats.slice(0, 10).join('\n');
       if (emptyCats.length > 10) summary += `\n...외 ${emptyCats.length - 10}건`;
     }
     if (failures.length) {
-      summary += `\n\n실패 ${failures.length}건:\n` + failures.slice(0, 12).join('\n');
+      summary += `\n\n수집 실패 ${failures.length}건:\n` + failures.slice(0, 12).join('\n');
       if (failures.length > 12) summary += `\n...외 ${failures.length - 12}건`;
+    }
+    if (pipelineFails.length) {
+      summary += `\n\n상세보강/업로드 실패 ${pipelineFails.length}건:\n` + pipelineFails.slice(0, 12).join('\n');
+      if (pipelineFails.length > 12) summary += `\n...외 ${pipelineFails.length - 12}건`;
     }
     setStatus(summary, collectedRows.length === 0);
 
     if (collectedRows.length > 0) downloadBtn.style.display = 'block';
+
+    const detailCount = Object.keys(detailsMap).length;
+    if (detailCount > 0) detailDownloadBtn.style.display = 'block';
+    if (canDetail) {
+      const topN = parseInt(detailTopNEl.value, 10) || 0;
+      const perOption = detailPerOptionEl.checked;
+      detailIdsEl.value = uniqueProductIdsFromRows(topN, perOption).join('\n');
+    }
   } catch (err) {
     setStatus('오류: ' + err.message, true);
     if (collectedRows.length > 0) {
@@ -2209,113 +2342,15 @@ async function runCategoryCollection() {
 }
 
 
-/* ===================== 통합 실행 ===================== */
+/* ===================== 통합 실행 =====================
+   2단계(상세 보강)를 켜두면 카테고리 하나가 끝날 때마다 그 안에서 곧바로
+   상세수집 → 요금표 확인 → DB 업로드까지 끝낸다(runCategoryCollection 내부).
+   그래서 여기서는 그냥 실행하고 결과를 보여주기만 하면 된다. */
 startBtn.addEventListener('click', async () => {
   const withDetail = detailEnabledEl.checked;
-
-  // 1단계: 카테고리별 상품 수집
-  const r1 = await runCategoryCollection();
+  const r1 = await runCategoryCollection(withDetail);
   if (!r1 || !r1.ok) return;
-
-  if (!withDetail) {
-    downloadBtn.style.display = collectedRows.length > 0 ? 'block' : 'none';
-    return;
-  }
-
-  if (r1.stopped) {
-    setStatus(statusEl.textContent + '\n\n중지되어 상세 보강은 실행하지 않았습니다.');
-    return;
-  }
-
-  if (collectedRows.length === 0) {
-    setStatus(statusEl.textContent + '\n\n수집된 상품이 없어 상세 보강을 건너뜁니다.');
-    return;
-  }
-
-  // 2단계 사전 점검: 소비자 탭 확인
-  try {
-    await getConsumerTab();
-  } catch (e) {
-    setStatus(
-      `1단계 완료: 상품 ${collectedRows.length}행 수집\n\n` +
-      `❌ 2단계를 실행할 수 없습니다.\n${e.message}\n\n` +
-      `www.coupang.com 탭을 하나 열어둔 뒤,\n` +
-      `"상세 보강 단독 실행"에서 이어서 진행하세요.\n` +
-      `1단계 데이터는 저장되어 있습니다.`,
-      true
-    );
-    downloadBtn.style.display = 'block';
-    return;
-  }
-
-  // 2단계: 상세 보강 대상 만들기
-  const topN = parseInt(detailTopNEl.value, 10) || 0;
-  const perOption = detailPerOptionEl.checked;
-  const idLines = uniqueProductIdsFromRows(topN, perOption);
-  detailIdsEl.value = idLines.join('\n');
-
-  if (idLines.length === 0) {
-    setStatus(
-      `1단계 완료: 상품 ${collectedRows.length}행 수집\n\n` +
-      `❌ 상세 보강 대상이 0건입니다.\n` +
-      `수집 옵션의 "사전 필터"가 너무 좁게 설정되었는지 확인하세요.\n` +
-      `(모두 0이면 제한 없음)`,
-      true
-    );
-    downloadBtn.style.display = 'block';
-    return;
-  }
-
-  // 이미 받아둔 데이터가 몇 건인지 확인 (건너뛰기 대상)
-  const already = idLines.filter((line) => {
-    const p = line.split(',');
-    return !!detailsMap[detailKey(p[0], p[1], perOption)];
-  }).length;
-
-  setStatus(
-    `1단계 완료: 상품 ${collectedRows.length}행 수집\n\n` +
-    `2단계 시작: 판매량·배송유형 보강 대상 ${idLines.length}건\n` +
-    `(${perOption ? '옵션 단위' : '상품 단위'})` +
-    (already > 0
-      ? `\n\n⚠ 이 중 ${already}건은 이미 저장되어 있어 건너뜁니다.\n` +
-        `   다시 받으려면 진단 → "저장된 상세 데이터 초기화"를 먼저 실행하세요.`
-      : '')
-  );
-
-  await new Promise((r) => setTimeout(r, 1200));
-
-  const r2 = await runDetailCollection(idLines);
-
-  /* 상세수집 직후 해당 카테고리들의 입출고비 요금표를 자동으로 받는다.
-     이미 DB에 있는 카테고리는 collectFeeDataForCategories가 알아서 건너뛴다. */
-  const feeKanIds = Array.from(new Set(
-    collectedRows.map((r) => r.categoryId).filter((v) => v !== undefined && v !== null && v !== '')
-  )).map(String);
-  let feeSummary = null;
-  if (feeKanIds.length) {
-    setStatus('입출고비 요금표 확인 중...');
-    try {
-      feeSummary = await collectFeeDataForCategories(feeKanIds, { statusFn: setStatus });
-    } catch (e) { /* 요금표 수집 실패해도 전체 흐름은 계속 진행 */ }
-  }
-
-  const detailCount = Object.keys(detailsMap).length;
-  setStatus(
-    `전체 완료.\n\n` +
-    `상품 데이터 ${collectedRows.length}행\n` +
-    `상세 보강 ${detailCount}건` +
-    (r2 && r2.stopped ? ' (중지됨)' : '') +
-    (feeSummary
-      ? `\n입출고비 요금표: 신규 ${feeSummary.tableOk - feeSummary.tableSkipped}건 · DB에 이미 있음 ${feeSummary.tableSkipped}건` +
-        (feeSummary.tableFail ? ` · 실패 ${feeSummary.tableFail}건` : '') +
-        ` · 전용할인가 ${feeSummary.lowTableOk}건`
-      : '') +
-    `\n\n"CSV 다운로드"를 누르면 판매량·배송유형까지 합쳐진 파일을 받습니다.\n` +
-    `"수집 데이터 업로드"를 누르면 요금표도 함께 올라갑니다.`
-  );
-
-  if (collectedRows.length > 0) downloadBtn.style.display = 'block';
-  if (detailCount > 0) detailDownloadBtn.style.display = 'block';
+  downloadBtn.style.display = collectedRows.length > 0 ? 'block' : 'none';
 });
 
 detailStartBtn.addEventListener('click', async () => {
@@ -2855,10 +2890,11 @@ function detailKey(pid, iid, perOption) {
   return perOption && iid ? String(pid) + '_' + String(iid) : String(pid);
 }
 
-function uniqueProductIdsFromRows(topN, perOption) {
+function uniqueProductIdsFromRows(topN, perOption, sourceRows) {
   // 사전 필터를 먼저 적용해 페이지를 받을 대상 자체를 줄입니다.
+  // sourceRows를 넘기면(카테고리 하나씩 처리할 때) 전체 collectedRows 대신 그 부분집합만 쓴다.
   const pf = readPreFilter();
-  const filtered = collectedRows.filter((r) => passesPreFilter(r, pf));
+  const filtered = (sourceRows || collectedRows).filter((r) => passesPreFilter(r, pf));
 
   const byCat = {};
   filtered.forEach((r) => {
@@ -4020,6 +4056,8 @@ sbSaveBtn.addEventListener('click', async () => {
     }
 
     sbSetStatus(`✅ 로그인 성공 · 관리자 확인됨 (${me.email})`);
+    loginExpiredNotified = false;
+    startKeepAlive();
   } catch (err) {
     sbSetStatus('오류: ' + err.message, true);
   }
@@ -4318,75 +4356,27 @@ async function processJob(job) {
     await sbMarkCategoryCollected(job.category_code, 'list');
     sbSetStatus(`[대기열] ${label} — 상품 ${collectedRows.length}건 수집 · 상세 보강 시작...`);
 
-    /* 2단계: 상세 보강 (job_type이 list면 건너뜀) */
-    let detailDone = false;
-    if (job.job_type !== 'list') {
-      const topN = parseInt(detailTopNEl.value, 10) || 0;
-      const perOption = detailPerOptionEl.checked;
-      const idLines = uniqueProductIdsFromRows(topN, perOption);
-
-      if (idLines.length > 0) {
-        try {
-          await getConsumerTab();
-          const r2 = await runDetailCollection(idLines);
-          detailDone = !!(r2 && r2.ok && !r2.stopped);
-        } catch (e) {
-          sbSetStatus(`[대기열] ${label} — 상세 보강 생략 (${e.message})`);
-        }
-      }
-    }
-
-    /* 2.5단계: 입출고비 요금표 자동 수집 (이미 DB에 있는 카테고리는 건너뜀) */
-    if (detailDone) {
-      const feeKanIds = Array.from(new Set(
-        collectedRows.map((r) => r.categoryId).filter((v) => v !== undefined && v !== null && v !== '')
-      )).map(String);
-      if (feeKanIds.length) {
-        sbSetStatus(`[대기열] ${label} — 입출고비 요금표 확인 중...`);
-        try {
-          await collectFeeDataForCategories(feeKanIds, { statusFn: sbSetStatus, tab });
-        } catch (e) {
-          sbSetStatus(`[대기열] ${label} — 요금표 수집 생략 (${e.message})`);
-        }
-      }
-    }
-
-    /* 3단계: DB 업로드 */
-    sbSetStatus(`[대기열] ${label} — 데이터베이스 업로드 중...`);
-    const up = buildSupabasePayload(collectedRows, detailsMap, catUnitMap);
-
-    for (const st of [
-      { t: 'categories',    r: up.categories, c: 'category_code' },
-      { t: 'products',      r: up.products,   c: 'product_id' },
-      { t: 'product_items', r: up.items,      c: 'item_id' }
-    ]) {
-      for (const part of chunk(st.r, 500)) await sbUpsert(st.t, part, st.c);
-    }
-    for (const part of chunk(up.history, 500)) {
-      try { await sbInsertIgnore('item_history', part); } catch (e) { /* 중복 무시 */ }
-    }
-
-    /* 요금표 업로드 (신규로 수집된 것만 남아있음 — 이미 DB에 있던 건 위에서 건너뜀) */
-    {
-      const feeRows = buildFeeRows(feeTables, false).concat(buildFeeRows(feeTablesLow, true));
-      for (const part of chunk(feeRows, 500)) {
-        await sbUpsert('fulfillment_fees', part, 'unit1,unit2,capacity_type,min_price,is_low_asp');
-      }
-    }
-
-    if (detailDone) await sbMarkCategoryCollected(job.category_code, 'detail');
+    /* 2단계(상세)→요금표 자동수집→DB 업로드까지 수동 "카테고리 수집"과 같은 함수를 공유한다.
+       job_type이 'list'면 상세 보강 없이 목록만 업로드한다. */
+    const r = await finishCategoryPipeline(job.category_code, collectedRows, {
+      statusFn: sbSetStatus,
+      label: `[대기열] ${label}`,
+      withDetail: job.job_type !== 'list',
+      tab
+    });
 
     await sbUpdateJob(job.id, {
       status: 'done',
       finished_at: new Date().toISOString(),
-      result_count: up.items.length,
-      worker_note: detailDone ? '전체 완료' : '목록만 완료'
+      result_count: r.itemCount != null ? r.itemCount : collectedRows.length,
+      worker_note: r.detailDone ? '전체 완료' : '목록만 완료'
     });
 
     sbSetStatus(
       `✅ [대기열] ${label} 완료\n` +
-      `  상품 ${up.products.length}건 · 옵션 ${up.items.length}건` +
-      (detailDone ? ' · 상세 보강 완료' : ' · 목록만')
+      `  상품 ${r.productCount != null ? r.productCount : '?'}건 · 옵션 ${r.itemCount != null ? r.itemCount : collectedRows.length}건` +
+      (r.detailDone ? ' · 상세 보강 완료' : ' · 목록만') +
+      (r.uploaded ? '' : ' · ⚠ 업로드 실패')
     );
   } catch (err) {
     try {
@@ -4402,6 +4392,54 @@ async function processJob(job) {
   }
 }
 
+/* ===================== 접속 유지 =====================
+   별도 창을 오래 열어둬도 로그인이 끊기지 않도록 주기적으로 토큰을 미리 갱신한다.
+   비밀번호는 저장하지 않으므로(보안상 의도적으로), 리프레시 토큰 자체가 만료되는
+   드문 경우엔 자동 복구가 불가능하다 — 그 경우만 재시도 3번 후 알림을 띄운다. */
+const NOTIF_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAAOklEQVR42u3OQQ0AAAgEoCtjMuNbwhbOBxsBSPW8EiEhISEhISEhISEhISEhISEhISEhISEhISGhOwsQ7wvEcqrbYwAAAABJRU5ErkJggg==';
+const KEEPALIVE_INTERVAL_MS = 20 * 60 * 1000; // 20분마다 미리 갱신
+let keepAliveTimer = null;
+let loginExpiredNotified = false;
+
+function notifyLoginExpired(detail) {
+  try {
+    if (chrome.notifications && chrome.notifications.create) {
+      chrome.notifications.create('cwc-login-expired-' + Date.now(), {
+        type: 'basic',
+        iconUrl: NOTIF_ICON,
+        title: '쿠팡 소싱 — 로그인이 끊겼습니다',
+        message: '자동 재연결에 3번 실패했습니다. 확장프로그램을 열어 비밀번호로 다시 로그인해주세요.',
+        priority: 2
+      });
+    }
+  } catch (e) { /* 알림이 안 떠도 앱 동작엔 지장 없어야 함 */ }
+  sbSetStatus('⚠ 로그인이 끊겼습니다. 비밀번호를 입력해 다시 로그인하세요. (' + detail + ')', true);
+}
+
+/* 리프레시를 최대 3번(즉시 → 3초 후 → 8초 후) 시도하고, 그래도 안 되면 알린다. */
+async function sbKeepAliveTick() {
+  if (!sbConfigured() || !SB.refreshToken) return;
+  const delays = [0, 3000, 8000];
+  let lastErr = null;
+  for (const d of delays) {
+    if (d) await new Promise((r) => setTimeout(r, d));
+    try {
+      await sbRefresh();
+      loginExpiredNotified = false;
+      return;
+    } catch (e) { lastErr = e; }
+  }
+  if (!loginExpiredNotified) {
+    loginExpiredNotified = true;
+    notifyLoginExpired(lastErr ? lastErr.message : '알 수 없는 오류');
+  }
+}
+
+function startKeepAlive() {
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(sbKeepAliveTick, KEEPALIVE_INTERVAL_MS);
+}
+
 /* ===================== 초기화 ===================== */
 (function init() {
   const isWindowed = new URLSearchParams(location.search).get('windowed') === '1';
@@ -4414,15 +4452,22 @@ async function processJob(job) {
   }
   loadProgress();
 
-  // Supabase 설정 복원
-  sbLoadConfig().then(() => {
+  // Supabase 설정 복원 — 로그인이 만료돼 있어도 리프레시 토큰이 있으면 바로 재연결을 시도한다
+  sbLoadConfig().then(async () => {
     if (sbUrlEl) sbUrlEl.value = SB.url;
     if (sbKeyEl) sbKeyEl.value = SB.key;
     if (sbEmailEl) sbEmailEl.value = SB.email;
-    if (sbConfigured()) {
-      sbSetStatus(sbLoggedIn()
-        ? `설정됨 · 로그인 상태 (${SB.email})`
-        : '설정됨 · 로그인이 만료되었습니다. 비밀번호를 입력해 다시 로그인하세요.');
+    if (!sbConfigured()) return;
+
+    if (!sbLoggedIn() && SB.refreshToken) {
+      sbSetStatus('설정됨 · 재연결 중...');
+      try { await sbRefresh(); } catch (e) { /* 아래에서 상태 표시 */ }
     }
+
+    sbSetStatus(sbLoggedIn()
+      ? `설정됨 · 로그인 상태 (${SB.email})`
+      : '설정됨 · 로그인이 만료되었습니다. 비밀번호를 입력해 다시 로그인하세요.');
+
+    startKeepAlive();
   });
 })();
