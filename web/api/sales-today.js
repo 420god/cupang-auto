@@ -90,6 +90,7 @@ module.exports = async function handler(req, res) {
 
   let nextToken = '';
   let orders = [];
+  let debugFirstPage = null; // 임시 진단용 — 데이터가 0건일 때 원인 파악되면 제거할 것
 
   try {
     for (let page = 0; page < MAX_PAGES; page++) {
@@ -104,10 +105,15 @@ module.exports = async function handler(req, res) {
       let body = null;
       try { body = JSON.parse(rawText); } catch (e) { /* JSON이 아닌 응답(WAF 차단 등) — 아래서 원문 그대로 노출 */ }
 
+      if (page === 0) {
+        debugFirstPage = { requestUrl: `${HOST}${path}?${query}`, rawText: rawText.slice(0, 1500) };
+      }
+
       if (!upstream.ok) {
         const detail = (body && (body.message || body.msg)) || rawText.slice(0, 300) || '(응답 본문 없음)';
         res.status(502).json({
-          error: `쿠팡 API 오류 (HTTP ${upstream.status}): ${detail}`
+          error: `쿠팡 API 오류 (HTTP ${upstream.status}): ${detail}`,
+          debug: debugFirstPage
         });
         return;
       }
@@ -148,6 +154,7 @@ module.exports = async function handler(req, res) {
     totalQuantity,
     totalRevenue,
     orderCount: orders.length,
+    debug: orders.length === 0 ? debugFirstPage : null,
     items: Object.values(itemMap)
   });
 };

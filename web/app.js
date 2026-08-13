@@ -1268,6 +1268,11 @@ async function loadSales() {
       $('#statMarginNote').textContent = '';
       $('#salesStats').classList.remove('hidden');
       $('#salesEmpty').classList.remove('hidden');
+      if (data.debug) {
+        $('#salesMsg').innerHTML = `<b>진단용 원본 응답</b> (요청: ${esc(data.debug.requestUrl)})<br>` +
+          `<pre style="white-space:pre-wrap;word-break:break-all;margin:6px 0 0">${esc(data.debug.rawText)}</pre>`;
+        $('#salesMsg').classList.remove('hidden');
+      }
       return;
     }
 
