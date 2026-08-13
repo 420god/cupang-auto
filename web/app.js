@@ -283,6 +283,13 @@ function feeFor(catCode, size, price) {
   return pickFeeTier(tiers, price).final_amount;
 }
 
+/* 카테고리별 실제 수수료율(db/migrations/006, WING 수수료안내 페이지 기반)이 있으면 그걸 쓰고,
+   없는 카테고리(표에 없거나 매칭 안 된 대분류)는 기존처럼 전역 가정치(settings.commission)로 폴백. */
+function commissionFor(catCode) {
+  const u = state.catUnits[catCode];
+  return (u && u.commission != null) ? u.commission : settings.commission;
+}
+
 function calcMargin(o) {
   const price = num(o.price);
   if (price === null || price <= 0) return null;
@@ -428,12 +435,12 @@ async function loadFeeTables() {
    full_path는 정렬에만 쓰이고 화면에는 안 쓰므로 select 목록에서 뺐다(전송량 감소). */
 async function loadCategoryOptions() {
   try {
-    const rows = await apiAll('categories?select=category_code,name,root_name,unit1,unit2&order=full_path');
+    const rows = await apiAll('categories?select=category_code,name,root_name,unit1,unit2,commission_rate&order=full_path');
     const roots = new Set();
     const opts = new Array(rows ? rows.length : 0);
     (rows || []).forEach((c, i) => {
       if (c.root_name) roots.add(c.root_name);
-      state.catUnits[c.category_code] = { unit1: c.unit1, unit2: c.unit2 };
+      state.catUnits[c.category_code] = { unit1: c.unit1, unit2: c.unit2, commission: c.commission_rate };
       opts[i] = `<option value="${esc(c.category_code)}">${esc(c.name || c.category_code)}</option>`;
     });
     $('#fCategory').insertAdjacentHTML('beforeend', opts.join(''));
@@ -608,7 +615,7 @@ async function loadRowMargins(rows) {
         const size = u.size_type || settings.size;
         const fee = feeFor(p.category_code, size, price);
         const c = calcMargin({
-          price, commission: settings.commission, fulfillment: fee,
+          price, commission: commissionFor(p.category_code), fulfillment: fee,
           costCny: u.cost_cny, rate: u.exchange_rate,
           outbound: u.outbound_fee, work: u.work_fee
         });
@@ -689,7 +696,7 @@ function renderOptions(items, pid, catCode) {
     const price = num(u.want_price) ?? num(it.current_price);
     const fee = feeFor(catCode, size, price);
     const c = calcMargin({
-      price, commission: settings.commission, fulfillment: fee,
+      price, commission: commissionFor(catCode), fulfillment: fee,
       costCny: u.cost_cny, rate: u.exchange_rate,
       outbound: u.outbound_fee, work: u.work_fee
     });
@@ -806,7 +813,7 @@ function recalcRow(tr, save) {
   const fee = feeFor(cat, size, basePrice);
 
   const c = calcMargin({
-    price: basePrice, commission: settings.commission, fulfillment: fee,
+    price: basePrice, commission: commissionFor(cat), fulfillment: fee,
     costCny: cost, rate: cur.exchange_rate ?? settings.rate,
     outbound: cur.outbound_fee, work: cur.work_fee
   });
@@ -1332,7 +1339,7 @@ async function renderSales(items) {
     const fee = catCode ? feeFor(catCode, size, avgPrice) : null;
 
     const c = calcMargin({
-      price: avgPrice, commission: settings.commission, fulfillment: fee,
+      price: avgPrice, commission: commissionFor(catCode), fulfillment: fee,
       costCny: u.cost_cny, rate: u.exchange_rate,
       outbound: u.outbound_fee, work: u.work_fee
     });
