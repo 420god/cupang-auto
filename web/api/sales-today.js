@@ -72,11 +72,14 @@ module.exports = async function handler(req, res) {
       const upstream = await fetch(`${HOST}${path}?${query}`, {
         headers: { Authorization: header, 'Content-Type': 'application/json;charset=UTF-8' }
       });
-      const body = await upstream.json().catch(() => null);
+      const rawText = await upstream.text();
+      let body = null;
+      try { body = JSON.parse(rawText); } catch (e) { /* JSON이 아닌 응답(WAF 차단 등) — 아래서 원문 그대로 노출 */ }
 
       if (!upstream.ok) {
+        const detail = (body && (body.message || body.msg)) || rawText.slice(0, 300) || '(응답 본문 없음)';
         res.status(502).json({
-          error: `쿠팡 API 오류 (HTTP ${upstream.status}): ${(body && (body.message || body.msg)) || '알 수 없는 오류'}`
+          error: `쿠팡 API 오류 (HTTP ${upstream.status}): ${detail}`
         });
         return;
       }
