@@ -42,6 +42,13 @@ function todayKst() {
   return `${get('year')}${get('month')}${get('day')}`;
 }
 
+/* ?date=YYYY-MM-DD(HTML date input 형식) → yyyymmdd. 형식이 안 맞거나 없으면 오늘(KST). */
+function resolveDate(query) {
+  const raw = query && query.date;
+  if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw.replace(/-/g, '');
+  return todayKst();
+}
+
 module.exports = async function handler(req, res) {
   const { COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY, COUPANG_VENDOR_ID, PROXY_URL } = process.env;
   if (!COUPANG_ACCESS_KEY || !COUPANG_SECRET_KEY || !COUPANG_VENDOR_ID) {
@@ -57,7 +64,7 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const date = todayKst();
+  const date = resolveDate(req.query);
   const path = `/v2/providers/rg_open_api/apis/api/v1/vendors/${COUPANG_VENDOR_ID}/rg/orders`;
 
   let nextToken = '';

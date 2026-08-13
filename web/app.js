@@ -1221,6 +1221,9 @@ $('#queueRefresh').onclick = loadQueue;
    조인해 item_id를 찾고, 기존 feeFor()+calcMargin()으로 수수료·입출고비·마진을 추정한다.
    쿠팡이 당일 확정 수수료·정산액을 API로 안 주기 때문에 전부 추정치다(docs/api-notes.md 4-4). */
 async function loadSales() {
+  const dateEl = $('#salesDate');
+  if (!dateEl.value) dateEl.value = kstDateStr(new Date());
+
   $('#salesMsg').classList.add('hidden');
   $('#salesStats').classList.add('hidden');
   $('#salesEmpty').classList.add('hidden');
@@ -1228,7 +1231,7 @@ async function loadSales() {
   $('#salesLoader').classList.remove('hidden');
 
   try {
-    const res = await fetch('/api/sales-today');
+    const res = await fetch('/api/sales-today?date=' + encodeURIComponent(dateEl.value));
     const text = await res.text();
     let data;
     try { data = JSON.parse(text); }
