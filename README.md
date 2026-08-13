@@ -9,42 +9,46 @@
 하위 폴더(`extension/`, `web/`, `db/`)에도 각각 `CLAUDE.md`가 있어서,
 그 폴더 안에서 작업할 때 관련 맥락을 추가로 읽는다.
 
-**작업 시작 전에 항상 다음을 확인할 것** (CLAUDE.md에도 적혀 있음):
-1. `db/migrations/`의 001~003이 실제로 Supabase에 실행됐는지
+**작업 시작 전에 항상 다음을 확인할 것** (`CLAUDE.md`의 "지금 상태"가 최신 기준):
+1. `db/migrations/`가 전부 실제로 Supabase에 실행됐는지 (현재 001~008 — 몇 번까지 확인됐는지는 `CLAUDE.md` 참조)
 2. `extension/`이 최신 버전으로 배포됐는지 (chrome://extensions에서 확인)
-3. `web/`이 실제로 배포·접속 가능한지
+3. `web/`이 실제로 배포·접속 가능한지 (Vercel, `sourcing-web2.vercel.app`)
+4. 판매현황 탭을 쓴다면 `scripts/rocket-growth-sync.js`가 GCP VPS에서 cron으로 정상 도는지
 
 ## 폴더 구조
 
 ```
 extension/   크롬 확장프로그램 (Manifest V3, 빌드 없음)
-web/         웹사이트 (정적 HTML/CSS/JS, 빌드 없음)
+web/         웹사이트 (정적 HTML/CSS/JS, 빌드 없음) + api/(Vercel 서버리스, 현재 미사용)
 db/          Supabase 스키마 (PostgreSQL)
   migrations/  순서대로 실행. 지난 파일 수정 금지
 docs/        코드에 없는 맥락 (API 함정, 의사결정, 트러블슈팅)
-scripts/     검증 스크립트
+scripts/     검증 스크립트 + rocket-growth-sync.js(GCP VPS에서 cron으로 도는 판매현황 동기화)
 ```
 
 ## 처음 설정하는 경우
 
 ```bash
 # 1. DB
-#    Supabase 프로젝트 생성 → SQL Editor에서
-#    db/migrations/001_init.sql → 002 → 003 순서로 실행
+#    Supabase 프로젝트 생성 → SQL Editor에서 db/migrations/*.sql을 번호 순서대로 실행
 
 # 2. 확장프로그램
 #    chrome://extensions → 개발자 모드 → "압축 해제된 확장 프로그램 로드" → extension/ 폴더 선택
 
 # 3. 웹사이트
-#    web/ 폴더를 Vercel 또는 Netlify에 배포 (빌드 명령 없음, 정적 파일 그대로)
+#    web/ 폴더를 Vercel에 배포 (빌드 명령 없음, 정적 파일 그대로)
 
-# 4. 검증
+# 4. (판매현황 탭을 쓰려면) GCP VPS 등 고정 IP 서버 하나에
+#    scripts/rocket-growth-sync.js를 npm install 후 cron 등록 — 이유: docs/decisions.md 2026-08-13 항목
+
+# 5. 검증
 bash scripts/check_all.sh
 ```
 
 ## 기술 스택
 
-Vanilla JavaScript만 사용. 프레임워크·번들러·npm 패키지 없음 — 의도적 선택.
+프론트엔드(`web/`, `extension/`)는 Vanilla JavaScript만 사용, 프레임워크·번들러·npm 패키지 없음 — 의도적 선택.
+`web/api/`(서버리스, 현재 미사용)와 `scripts/`(GCP VPS에서 도는 독립 스크립트)는 이 원칙과 무관한 서버사이드 코드라 npm 의존성(`undici`, `dotenv`)을 쓴다.
 DB는 Supabase(PostgreSQL) + RLS. 자세한 이유는 `docs/decisions.md`.
 
 ## 문서 지도

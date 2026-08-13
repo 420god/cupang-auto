@@ -24,6 +24,10 @@
 | 16 | 웹 카테고리가 1개만 | 상품을 수집한 카테고리만 DB에 들어감 | "카테고리 전체 업로드" 버튼 추가 |
 | 17 | 카테고리 삭제 실패 가능성 | `products.category_code` FK에 on delete 규칙 없음 | v3에서 `on delete cascade` 재생성 |
 | 18 | 뷰가 없는 테이블 참조(자체 발견) | `v_category_status`가 `user_category_favorites`보다 먼저 정의됨 | 정의 순서 조정 |
+| 19 | 카테고리별 수수료율 매핑했는데 "뷰티"도 수수료 정보 없음으로 뜸 | `categories.root_name`이 마이그레이션 002에서 **한 번만 백필**되고 자동 유지가 안 됨 — 그 이후 새로 수집된 카테고리는 `full_path`는 정상인데 `root_name`만 null로 남음(8,156개 중 2개, 하지만 이후 계속 늘어날 수 있는 구조적 문제) | `db/migrations/008`: `full_path` insert/update 시 `root_name`을 자동 재계산하는 트리거 추가(`delivery_badges`와 같은 패턴) + 기존 누락분 백필 |
+| 20 | 소싱 목록을 페이지 열자마자 보면 마진이 "수수료 정보 없음"으로 뜨고 다시 안 고쳐짐 | `state.readyForMargins`가 `loadCategoryOptions()`를 안 기다림 — 카테고리별 수수료율이 `state.catUnits`에서 오게 되면서 이 경쟁 상태가 처음으로 드러남(예전엔 입출고비 조회만 이걸 썼고 실패해도 "요금표 없음"으로만 보였음) | `enterApp()`의 `state.readyForMargins = Promise.all([...])`에 `loadCategoryOptions()` 추가 |
+| 21 | 옵션 펼치기도 20과 동일 증상 | `loadOptions()`도 `state.readyForMargins`를 안 기다림 | 네트워크 요청과 `state.readyForMargins`를 `Promise.all`로 같이 기다리도록 수정 |
+| 22 | GitHub엔 푸시됐는데 Vercel 배포 목록에 그 커밋이 아예 안 뜸(빌드 실패도 아님) | GitHub→Vercel 웹훅 유실로 추정(재현 조건 불명) | `git commit --allow-empty` + push로 새 웹훅 발생시켜서 재배포 트리거 |
 
 ---
 
@@ -31,26 +35,20 @@
 
 ### 반드시 처리해야 할 것
 
-**1. 판매수수료 데이터 없음**
-- `categories.commission_rate`가 전부 null, 웹은 고정 **10.8%** 로 계산 중
-- 사용자가 수수료 표 스크린샷 4장 제공했으나 **API가 없어 화면 파싱 필요**
-- **카테고리 이름 체계가 다름**: 수집은 `가구/홈데코`, 수수료표는 `가구/홈인테리어` → 대분류 매핑표를 수동으로 만들어야 함(20개 남짓)
-- 폴백 순서: 대+중+소 완전일치 → 대+중(소분류가 `-`) → 대분류 기본수수료 → 미매칭
-- 사용자: "수수료는 일단 남겨두고 나중에 다시 말해줄게"
-
-**2. `item_calc` 테이블이 비어 있음**
+**1. `item_calc` 테이블이 비어 있음**
 스키마만 있고 아무도 안 쓴다. 웹은 클라이언트에서 실시간 계산만 하고 `user_items`에만 저장.
 → **마진율 정렬·필터가 실제로 동작하지 않는다.** `v_product_list.best_margin_rate`도 항상 null.
 
-**3. 웹 필터 일부 미동작**
-- 배송유형: `products`에 해당 컬럼 없음(옵션 단위라서) → 쿼리에 미반영
-- 마진율: 위 2번 때문
-
-**4. 카테고리 통계 미갱신**
+**2. 카테고리 통계 미갱신**
 `product_count`, `item_count`가 0. `refresh_all_category_stats()`를 만들었으나 호출하는 곳이 없다.
 
-**5. 이미지 CDN 주소 미검증**
+**3. 이미지 CDN 주소 미검증**
 `thumbnail6.coupangcdn.com/thumbnails/remote/{size}x{size}ex/image/{path}` 를 추정으로 넣었다. 확장프로그램에 검증 버튼이 있으나 결과 미확인. **틀리면 확장·웹 양쪽 다 이미지가 안 나온다.**
+
+### 해결됨 (여기 있던 이유만 남김)
+
+- ~~판매수수료 데이터 없음~~ — 이 표에서 예전에 예측했던 그대로 **카테고리 이름 체계가 정말 달랐다**(수집은 `가구/홈데코`, 수수료표는 `가구/홈인테리어` 등 6개 대분류). 2026-08-13 `db/migrations/006~008`로 해결. 자세한 매칭 과정·함정은 `docs/decisions.md` 2026-08-13 항목.
+- ~~웹 배송유형 필터 미동작~~ — `004`로 해결(`products.delivery_badges`).
 
 ### 보류
 - 완전 자동 수집(서버가 쿠팡 로그인) — 보안·차단·2FA

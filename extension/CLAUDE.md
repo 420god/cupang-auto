@@ -49,18 +49,25 @@ sbUpsert() 500행 청크로 업로드
 
 새 필드를 수집에 추가하려면 **`buildSupabasePayload`와 DB 마이그레이션을 함께** 고쳐야 한다. 하나만 고치면 조용히 데이터가 빈다.
 
-## 대기열 처리 (`processJob`)
+## 카테고리 하나 끝까지 처리 (`finishCategoryPipeline`)
+
+2026-08-13부터 **수동 "카테고리 수집"과 대기열(`processJob`)이 이 함수 하나를 공유한다.** 예전엔 전체 카테고리(1단계)를 다 모았다가 마지막에 한 번에 상세보강·업로드했는데, 도중에 실패하면 그때까지 작업이 통째로 안 올라갈 위험이 있었다.
 
 ```
-1. status='running'
-2. 1단계 수집 (pageCollectCategory)
-3. collectedRows를 통째로 교체        ← 주의: 수동 수집 중이던 데이터가 사라진다
-4. saveProgress + sbMarkCategoryCollected('list')
-5. job_type !== 'list'면 2단계 실행 (runDetailCollection)
-6. buildSupabasePayload → upsert
-7. status='done' | 'failed'
+finishCategoryPipeline(catCode, rows, opts)
+  1. (withDetail이면) 상세보강 — runDetailCollection
+  2. (상세보강 성공했으면) 입출고비 요금표 확인 — collectFeeDataForCategories
+  3. buildSupabasePayload → sbUpsert
+  → { detailDone, uploaded, productCount, itemCount }
 ```
-30초마다 폴링(`setInterval`). 감시 중엔 팝업을 닫으면 안 되므로 "별도 창" 모드로만 쓴다.
+**카테고리 하나가 끝날 때마다 그 자리에서 끝까지 처리**하므로, 중간에 중단돼도 이미 처리된 카테고리는 안전하게 저장돼 있다.
+
+- **수동 실행**(`runCategoryCollection`): 카테고리 목록을 순회하면서 하나씩 1단계 수집 직후 바로 `finishCategoryPipeline()` 호출.
+- **대기열**(`processJob`): `status='running'` → 1단계 수집 → `sbMarkCategoryCollected('list')` → `finishCategoryPipeline(catCode, collectedRows, {withDetail: job.job_type !== 'list'})` → `status='done'|'failed'`. 30초마다 폴링(`setInterval`). 감시 중엔 팝업을 닫으면 안 되므로 "별도 창" 모드로만 쓴다.
+
+## Supabase 접속 유지 (`startKeepAlive`)
+
+팝업/별도 창을 오래 열어둬도 로그인이 끊기지 않도록 20분마다 리프레시 토큰을 미리 갱신한다(`sbKeepAliveTick`). 갱신이 3번 연속 실패하면(리프레시 토큰 자체 만료 등, 드묾) 크롬 알림으로 재로그인을 요청한다(`notifyLoginExpired`) — `manifest.json`의 `notifications` 권한이 이걸 위한 것.
 
 ## 자세한 내용
 

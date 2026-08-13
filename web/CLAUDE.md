@@ -2,12 +2,16 @@
 
 ## 구조
 ```
-index.html   로그인 + 4개 페이지(소싱/즐겨찾기/카테고리/대기열) + 설정 모달
+index.html   로그인 + 5개 페이지(소싱/판매현황/즐겨찾기/카테고리/대기열) + 설정 모달
 style.css    CSS 변수 기반 라이트/다크 테마. --bg, --surface 등
 app.js       전체 로직. 빌드 도구 없음, 그대로 배포
+api/         Vercel 서버리스 함수 자리(현재 sales-today.js 하나, 안 씀 — 아래 참조)
+package.json api/용 npm 의존성(undici) — 프론트엔드는 여전히 완전 무의존
 ```
 
-Vercel/Netlify에 **정적 파일 그대로** 올린다. 프레임워크·번들러 도입하지 말 것 — 사용자가 "복잡한 과정 없이"를 명시적으로 요구했다.
+Vercel에 **정적 파일 그대로** 올린다(플랫폼 확정, `../CLAUDE.md` 참조). 프레임워크·번들러 도입하지 말 것 — 사용자가 "복잡한 과정 없이"를 명시적으로 요구했다. `api/*.js`는 예외 — Vercel이 번들러 없이 그대로 서버리스 함수로 인식하는 기능이라 이 원칙과 안 부딪힌다.
+
+**판매현황 탭은 다른 탭들과 데이터 소스·계산 시점이 완전히 다르다** — 소싱/즐겨찾기/카테고리는 웹이 실시간으로 계산하지만, 판매현황(`loadSales()`/`renderSales()`)은 `rocket_growth_sales_daily` 테이블(GCP VPS가 cron으로 미리 채워둠)을 읽기만 한다. `web/api/sales-today.js`는 그 이전 시도의 잔재로 지금은 아무것도 안 부른다 — 왜 이렇게 됐는지는 `../docs/decisions.md` 2026-08-13 항목.
 
 ## 절대 바꾸지 말 것
 
@@ -21,11 +25,16 @@ Vercel/Netlify에 **정적 파일 그대로** 올린다. 프레임워크·번들
 
 ```javascript
 calcMargin({price, commission, fulfillment, costCny, rate, outbound, work})
-// costCny가 null이면 margin/rate는 null, settlement만 반환됨
-// = "원가 미입력" 상태를 화면에서 구분하는 근거
+// commission이 null이면 통째로 null 반환(계산 자체를 안 함) — "수수료 정보 없음"
+// costCny가 null이면 margin/rate는 null, settlement까지는 반환됨 — "원가 입력 필요"
+// 이 둘은 화면에서 서로 다른 문구로 구분해서 보여준다. 섞어서 하나로 뭉치지 말 것.
 ```
 
+**전역 기본 수수료율은 없다(2026-08-13 이후).** `commission`은 항상 `commissionFor(catCode)`(카테고리별 실제 요율, `state.catUnits[catCode].commission`)로 구해서 넘긴다 — `settings.commission` 같은 전역 폴백은 의도적으로 없앴다. 매칭 안 된 카테고리는 `commissionFor()`가 null을 반환하니, 호출부에서 `calcMargin()`을 부르기 전에 먼저 null 체크하고 "수수료 정보 없음"을 보여줄 것(소싱 옵션표/판매현황 표의 기존 4개 호출부가 이 패턴이다 — 새로 만들 때 그대로 따라할 것).
+
 입출고비는 `feeFor(catCode, size, price)`가 `state.feeCache`(메모리 캐시, `loadFeeTables()`가 앱 시작 시 전체 로드)에서 구간 조회한다. **DB를 매번 조회하지 않는다** — 요금표가 수천 행이라 캐시가 필수.
+
+**`state.readyForMargins`에 새 비동기 로딩을 추가할 때 반드시 챙길 것** — 이 프로미스는 "마진 계산에 필요한 모든 상태가 준비됐다"는 신호다(`enterApp()`에서 `Promise.all([loadSettings(), loadFeeTables(), loadCategoryOptions()])`). 마진 계산이 참조하는 `state`의 어떤 부분이든(예: `state.catUnits`) 새로 채우는 로딩 함수를 추가하면 **여기에도 같이 넣어야 한다** — 안 그러면 "카테고리 로딩이 끝나기 전에 사용자가 너무 빨리 클릭"하는 경쟁 상태가 생기고, 소싱 목록(`loadRowMargins`)과 옵션 펼치기(`loadOptions`) 둘 다 이 프로미스만 기다리고 결과를 **한 번 캐시하면 다시 재계산 안 하므로** 잘못된 "정보 없음" 상태가 영구히 굳어버린다. 실제로 2026-08-13에 `loadCategoryOptions()`가 빠져서 이 버그가 두 군데서 났었다.
 
 ## 알려진 미해결 (건드릴 때 참고)
 

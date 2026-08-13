@@ -15,7 +15,7 @@ migrations/008_root_name_trigger.sql  categories.root_name 자동유지 트리�
 
 **이미 실행된 파일은 절대 수정하지 않는다.** 스키마를 바꿔야 하면 `004_설명.sql`처럼 새 번호로 추가한다. 모든 마이그레이션은 `if not exists`/`drop ... if exists`를 써서 **여러 번 실행해도 안전**하게 만든다 — 이 관례를 유지할 것.
 
-새 세션에서 가장 먼저 확인할 것: **001~003이 실제로 다 실행됐는지.** 안 됐으면 순서대로 실행부터.
+새 세션에서 가장 먼저 확인할 것: **001~007은 실행 확인됨(2026-08-13). 008 실행 여부만 미확인** — 안 됐으면 먼저 실행.
 
 ## 핵심 설계 (코드로는 안 보이는 이유)
 
@@ -31,9 +31,10 @@ migrations/008_root_name_trigger.sql  categories.root_name 자동유지 트리�
 
 **카테고리 삭제 연쇄** — `categories` 삭제 시 `products`(cascade, 003에서 추가) → `product_items`(cascade) → `user_items`/`item_calc`(cascade)까지 자동 삭제된다. `item_history`는 FK가 없어서(고의) 별도 트리거(`cleanup_orphan_history`)로 정리한다.
 
+**`root_name`도 파생 캐시 — 반드시 트리거로 유지할 것** — `delivery_badges`와 같은 패턴. `root_name`은 `full_path`의 첫 세그먼트일 뿐인데, 002에서는 한 번 백필만 하고 트리거를 안 달아서 그 이후 새로 수집된 카테고리는 계속 null로 남는 버그가 있었다(008에서 트리거 추가로 해결, `set_category_root_name()`/`trg_category_root_name`). **앞으로 `full_path`에서 파생되는 컬럼을 또 만들면 처음부터 트리거를 같이 만들 것** — "한 번 백필하고 끝"은 반드시 나중에 또 썩는다.
+
 ## 미해결 (스키마 관점)
 
-- `commission_rate`: 006(실행 완료, 2026-08-13) + 007로 채워졌고 전역 폴백은 완전히 없앴다. 매칭 안 된 카테고리(root_name이 WING 수수료안내 페이지의 15개 대분류에 없는 경우, 예: 이 프로젝트엔 없는 도서/음반/식품)는 여전히 null로 남고, 웹은 그런 카테고리를 "수수료 정보 없음"으로 표시하며 마진 계산을 하지 않는다(`web/app.js`의 `commissionFor()`/`calcMargin()`) — 폴백으로 부정확한 숫자를 보여주지 않기로 한 의도적 설계.
 - `item_calc`가 비어 있다. 웹에서 저장하는 코드 자체가 없어서 — 스키마 문제가 아니라 애플리케이션 로직 미구현.
 - `product_count`/`item_count`는 `refresh_all_category_stats()` 함수는 있지만 아무도 호출 안 함. 트리거로 자동화하거나 수집 후 명시적으로 호출해야 함.
 
