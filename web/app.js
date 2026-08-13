@@ -16,7 +16,6 @@ let settings = {
   rate: 320,
   outbound: 300,
   work: 300,
-  commission: 10.8,
   size: 'MINI'
 };
 
@@ -283,18 +282,20 @@ function feeFor(catCode, size, price) {
   return pickFeeTier(tiers, price).final_amount;
 }
 
-/* 카테고리별 실제 수수료율(db/migrations/006, WING 수수료안내 페이지 기반)이 있으면 그걸 쓰고,
-   없는 카테고리(표에 없거나 매칭 안 된 대분류)는 기존처럼 전역 가정치(settings.commission)로 폴백. */
+/* 카테고리별 실제 수수료율(db/migrations/006, WING 수수료안내 페이지 기반)만 쓴다.
+   매칭 안 된 카테고리(표에 없거나 대분류 이름이 다른 경우)는 null — 전역 가정치로
+   때우지 않기로 확정함(부정확한 값을 조용히 보여주는 것보다 "정보 없음"이 낫다는 판단). */
 function commissionFor(catCode) {
   const u = state.catUnits[catCode];
-  return (u && u.commission != null) ? u.commission : settings.commission;
+  return (u && u.commission != null) ? u.commission : null;
 }
 
 function calcMargin(o) {
   const price = num(o.price);
   if (price === null || price <= 0) return null;
 
-  const rate = num(o.commission) ?? settings.commission;
+  const rate = num(o.commission);
+  if (rate === null) return null; // 수수료율 정보 없음 — 호출부에서 "수수료 정보 없음"으로 표시
   const commission = Math.round(price * rate / 100);
   const fulfillment = num(o.fulfillment) ?? 0;
   const settlement = price - commission - fulfillment;
@@ -384,12 +385,15 @@ async function enterApp() {
 
   /* 상품 목록(resetAndLoad)은 설정·카테고리·즐겨찾기와 무관하게 그릴 수 있으므로
      그것들을 기다리지 않고 바로 시작한다 — 이전엔 순서대로 기다리느라 로딩이 길었다.
-     margin 계산(loadRowMargins)만 settings/feeCache가 필요해서 별도로 대기시킨다. */
-  state.readyForMargins = Promise.all([loadSettings(), loadFeeTables()]);
+     margin 계산(loadRowMargins)만 settings/feeCache/카테고리별 수수료율이 필요해서
+     별도로 대기시킨다. loadCategoryOptions()가 채우는 state.catUnits[].commission을
+     commissionFor()가 쓰기 시작하면서(2026-08-13) 이것도 꼭 여기 포함돼야 한다 —
+     빠지면 첫 페이지가 카테고리 로딩보다 먼저 계산돼서 전부 "수수료 정보 없음"으로
+     굳어버리고 다시 계산되지 않는다(실제로 겪은 버그). */
+  state.readyForMargins = Promise.all([loadSettings(), loadFeeTables(), loadCategoryOptions()]);
   resetAndLoad();
 
   loadFavCategories();
-  loadCategoryOptions();
 
   try {
     const prof = await api('profiles?select=is_admin,prefs');
@@ -412,7 +416,6 @@ async function loadSettings() {
         settings.outbound = r.value.outbound_fee ?? settings.outbound;
         settings.work = r.value.work_fee ?? settings.work;
       }
-      if (r.key === 'fee_defaults') settings.commission = r.value.commission_rate ?? settings.commission;
     });
   } catch (e) { /* 기본값 사용 */ }
 }
@@ -695,15 +698,18 @@ function renderOptions(items, pid, catCode) {
     const size = u.size_type || settings.size;
     const price = num(u.want_price) ?? num(it.current_price);
     const fee = feeFor(catCode, size, price);
-    const c = calcMargin({
-      price, commission: commissionFor(catCode), fulfillment: fee,
+    const commissionRate = commissionFor(catCode);
+    const c = commissionRate != null ? calcMargin({
+      price, commission: commissionRate, fulfillment: fee,
       costCny: u.cost_cny, rate: u.exchange_rate,
       outbound: u.outbound_fee, work: u.work_fee
-    });
+    }) : null;
 
-    const marginTxt = (c && c.margin !== null)
-      ? `<span class="${c.margin >= 0 ? 'pos' : 'neg'}">${c.margin.toLocaleString()}원 · ${c.rate}%</span>`
-      : '<span class="dim">원가 입력 필요</span>';
+    const noCommissionTxt = '<span class="dim">수수료 정보 없음</span>';
+    const marginTxt = commissionRate == null ? noCommissionTxt
+      : (c && c.margin !== null)
+        ? `<span class="${c.margin >= 0 ? 'pos' : 'neg'}">${c.margin.toLocaleString()}원 · ${c.rate}%</span>`
+        : '<span class="dim">원가 입력 필요</span>';
 
     const fav = state.userItems[it.item_id] && state.userItems[it.item_id].is_favorite;
 
@@ -735,8 +741,8 @@ function renderOptions(items, pid, catCode) {
     </select>
   </td>
   <td data-label="입출고비" class="calc-out out-fulfillment">${fee != null ? won(fee) : '<span class="dim">요금표 없음</span>'}</td>
-  <td data-label="수수료" class="calc-out out-commission">${c ? won(c.commission) : '—'}</td>
-  <td data-label="정산" class="calc-out out-settle">${c ? won(c.settlement) : '—'}</td>
+  <td data-label="수수료" class="calc-out out-commission">${commissionRate == null ? noCommissionTxt : (c ? won(c.commission) : '—')}</td>
+  <td data-label="정산" class="calc-out out-settle">${commissionRate == null ? noCommissionTxt : (c ? won(c.settlement) : '—')}</td>
   <td data-label="마진" class="calc-out out-margin">${marginTxt}</td>
   <td data-label="즐겨찾기">
     <button class="star ${fav ? 'on' : ''}" data-iid="${esc(it.item_id)}" data-pid="${esc(pid)}">
@@ -811,19 +817,26 @@ function recalcRow(tr, save) {
   const cur = state.userItems[iid] || {};
   const basePrice = num(want) ?? num(cur._current_price) ?? currentPriceOf(tr);
   const fee = feeFor(cat, size, basePrice);
+  const commissionRate = commissionFor(cat);
 
-  const c = calcMargin({
-    price: basePrice, commission: commissionFor(cat), fulfillment: fee,
+  const c = commissionRate != null ? calcMargin({
+    price: basePrice, commission: commissionRate, fulfillment: fee,
     costCny: cost, rate: cur.exchange_rate ?? settings.rate,
     outbound: cur.outbound_fee, work: cur.work_fee
-  });
+  }) : null;
 
   tr.querySelector('.out-fulfillment').innerHTML = fee != null ? won(fee) : '<span class="dim">요금표 없음</span>';
-  tr.querySelector('.out-commission').textContent = c ? won(c.commission) : '—';
-  tr.querySelector('.out-settle').textContent = c ? won(c.settlement) : '—';
-  tr.querySelector('.out-margin').innerHTML = (c && c.margin !== null)
-    ? `<span class="${c.margin >= 0 ? 'pos' : 'neg'}">${c.margin.toLocaleString()}원 · ${c.rate}%</span>`
-    : '<span class="dim">원가 입력 필요</span>';
+  if (commissionRate == null) {
+    tr.querySelector('.out-commission').innerHTML = '<span class="dim">수수료 정보 없음</span>';
+    tr.querySelector('.out-settle').textContent = '—';
+    tr.querySelector('.out-margin').innerHTML = '<span class="dim">수수료 정보 없음</span>';
+  } else {
+    tr.querySelector('.out-commission').textContent = c ? won(c.commission) : '—';
+    tr.querySelector('.out-settle').textContent = c ? won(c.settlement) : '—';
+    tr.querySelector('.out-margin').innerHTML = (c && c.margin !== null)
+      ? `<span class="${c.margin >= 0 ? 'pos' : 'neg'}">${c.margin.toLocaleString()}원 · ${c.rate}%</span>`
+      : '<span class="dim">원가 입력 필요</span>';
+  }
 
   state.userItems[iid] = Object.assign(cur, {
     cost_cny: cost, want_price: want, size_type: size,
@@ -1323,9 +1336,9 @@ async function renderSales(items) {
   const userItemByItem = {};
   (userItemsRaw || []).forEach((u) => { userItemByItem[u.item_id] = u; });
 
-  await state.readyForMargins; // settings.commission / feeCache 로딩 대기 (enterApp에서 이미 시작됨)
+  await state.readyForMargins; // feeCache 로딩 대기 (enterApp에서 이미 시작됨)
 
-  let totalCommission = 0, totalFulfillment = 0, totalMargin = 0, costedCount = 0;
+  let totalCommission = 0, totalFulfillment = 0, totalMargin = 0, costedCount = 0, noCommissionCount = 0;
 
   const rows = items.map((it) => {
     const link = byVendorItem[it.vendorItemId];
@@ -1337,9 +1350,12 @@ async function renderSales(items) {
     const avgPrice = it.quantity ? it.revenue / it.quantity : 0;
     const size = u.size_type || settings.size;
     const fee = catCode ? feeFor(catCode, size, avgPrice) : null;
+    const commissionRate = commissionFor(catCode);
+
+    if (commissionRate == null) { noCommissionCount++; return { it, noCommission: true }; }
 
     const c = calcMargin({
-      price: avgPrice, commission: commissionFor(catCode), fulfillment: fee,
+      price: avgPrice, commission: commissionRate, fulfillment: fee,
       costCny: u.cost_cny, rate: u.exchange_rate,
       outbound: u.outbound_fee, work: u.work_fee
     });
@@ -1358,11 +1374,28 @@ async function renderSales(items) {
   $('#statCommission').textContent = won(totalCommission);
   $('#statFulfillment').textContent = won(totalFulfillment);
   $('#statMargin').innerHTML = `<span class="${totalMargin >= 0 ? 'pos' : 'neg'}">${totalMargin.toLocaleString()}원</span>`;
-  const uncosted = items.length - costedCount;
-  $('#statMarginNote').textContent = uncosted > 0 ? `원가 미입력 상품 ${uncosted}개는 이익 합계에서 제외됨` : '';
+  const uncosted = items.length - costedCount - noCommissionCount;
+  const notes = [];
+  if (uncosted > 0) notes.push(`원가 미입력 상품 ${uncosted}개`);
+  if (noCommissionCount > 0) notes.push(`수수료 정보 없는 상품 ${noCommissionCount}개`);
+  $('#statMarginNote').textContent = notes.length ? `${notes.join(' · ')}는 이익 합계에서 제외됨` : '';
   $('#salesStats').classList.remove('hidden');
 
-  $('#salesBody').innerHTML = rows.map(({ it, commissionSum, fulfillmentSum, marginSum }) => `
+  $('#salesBody').innerHTML = rows.map((r) => {
+    const { it } = r;
+    if (r.noCommission) {
+      return `
+<tr>
+  <td>${esc(it.productName || '(이름 없음)')}</td>
+  <td class="col-num">${cnt(it.quantity)}</td>
+  <td class="col-num">${won(it.revenue)}</td>
+  <td class="col-num"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num"><span class="dim">수수료 정보 없음</span></td>
+</tr>`;
+    }
+    const { commissionSum, fulfillmentSum, marginSum } = r;
+    return `
 <tr>
   <td>${esc(it.productName || '(이름 없음)')}</td>
   <td class="col-num">${cnt(it.quantity)}</td>
@@ -1374,7 +1407,8 @@ async function renderSales(items) {
       ? `<span class="${marginSum >= 0 ? 'pos' : 'neg'}">${Math.round(marginSum).toLocaleString()}원</span>`
       : '<span class="dim">원가 입력 필요</span>'
   }</td>
-</tr>`).join('');
+</tr>`;
+  }).join('');
 }
 
 $('#salesRefresh').onclick = loadSales;
@@ -1453,7 +1487,6 @@ $('#settingsBtn').onclick = () => {
   $('#setRate').value = settings.rate;
   $('#setOutbound').value = settings.outbound;
   $('#setWork').value = settings.work;
-  $('#setCommission').value = settings.commission;
   $('#setSize').value = settings.size;
   $('#settingsMsg').textContent = '';
   $('#settingsModal').classList.remove('hidden');
@@ -1467,7 +1500,6 @@ $('#settingsSave').onclick = async () => {
   settings.rate = parseFloat($('#setRate').value) || settings.rate;
   settings.outbound = parseInt($('#setOutbound').value, 10) || 0;
   settings.work = parseInt($('#setWork').value, 10) || 0;
-  settings.commission = parseFloat($('#setCommission').value) || settings.commission;
   settings.size = $('#setSize').value;
 
   try {
