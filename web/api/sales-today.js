@@ -1,11 +1,21 @@
 /* Vercel 서버리스 함수 — 쿠팡 로켓그로스 Open API(주문 조회)를 서버에서만 서명·호출한다.
    secretKey는 여기(Vercel 환경변수)에만 존재하고 브라우저로 절대 전달하지 않는다.
-   서명 규격: docs/api-notes.md "4. 로켓그로스 Open API" 참조 (developers.coupang.com 공식 문서 기준). */
+   서명 규격: docs/api-notes.md "4. 로켓그로스 Open API" 참조 (developers.coupang.com 공식 문서 기준).
+
+   쿠팡 Open API는 WING에 등록한 IP에서만 호출을 허용한다(그 외 IP는 403).
+   Vercel 서버리스 함수는 고정 IP가 없으므로, PROXY_URL(고정IP 프록시)을 거쳐서 호출한다.
+   Node 내장 fetch는 undici 기반이고 HTTPS_PROXY 환경변수를 무시하므로,
+   undici의 ProxyAgent를 전역 dispatcher로 지정해야 fetch()가 실제로 프록시를 탄다. */
 
 const crypto = require('crypto');
+const { ProxyAgent, setGlobalDispatcher } = require('undici');
 
 const HOST = 'https://api-gateway.coupang.com';
 const MAX_PAGES = 50; // nextToken 무한루프 방지용 안전장치
+
+if (process.env.PROXY_URL) {
+  setGlobalDispatcher(new ProxyAgent(process.env.PROXY_URL));
+}
 
 function signedDate() {
   const d = new Date(); // GMT 기준, yyMMdd'T'HHmmss'Z'
@@ -33,10 +43,16 @@ function todayKst() {
 }
 
 module.exports = async function handler(req, res) {
-  const { COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY, COUPANG_VENDOR_ID } = process.env;
+  const { COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY, COUPANG_VENDOR_ID, PROXY_URL } = process.env;
   if (!COUPANG_ACCESS_KEY || !COUPANG_SECRET_KEY || !COUPANG_VENDOR_ID) {
     res.status(500).json({
       error: 'Coupang Open API 환경변수가 설정되지 않았습니다 (COUPANG_ACCESS_KEY / COUPANG_SECRET_KEY / COUPANG_VENDOR_ID). Vercel 프로젝트 설정에서 등록 후 재배포하세요.'
+    });
+    return;
+  }
+  if (!PROXY_URL) {
+    res.status(500).json({
+      error: 'PROXY_URL 환경변수가 설정되지 않았습니다. 쿠팡 Open API는 WING에 등록한 고정 IP에서만 호출을 허용하므로, 고정IP 프록시 없이는 항상 403이 납니다.'
     });
     return;
   }
