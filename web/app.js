@@ -1320,6 +1320,41 @@ async function syncSalesViaExtension() {
   return false;
 }
 
+/* 수동 백필(2026-08-15 추가) — 자동 동기화는 항상 "오늘+어제"만 조회한다(위 syncSalesViaExtension,
+   기본값을 넓히지 말라는 규칙은 extension/CLAUDE.md 참조). 그래서 그보다 과거 날짜는
+   rocket_growth_profit_daily(확정 정산)에 애초에 행이 없고, 상단 고정기간 카드(이번 달 등)가
+   그 구간을 카테고리 요율 추정으로 메꾸는데 이 계정처럼 카테고리 매칭이 안 된 상품이 많으면
+   추정치가 사실상 0으로 깔려서 WING 실제 위젯과 크게 어긋난다(2026-08-15, 실사용 중 발견).
+   이 버튼은 하단 조회 기간(salesFrom~salesTo)을 그대로 확장프로그램에 보내 그 범위의
+   WING 확정 정산·반품을 다시 채운다 — background.js의 SYNC_SALES는 원래 임의 범위를
+   받을 수 있고(최대 31일, MAX_DAYS) 자동 동기화 쪽에서만 "오늘+어제"로 좁혀 쓰고 있었을 뿐이라
+   background.js는 손댈 필요 없이 웹에서 넓은 범위로 같은 메시지를 보내기만 하면 된다.
+   하루씩 WING 탭에서 순차 조회라 범위가 넓으면 오래 걸릴 수 있어 타임아웃을 넉넉히 잡는다. */
+async function backfillSales() {
+  const from = $('#salesFrom').value;
+  const to = $('#salesTo').value;
+  if (!from || !to) return;
+
+  const statusEl = $('#salesSyncStatus');
+  const btn = $('#salesBackfillBtn');
+  btn.disabled = true;
+  statusEl.textContent = `${from} ~ ${to} 정산 백필 중… (하루씩 조회라 기간이 넓으면 오래 걸릴 수 있습니다)`;
+  statusEl.classList.remove('hidden');
+
+  const resp = await extensionSendMessage({ type: 'SYNC_SALES', dateFrom: from, dateTo: to }, 180000);
+
+  if (resp.ok) {
+    statusEl.textContent = `백필 완료 (판매 ${resp.rowCount}건, 정산 ${resp.profitRowCount}건)`;
+    setTimeout(() => statusEl.classList.add('hidden'), 5000);
+    await fetchAndRenderSales(from, to);
+  } else if (resp.error === 'no-extension') {
+    statusEl.textContent = '확장프로그램이 연결되지 않았습니다 — 설치·로그인 상태를 확인하세요.';
+  } else {
+    statusEl.textContent = `백필 실패: ${resp.error}`;
+  }
+  btn.disabled = false;
+}
+
 function setSalesRange(daysBack) {
   const to = new Date();
   const from = new Date(to.getTime() - daysBack * 86400000);
@@ -1704,6 +1739,7 @@ function renderSales(items, meta) {
 }
 
 $('#salesRefresh').onclick = loadSales;
+$('#salesBackfillBtn').onclick = backfillSales;
 
 /* ===================== 필터 · 검색 ===================== */
 $('#filterToggle').onclick = () => $('#filterPanel').classList.toggle('hidden');
