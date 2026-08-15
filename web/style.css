@@ -387,6 +387,7 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 .sales-presets { display: flex; gap: 5px; }
 .in-date { width: auto; max-width: 152px; }
 .page-head h3 { margin: 0 0 3px; font-size: 15px; letter-spacing: -.2px; color: var(--text); }
+.sales-sync-status { margin: -6px 0 12px; line-height: 1.6; }
 .sales-detail-head { margin-top: 22px; }
 .sales-sub-head { margin: 0 0 4px; }
 
