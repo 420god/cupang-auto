@@ -61,6 +61,8 @@ categoryId (상품 응답의)  = kanCategoryId (요금 API의)  ← 같은 값, 
 
 **수동 백필(2026-08-15 구현 완료)** — 이 자동 범위보다 과거 날짜(예: 이번 달 1일부터)까지 확정 정산·반품을 채우고 싶을 때 쓴다. `background.js`를 따로 건드릴 필요 없이(`onMessageExternal`의 `SYNC_SALES`가 원래부터 `dateFrom`/`dateTo`를 임의로 받아 최대 `MAX_DAYS`(31일)까지 처리한다 — 자동 동기화 쪽(`web/app.js`의 `syncSalesViaExtension()`)만 "오늘+어제"로 일부러 좁혀 보내고 있었을 뿐), 웹의 판매현황 탭 하단 "정산 백필" 버튼(`web/app.js`의 `backfillSales()`)이 그 자리에서 사용자가 고른 조회 기간(`salesFrom`~`salesTo`)을 그대로 같은 메시지로 보낸다. **왜 필요했는지**: 상단 고정기간 카드(이번 달 등)가 확정 정산 없는 과거 날짜를 카테고리 요율 추정으로 메꾸는데, 상품 카테고리 매칭이 안 된 계정은 그 추정이 사실상 0으로 깔려서 WING 실제 위젯과 크게 어긋나는 게 실사용 중 발견됨(`web/CLAUDE.md` 참조) — 과거 날짜까지 확정값을 실제로 채워 넣는 게 근본적인 해결책이라 이 기능을 만들었다.
 
+**하루 단위 실패는 조용히 건너뛰므로, 실패 목록을 응답에 실어서 화면에 보여준다(2026-08-15 추가)** — `syncSalesForDates()`/`syncProfitForDates()`가 각각 `{rowCount, failed:[{date,error}]}`를 반환하고, `syncSales()`가 이걸 `salesFailed`/`profitFailed`로 묶어 `onMessageExternal` 응답에 그대로 실어 보낸다. 웹의 `backfillSales()`가 `profitFailed`가 있으면 상태 메시지에 실패 날짜·이유를 바로 보여준다(자동 상태 숨김도 생략해서 사용자가 읽을 시간을 준다). **처음엔 `console.warn`으로만 남겨서, 백필해도 특정 날짜가 왜 안 채워지는지 사용자가 개발자도구 없인 알 방법이 없었다** — 실사용 중 "백필해도 계속 카드가 안 맞는다"는 혼란으로 이어져서 고침. 앞으로 이 함수들을 고칠 때 `failed` 배열을 계속 채워서 반환하는 관례를 유지할 것.
+
 **`externally_connectable`이 웹 도메인(`https://sourcing-web2.vercel.app/*`)만 허용한다** — 웹 배포 도메인이 바뀌면 `manifest.json`도 같이 고쳐야 한다. 이 메시지 채널은 그 도메인의 웹페이지 JS만 부를 수 있고, 다른 사이트나 페이지 콘텐츠(관찰된 데이터)에서는 절대 트리거되지 않는다 — 신뢰 경계가 도메인 단위인 것.
 
 ## 데이터 흐름 (기능 추가 시 참고)

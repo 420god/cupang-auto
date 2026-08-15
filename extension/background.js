@@ -149,12 +149,14 @@ function pageFetchProfitStatus(dateStr) {
 
 async function syncSalesForDates(tab, dates) {
   const rows = [];
+  const failed = [];
   for (const dateStr of dates) {
     const r = await execWithRetry(tab.id, pageFetchSoldVendorItems, [dateStr]);
     if (!r || !r.ok) {
       if (r && r.notLoggedIn) {
         throw new Error('WING 로그인이 필요합니다. WING 탭에서 로그인한 뒤 다시 시도하세요.');
       }
+      failed.push({ date: dateStr, error: (r && r.error) || '알 수 없음' });
       continue; // 하루 실패는 건너뛰고 나머지는 계속(전체를 막지 않음)
     }
     r.items.forEach((it) => {
@@ -169,7 +171,7 @@ async function syncSalesForDates(tab, dates) {
     });
   }
   if (rows.length) await sbUpsert('rocket_growth_sales_wing_daily', rows, 'sale_date,vendor_item_id');
-  return { rowCount: rows.length };
+  return { rowCount: rows.length, failed };
 }
 
 function sleep(ms) {
@@ -194,13 +196,16 @@ async function execWithRetry(tabId, func, args) {
 
 async function syncProfitForDates(tab, dates) {
   const rows = [];
+  const failed = [];
   for (const dateStr of dates) {
     const r = await execWithRetry(tab.id, pageFetchProfitStatus, [dateStr]);
     if (!r || !r.ok) {
       if (r && r.notLoggedIn) {
         throw new Error('WING 로그인이 필요합니다. WING 탭에서 로그인한 뒤 다시 시도하세요.');
       }
-      console.warn(`[정산 동기화] ${dateStr} 건너뜀 — 원인: ${(r && r.error) || '알 수 없음'}`);
+      const reason = (r && r.error) || '알 수 없음';
+      console.warn(`[정산 동기화] ${dateStr} 건너뜀 — 원인: ${reason}`);
+      failed.push({ date: dateStr, error: reason });
       continue; // 정산 미확정(D-1 지연 등)일 수 있으니 실패해도 건너뛰고 계속
     }
     const d = r.data;
@@ -221,9 +226,12 @@ async function syncProfitForDates(tab, dates) {
     });
   }
   if (rows.length) await sbUpsert('rocket_growth_profit_daily', rows, 'sale_date');
-  return { rowCount: rows.length };
+  return { rowCount: rows.length, failed };
 }
 
+/* 실패 목록을 응답에 그대로 실어서(2026-08-15 추가) 화면에서 바로 원인을 볼 수 있게 한다 —
+   전에는 console.warn으로만 남아서 사용자가 개발자도구를 열어야만 왜 특정 날짜가
+   안 채워졌는지 알 수 있었다(실사용 중 "백필해도 계속 안 맞는다"는 혼란의 원인이었음). */
 async function syncSales(dateFrom, dateTo) {
   const dates = dateRange(dateFrom, dateTo);
   if (!dates.length) throw new Error('날짜 범위가 올바르지 않습니다.');
@@ -238,14 +246,20 @@ async function syncSales(dateFrom, dateTo) {
 
   // 실패해도(정산 미확정 등) 판매 동기화 결과는 그대로 반환한다.
   let profitRowCount = 0;
+  let profitFailed = [];
   try {
     const profitResult = await syncProfitForDates(tab, dates);
     profitRowCount = profitResult.rowCount;
+    profitFailed = profitResult.failed;
   } catch (e) {
     console.warn('[정산 동기화] 전체 실패, 판매 동기화 결과만 반환:', e && e.message);
+    profitFailed = dates.map((d) => ({ date: d, error: (e && e.message) || '전체 실패' }));
   }
 
-  return { days: dates.length, rowCount: salesResult.rowCount, profitRowCount };
+  return {
+    days: dates.length, rowCount: salesResult.rowCount, profitRowCount,
+    salesFailed: salesResult.failed, profitFailed
+  };
 }
 
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
@@ -254,7 +268,8 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
     try {
       const result = await syncSales(message.dateFrom, message.dateTo);
       sendResponse({
-        ok: true, days: result.days, rowCount: result.rowCount, profitRowCount: result.profitRowCount
+        ok: true, days: result.days, rowCount: result.rowCount, profitRowCount: result.profitRowCount,
+        salesFailed: result.salesFailed, profitFailed: result.profitFailed
       });
     } catch (e) {
       sendResponse({ ok: false, error: (e && e.message) ? e.message : String(e) });

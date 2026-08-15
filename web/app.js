@@ -1344,8 +1344,20 @@ async function backfillSales() {
   const resp = await extensionSendMessage({ type: 'SYNC_SALES', dateFrom: from, dateTo: to }, 180000);
 
   if (resp.ok) {
-    statusEl.textContent = `백필 완료 (판매 ${resp.rowCount}건, 정산 ${resp.profitRowCount}건)`;
-    setTimeout(() => statusEl.classList.add('hidden'), 5000);
+    const profitFailed = resp.profitFailed || [];
+    if (profitFailed.length) {
+      // 실패한 날짜·이유를 화면에 그대로 보여준다 — 전엔 콘솔에만 남아서 "백필해도 계속
+      // 안 맞는다"는 원인을 사용자가 알 방법이 없었다(2026-08-15 실사용 중 겪음).
+      console.warn('[정산 백필] 정산 실패 날짜:', profitFailed);
+      const sample = profitFailed.slice(0, 5).map((f) => `${f.date}(${f.error})`).join(', ');
+      const more = profitFailed.length > 5 ? ` 외 ${profitFailed.length - 5}건` : '';
+      statusEl.textContent =
+        `백필 완료 (판매 ${resp.rowCount}건, 정산 ${resp.profitRowCount}건) — ` +
+        `정산 실패 ${profitFailed.length}일: ${sample}${more}`;
+    } else {
+      statusEl.textContent = `백필 완료 (판매 ${resp.rowCount}건, 정산 ${resp.profitRowCount}건)`;
+      setTimeout(() => statusEl.classList.add('hidden'), 5000);
+    }
     await fetchAndRenderSales(from, to);
   } else if (resp.error === 'no-extension') {
     statusEl.textContent = '확장프로그램이 연결되지 않았습니다 — 설치·로그인 상태를 확인하세요.';
