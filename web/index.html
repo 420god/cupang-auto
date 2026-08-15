@@ -139,8 +139,43 @@
         </div>
 
         <div class="hint-box">
-          수수료·입출고비·이익은 쿠팡이 확정 정산액을 실시간으로 제공하지 않아
-          <b>가정 수수료율(기본 10.8%)과 요금표 기준 추정치</b>입니다. 실제 정산액과 다를 수 있습니다.
+          판매수수료는 카테고리별 실제 요율을 적용합니다. 입출고비·이익은 쿠팡이 확정 정산액을
+          실시간으로 제공하지 않아 <b>요금표 기준 추정치</b>입니다. 실제 정산액과 다를 수 있습니다.
+        </div>
+
+        <div id="salesProfitCard" class="hidden">
+          <p class="muted sm">확정 정산 요약 (WING, 정산 인식 지연으로 최근 1~2일은 비어있을 수 있음)</p>
+          <div class="stat-grid">
+            <div class="stat-card">
+              <div class="stat-label">확정 순매출</div>
+              <div class="stat-value" id="profitNetSales">—</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">확정 수수료</div>
+              <div class="stat-value" id="profitCommission">—</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">확정 입출고비</div>
+              <div class="stat-value" id="profitFulfillment">—</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">확정 쿠폰</div>
+              <div class="stat-value" id="profitCoupon">—</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">확정 광고비</div>
+              <div class="stat-value" id="profitAd">—</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">확정 밀크런</div>
+              <div class="stat-value" id="profitMilkrun">—</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">확정 순이익</div>
+              <div class="stat-value" id="profitAmount">—</div>
+              <div class="stat-note muted xs" id="profitRatio"></div>
+            </div>
+          </div>
         </div>
 
         <div id="salesStats" class="stat-grid hidden">

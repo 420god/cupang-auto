@@ -90,9 +90,11 @@ GET https://www.coupang.com/vp/products/{productId}?itemId={itemId}
 
 ## 3. 마진 계산 — 확정 공식과 검증값
 
+**아래 공식의 "수수료 10.8%"는 이 공식이 처음 검증되던 시점의 예시값일 뿐이다.** 지금 코드(`calcMargin()`)는 수수료율을 인자로 받고, 실제 호출부는 전부 `commissionFor(catCode)`(카테고리별 실제 요율)로 구해서 넘긴다 — 전역 10.8% 가정치는 없다(`docs/api-notes.md` 4-4-3, 2026-08-13에 제거됨). 공식 구조 자체(판매가에서 수수료·입출고비를 빼는 계산 순서)만 여기서 확인할 것.
+
 ```
 개당 원가(원) = cost_cny × exchange_rate(기본 320)
-정산예상액   = 판매가 - 수수료(판매가×10.8%) - 입출고비
+정산예상액   = 판매가 - 수수료(판매가×수수료율) - 입출고비
 실마진       = 정산예상액 - 원가 - 출고비(300) - 작업비(300)
 실마진율     = 실마진 ÷ 판매가 × 100
 ```
@@ -147,11 +149,19 @@ GET /v2/providers/marketplace_openapi/apis/api/v1/settlement-histories (정산�
 - 이게 **일반 마켓플레이스용인지 로켓그로스 계정에도 데이터가 나오는지 미확인**. 실제 키 받으면 먼저 테스트해볼 것.
 - 정산내역조회는 **월 단위**라 애초에 "오늘 확정 수수료"라는 개념이 존재하지 않을 가능성이 높음(정산은 며칠~한 달 지연).
 
-**그래서 사용자와 합의한 방식(2026-08-13):** 판매현황 탭은 4-1의 실시간 주문 데이터에 **가정 수수료율 10.8%**(위 3번 마진계산 공식과 동일 기본값)를 적용한 **추정치**로 표시한다.
+**(2026-08-13 당시 방식, 이후 개선됨 — 아래 4-4-3 참조)** 판매현황 탭은 4-1의 실시간 주문 데이터에 ~~가정 수수료율 10.8%~~를 적용한 추정치로 표시했었다. **지금은 아니다** — 카테고리별 실제 수수료율을 DB에 채워넣은 뒤로 판매현황도 소싱 탭과 똑같이 `commissionFor(catCode)`(실제 요율)를 쓴다. 자세한 건 바로 아래 4-4-3.
 
 **입출고비를 직접 주는 API는 없다는 것 확정(2026-08-13, 문서로 직접 확인함).** 매출내역조회(`revenue-history`)·정산내역조회(`settlement-histories`) 둘 다 문서에 **"일반 마켓플레이스 판매자 전용"**이라고 명시돼 있어 로켓그로스 대상이 아니고, 응답 필드에도 `serviceFee`(수수료)·쿠폰·배송비 관련 항목만 있을 뿐 입출고비 항목 자체가 없다 —애초에 입출고비는 로켓그로스(쿠팡 풀필먼트)에만 발생하는 비용이라 마켓플레이스 정산 구조에 그 개념이 없는 것. 즉 로켓그로스 셀러가 입출고비 실제값을 API로 받을 방법은 현재 **없음**. 요금표 기반 추정(`feeFor()`)이 유일한 방법이고, 이 이상 정확도를 올릴 API 경로는 막다른 길이니 나중에 또 찾아보지 말 것.
 
-**카테고리별 판매수수료율 자체도 어떤 API에도 없다는 것 확정(2026-08-13).** `developers.coupang.com/ko/api` 전체 카탈로그(상품/카테고리/브랜드/배송·주문/반품/교환/프로모션·쿠폰/물류정보/고객문의/정산/로켓그로스, 100개 API)를 다 뒤져봤다. 카테고리 메타정보 조회, 카테고리 자동추천 API 둘 다 살펴봤는데 수수료 필드가 없다 — 자동추천 API 문서 설명엔 "쿠팡은 카테고리에 따른 책정 수수료가 상이하므로"라고 언급까지 하면서 정작 조회 가능한 필드는 안 만들어놨다. 내부 역공학 API 쪽 `categories.commission_rate` 컬럼이 계속 비어있는 것(위 db/CLAUDE.md 미해결 항목)도 같은 이유 — **공식/내부 어느 쪽에도 카테고리별 수수료율을 프로그래밍적으로 조회하는 방법이 없다.** 가정 수수료율(10.8%) 방식 외의 대안 없음, 더 찾아볼 필요 없음.
+**카테고리별 판매수수료율이 어떤 API에도 없다는 것 확정(2026-08-13 당일 조사).** `developers.coupang.com/ko/api` 전체 카탈로그(100개 API)를 다 뒤져봤지만 수수료 필드가 있는 API는 없었다 — **API로는** 여전히 못 받는다는 뜻.
+
+### 4-4-3. 카테고리별 실제 수수료율 — API 대신 WING 수수료안내 페이지로 해결됨(2026-08-13, 같은 날 바로 이어서)
+
+API로 안 된다고 포기하지 않고, **사용자가 WING의 "수수료 안내" 페이지(HTML, `2019-11-25 기준` 명시된 자료)를 직접 가져다줘서** 이걸 파싱해 `categories.commission_rate`를 채웠다(`db/migrations/006_commission_rates.sql`). 그리고 전역 10.8% 가정치는 **완전히 제거**했다(`007_drop_global_commission_default.sql`) — 매칭 안 된 카테고리는 이제 "수수료 정보 없음"으로 표시되고 마진 계산에서 제외된다(가정치로 대충 채우지 않음, 의도된 동작).
+
+**소싱 탭·판매현황 탭 둘 다 이 실제 요율을 쓴다**(`web/app.js`의 `commissionFor(catCode)`) — **더 이상 어디에도 10.8% 가정치가 안 남아있다.** 이 문서 위쪽(4-4 도입부, 4-4-1)과 3번 섹션의 "가정 수수료율 10.8%" 언급은 전부 **이 개선 이전의 기록**이니, 지금 코드 동작과 헷갈리지 말 것. 카테고리 매칭 작업 시 함정은 `db/CLAUDE.md`와 `docs/decisions.md` 2026-08-13 항목 참조.
+
+**남아있는 진짜 추정치는 입출고비뿐이다** — 이건 4-4 위쪽 설명대로 API 자체가 없어서(로켓그로스 전용 비용이라 마켓플레이스 정산 구조에 개념이 없음) 요금표 기반 추정(`feeFor()`)이 유일한 방법이다.
 
 ### 4-4-1. 반품/취소 — 공식 Open API로는 안 되지만, WING 내부 API로는 됨 (2026-08-15, 최종 결론 뒤집힘 — 아래 4-4-2 참조)
 
@@ -217,7 +227,56 @@ todayHourlySales의 12시 구간: gmv -18000, unitsSold -2       ← 반품 시�
 
 **구현 완료(2026-08-15)**: 실제 자동 동기화는 `extension/background.js`(신설 서비스워커)가 담당한다. 웹의 판매현황 탭이 열릴 때마다 `chrome.runtime.sendMessage`로 "오늘+어제" 동기화를 요청하고, 백그라운드가 WING 탭에서 하루씩 호출해 `rocket_growth_sales_wing_daily`(`db/migrations/009`)에 upsert한다. 자세한 흐름은 `extension/CLAUDE.md` "판매현황/반품 동기화" 섹션, 웹 쪽 병합 로직(같은 날짜·옵션이면 이 테이블 값이 기존 `rocket_growth_sales_daily`보다 우선)은 `web/CLAUDE.md` 참조.
 
-**여전히 미확정인 것**: 그린 47g의 800원 잔존액이 정확히 뭔지(반품배송비 차감분으로 추정) — 기능 동작에는 영향 없어서 급하지 않음.
+**그린 47g의 800원 잔존액(2026-08-15, 정정)**: "반품배송비 차감분"이라는 앞선 추정은 근거 없는 추측이었다. 더 설득력 있는 설명(사용자 제보, 미확정이지만 유력): 그린은 오늘 새벽에 팔리고 오늘 낮에 반품된 "당일 판매+당일 반품" 케이스인데(퍼플은 반품만 있고 판매가 없어서 깨끗하게 나옴, 위 참조), **"판매" 쪽 금액과 "반품(환불)" 쪽 금액이 서로 다른 가격 기준으로 잡혔을 가능성**이 있다 — 예: 판매 시점 가격과 환불 처리 시점 가격이 다르거나(사용자가 그 사이 가격을 800원 올렸다고 함), 판매 쪽은 쿠폰 할인 전 정가로 잡히고 환불 쪽은 쿠폰 할인 후 실제 결제액 기준으로 처리됐거나. 어느 쪽이 맞는지는 아직 실측 검증 안 됨 — 급한 문제는 아니라서 보류. **중요한 건 net 값(`gmv`/`unitsSold`) 자체는 쿠팡이 실제 거래를 합산한 결과라 신뢰할 수 있다는 것** — 판매가를 우리가 따로 추적/캐싱하는 게 아니므로 가격을 자주 바꿔도 이 net 값엔 왜곡이 없다.
+
+### 4-4-4. 정산 확정값 API — 수수료·입출고비·쿠폰·광고비·밀크런 전부 실제값으로 나옴 (2026-08-15, 초대형 발견)
+
+판매수수료율은 4-4-3에서 이미 실제값(카테고리별)으로 해결했지만, **입출고비·쿠폰·광고비 등은 여전히 추정치였다.** WING의 "정산현황" 페이지를 캡처해서 이것도 해결했다.
+
+```
+POST https://wing.coupang.com/tenants/rfm/v2/settlements/profit-status/search
+바디: {"recognitionDateFrom":"yyyy-MM-ddT15:00:00.000Z","recognitionDateTo":"yyyy-MM-ddT15:00:00.000Z"}
+      (UTC ISO 시각. T15:00:00Z = KST 자정이므로, "from=D일 15:00Z, to=(D+n)일 15:00Z"가
+       KST 기준 D~D+n-1일 구간을 뜻하는 것으로 보임 — 정확한 경계는 실측으로 재확인할 것)
+응답: {
+  profitAmount, profitToSalesRatio,
+  totalSalesAmount, totalRefundedSalesAmount, totalSalesAmountWithRefund,
+  totalDeductionAmount, totalInventoryCompensationAmount,
+  profitStatusDeductionDetail: {
+    totalWarehousingFeeAmount, totalFulfillmentFeeAmount, totalStorageFeeAmount,
+    totalBarcodeLabelingFeeAmount, totalContainerUnloadingFeeAmount,
+    totalCreturnGradingFeeAmount, totalCreturnReverseShippingFeeAmount,
+    totalVreturnHandlingFeeAmount, totalVreturnShippingFeeAmount,
+    totalCfsVatAmount, totalCfsAmountWithVat,        ← 위 입출고비 항목들의 합계(VAT포함)
+    totalTakeRateAmountWithVat,                       ← 확정 판매수수료(VAT포함)
+    totalSellerInstantDiscountAmount, totalSellerCreditDiscountAmount,
+    totalSellerDownloadDiscountAmount, totalSellerDiscountAmount,  ← 판매자 쿠폰 비용 합계
+    totalAdDeduction, totalCoupangLiveDeduction, totalMilkrunDeduction,
+    totalRocketGrowthSaverDeduction, totalRocketGrowthBusinessInsightsDeduction,
+    totalRecurringServicesAmount, totalPostPurchaseServiceFeeAmount, totalPostPurchaseIncentiveAmount
+  },
+  profitStatusBenefitDetail
+}
+```
+
+**계산 공식을 실제 캡처값으로 검산해서 100% 확인함(2026-08-15)**:
+```
+totalCfsAmountWithVat = 창고비+풀필먼트비+보관비+(그 외 반품처리비 등, 이번 캡처는 대부분 0)+VAT
+totalDeductionAmount  = totalCfsAmountWithVat + totalTakeRateAmountWithVat + totalSellerDiscountAmount
+                        + totalAdDeduction + totalCoupangLiveDeduction + totalMilkrunDeduction
+                        + totalRocketGrowthSaverDeduction + totalRocketGrowthBusinessInsightsDeduction
+                        + totalRecurringServicesAmount + totalPostPurchaseServiceFeeAmount
+profitAmount          = totalSalesAmountWithRefund - totalDeductionAmount + totalInventoryCompensationAmount
+
+실제 캡처값(2026-08-04~07 구간): 15,374 + 8,364 + 4,600 + 0 + 0 + 14,300 = 42,638 = totalDeductionAmount ✓
+                                 75,000 - 42,638 = 32,362 = profitAmount ✓
+```
+
+**결정적 한계 — 옵션(vendorItemId)별로 안 쪼개진다.** `sold-vendor-item-list`와 달리 이건 **계정 전체 합계**만 준다. 그래서 "이 옵션의 정확한 마진"은 여전히 못 만들고, "이 기간 전체의 확정 매출·비용·순이익"만 만들 수 있다 — 판매현황의 옵션별 표에 합치지 말고 **별도의 "확정 정산 요약" 구역**으로 보여주는 게 맞다.
+
+**세션 기반이라 4-4-2와 같은 제약**(VPS 무인 cron 불가, 확장프로그램 경로 필요)이 그대로 적용된다. **"D-1부터 조회 가능"**(사용자 제보) — 오늘 날짜를 넣으면 데이터가 비거나 0에 가까울 것으로 예상(정산 인식에 하루 정도 지연이 있는 걸로 추정, 미확정).
+
+덤으로 `POST /tenants/rfm/v2/settlements/upcoming-settlement/search`(바디: `{"currentDate":"...Z"}`)도 같이 발견함 — 앞으로 들어올 정산 스케줄(주 단위, `settlementPeriodStartDate/EndDate`, `paymentRatio`, `paymentAmount`, `finalSettlementAmount` 등)을 준다. 판매현황과는 성격이 달라서(현금흐름 예정표) 이번 작업엔 안 쓰지만, 나중에 "정산 예정" 같은 별도 페이지를 만들 때 쓸 수 있음.
 
 ### 4-5. 이익 계산에 필요한 나머지 조각
 원가는 애초에 쿠팡 API 어디에도 없다 — 이미 있는 `user_items.cost_cny`를 써야 한다. 주문 API의 `vendorItemId`로 `product_items.vendor_item_id`를 조인하면 연결된다. 마진 계산은 3번의 `calcMargin()`을 그대로 재사용(별도 계산식 새로 만들지 말 것 — `web/CLAUDE.md` 규칙).

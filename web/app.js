@@ -1297,13 +1297,13 @@ async function syncSalesViaExtension() {
   const to = kstDateStr(new Date());
   const from = kstDateStr(new Date(Date.now() - 86400000));
 
-  statusEl.textContent = '확장프로그램으로 반품 포함 데이터 동기화 중…';
+  statusEl.textContent = '확장프로그램으로 반품·확정정산 데이터 동기화 중…';
   statusEl.classList.remove('hidden');
 
   const resp = await extensionSendMessage({ type: 'SYNC_SALES', dateFrom: from, dateTo: to });
 
   if (resp.ok) {
-    statusEl.textContent = `반품 포함 데이터 동기화 완료 (${resp.rowCount}건)`;
+    statusEl.textContent = `동기화 완료 (판매 ${resp.rowCount}건, 정산 ${resp.profitRowCount}건)`;
     setTimeout(() => statusEl.classList.add('hidden'), 4000);
     return true;
   }
@@ -1345,6 +1345,34 @@ async function loadSales() {
   if (synced) await fetchAndRenderSales(fromEl.value, toEl.value);
 }
 
+function renderProfitSummary(rows) {
+  const card = $('#salesProfitCard');
+  if (!rows.length) {
+    card.classList.add('hidden');
+    return;
+  }
+
+  const sum = (key) => rows.reduce((s, r) => s + (r[key] || 0), 0);
+  const netSales = sum('net_sales_amount');
+  const commission = sum('commission_amount');
+  const fulfillment = sum('fulfillment_amount');
+  const coupon = sum('coupon_amount');
+  const ad = sum('ad_amount');
+  const milkrun = sum('milkrun_amount');
+  const profit = sum('profit_amount');
+  const ratio = netSales ? (profit / netSales * 100) : 0;
+
+  $('#profitNetSales').textContent = won(netSales);
+  $('#profitCommission').textContent = won(commission);
+  $('#profitFulfillment').textContent = won(fulfillment);
+  $('#profitCoupon').textContent = won(coupon);
+  $('#profitAd').textContent = won(ad);
+  $('#profitMilkrun').textContent = won(milkrun);
+  $('#profitAmount').innerHTML = `<span class="${profit >= 0 ? 'pos' : 'neg'}">${profit.toLocaleString()}원</span>`;
+  $('#profitRatio').textContent = `이익률 ${ratio.toFixed(1)}%`;
+  card.classList.remove('hidden');
+}
+
 async function fetchAndRenderSales(fromDate, toDate) {
   $('#salesMsg').classList.add('hidden');
   $('#salesStats').classList.add('hidden');
@@ -1353,7 +1381,7 @@ async function fetchAndRenderSales(fromDate, toDate) {
   $('#salesLoader').classList.remove('hidden');
 
   try {
-    const [grossRows, wingRows] = await Promise.all([
+    const [grossRows, wingRows, profitRows] = await Promise.all([
       api(
         `rocket_growth_sales_daily?select=sale_date,vendor_item_id,product_name,quantity,revenue` +
         `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
@@ -1361,8 +1389,15 @@ async function fetchAndRenderSales(fromDate, toDate) {
       api(
         `rocket_growth_sales_wing_daily?select=sale_date,vendor_item_id,product_name,quantity,revenue` +
         `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
+      ),
+      api(
+        `rocket_growth_profit_daily?select=net_sales_amount,commission_amount,fulfillment_amount,` +
+        `coupon_amount,ad_amount,milkrun_amount,profit_amount` +
+        `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
       )
     ]);
+
+    renderProfitSummary(profitRows || []);
 
     // 같은 (날짜, 옵션)이면 WING 값(반품 반영)이 Open API 값(반품 미반영)보다 우선한다
     const merged = {};

@@ -53,6 +53,8 @@ categoryId (상품 응답의)  = kanCategoryId (요금 API의)  ← 같은 값, 
   → 웹에 {ok, days, rowCount} 응답
 ```
 
+**`syncSales()`가 판매(반품 포함)와 확정 정산 둘 다 같은 WING 탭으로 처리한다(2026-08-15 확장)** — `syncSalesForDates()`(→ `rocket_growth_sales_wing_daily`)와 `syncProfitForDates()`(→ `rocket_growth_profit_daily`, `profit-status/search` 기반, `docs/api-notes.md` 4-4-4)를 순서대로 호출한다. WING 탭을 두 번 찾거나 열지 않기 위해 `getOrOpenWingTab()` 결과를 두 함수에 공유한다. **하루 단위 조회가 실패해도(정산 미확정 등) 그 날짜만 건너뛰고 전체 동기화는 안 막는다** — `notLoggedIn`만 즉시 전체 실패로 처리(로그인부터 해야 어차피 다 실패하므로).
+
 **기본 동기화 범위는 "오늘+어제" 이틀 고정이다** — `rocket-growth-sync.js`와 같은 이유(자정 근처 타임존 오차, `docs/api-notes.md` 4-1)이자, 판매현황 탭을 열 때마다 매번 30일치를 다 훑으면 느리고 WING에 부담이라 일부러 좁혀둔 것. 더 넓은 범위를 과거로 백필하고 싶으면(예: 지난달 반품까지 채우고 싶을 때) 이 기본값을 바꾸지 말고 **별도의 수동 백필 기능을 새로 만들 것**.
 
 **`externally_connectable`이 웹 도메인(`https://sourcing-web2.vercel.app/*`)만 허용한다** — 웹 배포 도메인이 바뀌면 `manifest.json`도 같이 고쳐야 한다. 이 메시지 채널은 그 도메인의 웹페이지 JS만 부를 수 있고, 다른 사이트나 페이지 콘텐츠(관찰된 데이터)에서는 절대 트리거되지 않는다 — 신뢰 경계가 도메인 단위인 것.

@@ -58,7 +58,7 @@ function pageFetchSoldVendorItems(dateStr) {
     try {
       const items = [];
       let pageNumber = 0;
-      const pageSize = 100;
+      const pageSize = 10; // WING 위젯 자체가 보내는 값 그대로(더 큰 값은 400 남, 실측 확인됨)
       for (let i = 0; i < 20; i++) {
         const res = await fetch('/tenants/rfm-inventory/sales/sold-vendor-item-list', {
           method: 'POST',
@@ -73,7 +73,7 @@ function pageFetchSoldVendorItems(dateStr) {
         let body;
         try { body = JSON.parse(text); } catch (e) { return { ok: false, notLoggedIn: true }; }
         if (!res.ok || !body || !Array.isArray(body.soldVendorItems)) {
-          return { ok: false, error: 'HTTP ' + res.status };
+          return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
         }
         items.push(...body.soldVendorItems);
         const totalPages = (body.pagination && body.pagination.totalPages) || 1;
@@ -87,13 +87,38 @@ function pageFetchSoldVendorItems(dateStr) {
   })();
 }
 
-async function syncSales(dateFrom, dateTo) {
-  const dates = dateRange(dateFrom, dateTo);
-  if (!dates.length) throw new Error('날짜 범위가 올바르지 않습니다.');
-  if (dates.length > MAX_DAYS) throw new Error(`범위가 너무 넓습니다(최대 ${MAX_DAYS}일).`);
+/* 페이지(WING) 컨텍스트에서 실행됨. dateStr(KST 'YYYY-MM-DD') 하루치 확정 정산 조회.
+   recognitionDateFrom/To는 UTC "T15:00:00.000Z"가 KST 자정 경계다(실측 확인,
+   docs/api-notes.md 4-4-4) — dateStr 하루를 감싸려면 전날 T15:00Z ~ 당일 T15:00Z. */
+function pageFetchProfitStatus(dateStr) {
+  return (async () => {
+    try {
+      const d = new Date(dateStr + 'T00:00:00Z');
+      d.setUTCDate(d.getUTCDate() - 1);
+      const fromDateStr = d.toISOString().slice(0, 10);
 
-  const tab = await getOrOpenWingTab();
+      const res = await fetch('/tenants/rfm/v2/settlements/profit-status/search', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          recognitionDateFrom: `${fromDateStr}T15:00:00.000Z`,
+          recognitionDateTo: `${dateStr}T15:00:00.000Z`
+        })
+      });
+      const text = await res.text();
+      let json;
+      try { json = JSON.parse(text); } catch (e) { return { ok: false, notLoggedIn: true }; }
+      if (!res.ok || typeof json.profitAmount === 'undefined') {
+        return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
+      }
+      return { ok: true, data: json };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) ? e.message : String(e) };
+    }
+  })();
+}
 
+async function syncSalesForDates(tab, dates) {
   const rows = [];
   for (const dateStr of dates) {
     const injected = await chrome.scripting.executeScript({
@@ -106,7 +131,7 @@ async function syncSales(dateFrom, dateTo) {
       if (r && r.notLoggedIn) {
         throw new Error('WING 로그인이 필요합니다. WING 탭에서 로그인한 뒤 다시 시도하세요.');
       }
-      throw new Error(`판매현황 조회 실패(${dateStr}): ${(r && r.error) || '알 수 없는 오류'}`);
+      continue; // 하루 실패는 건너뛰고 나머지는 계속(전체를 막지 않음)
     }
     r.items.forEach((it) => {
       rows.push({
@@ -119,12 +144,60 @@ async function syncSales(dateFrom, dateTo) {
       });
     });
   }
+  if (rows.length) await sbUpsert('rocket_growth_sales_wing_daily', rows, 'sale_date,vendor_item_id');
+  return { rowCount: rows.length };
+}
+
+async function syncProfitForDates(tab, dates) {
+  const rows = [];
+  for (const dateStr of dates) {
+    const injected = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: pageFetchProfitStatus,
+      args: [dateStr]
+    });
+    const r = injected && injected[0] && injected[0].result;
+    if (!r || !r.ok) {
+      if (r && r.notLoggedIn) {
+        throw new Error('WING 로그인이 필요합니다. WING 탭에서 로그인한 뒤 다시 시도하세요.');
+      }
+      continue; // 정산 미확정(D-1 지연 등)일 수 있으니 실패해도 건너뛰고 계속
+    }
+    const d = r.data;
+    const det = d.profitStatusDeductionDetail || {};
+    rows.push({
+      sale_date: dateStr,
+      total_sales_amount: Math.round(Number(d.totalSalesAmount) || 0),
+      total_refunded_sales_amount: Math.round(Number(d.totalRefundedSalesAmount) || 0),
+      net_sales_amount: Math.round(Number(d.totalSalesAmountWithRefund) || 0),
+      total_deduction_amount: Math.round(Number(d.totalDeductionAmount) || 0),
+      commission_amount: Math.round(Number(det.totalTakeRateAmountWithVat) || 0),
+      fulfillment_amount: Math.round(Number(det.totalCfsAmountWithVat) || 0),
+      coupon_amount: Math.round(Number(det.totalSellerDiscountAmount) || 0),
+      ad_amount: Math.round(Number(det.totalAdDeduction) || 0),
+      milkrun_amount: Math.round(Number(det.totalMilkrunDeduction) || 0),
+      profit_amount: Math.round(Number(d.profitAmount) || 0),
+      profit_to_sales_ratio: d.profitToSalesRatio != null ? Number(d.profitToSalesRatio) : null
+    });
+  }
+  if (rows.length) await sbUpsert('rocket_growth_profit_daily', rows, 'sale_date');
+  return { rowCount: rows.length };
+}
+
+async function syncSales(dateFrom, dateTo) {
+  const dates = dateRange(dateFrom, dateTo);
+  if (!dates.length) throw new Error('날짜 범위가 올바르지 않습니다.');
+  if (dates.length > MAX_DAYS) throw new Error(`범위가 너무 넓습니다(최대 ${MAX_DAYS}일).`);
+
+  const tab = await getOrOpenWingTab();
 
   await sbLoadConfig();
   if (!sbConfigured()) throw new Error('Supabase 설정이 없습니다. 확장프로그램 팝업에서 먼저 로그인하세요.');
-  await sbUpsert('rocket_growth_sales_wing_daily', rows, 'sale_date,vendor_item_id');
 
-  return { days: dates.length, rowCount: rows.length };
+  const salesResult = await syncSalesForDates(tab, dates);
+  const profitResult = await syncProfitForDates(tab, dates);
+
+  return { days: dates.length, rowCount: salesResult.rowCount, profitRowCount: profitResult.rowCount };
 }
 
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
@@ -132,7 +205,9 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
   (async () => {
     try {
       const result = await syncSales(message.dateFrom, message.dateTo);
-      sendResponse({ ok: true, days: result.days, rowCount: result.rowCount });
+      sendResponse({
+        ok: true, days: result.days, rowCount: result.rowCount, profitRowCount: result.profitRowCount
+      });
     } catch (e) {
       sendResponse({ ok: false, error: (e && e.message) ? e.message : String(e) });
     }

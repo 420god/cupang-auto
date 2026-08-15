@@ -65,6 +65,8 @@ Vercel 배포(`420god/cupang-auto` → `sourcing-web2.vercel.app`), `main` push 
 
 ### 판매현황 탭 (쿠팡 공식 Open API, 로켓그로스)
 내부 역공학 API와 완전히 별개 시스템. **GCP VPS(고정 IP) → Supabase → 웹** 구조로 실사용 검증 완료. 왜 이 구조인지(Vercel+프록시를 먼저 시도했다가 버린 이유 포함)는 `docs/decisions.md` 2026-08-13 항목, API 스펙은 `docs/api-notes.md` 4번 섹션. 수수료·입출고비는 API에 없어서 추정치(`feeFor()`+`calcMargin()` 재사용)만 가능 — 더 나은 API 없는지 다시 찾아볼 필요 없음, 이미 다 찾아봤음.
+**추가 발견(2026-08-15, 아직 미구현): 입출고비·수수료·쿠폰·광고비·밀크런 전부 실제 확정값을 주는 WING API를 찾음**(`profit-status/search`, `docs/api-notes.md` 4-4-4) — 단 옵션별이 아니라 계정 전체 합계만 줘서, 판매현황 옵션별 표엔 못 합치고 별도 "확정 정산 요약" 구역이 필요함. 다음 세션에서 이어갈 것.
+
 **반품 집계 구현 완료(2026-08-15).** 공식 Open API 3개(RG Order/RG Inventory/일반 반품)엔 반품 데이터가 없어서, **WING 내부 API**(로그인 세션 기반)를 확장프로그램의 새 백그라운드 서비스워커(`extension/background.js`)가 대신 호출하는 구조로 만듦. 판매현황 탭을 열 때마다 웹이 확장프로그램에 메시지를 보내 "오늘+어제" 반품 순액을 동기화하고(`rocket_growth_sales_wing_daily`, `db/migrations/009`), 기존 Open API 값보다 우선해서 보여줌. 확장프로그램이 없거나 응답 없으면 기존 방식으로 조용히 폴백 — **아직 실제 배포·새로고침·마이그레이션 실행 후 브라우저에서 끝까지 테스트는 안 해봄, 다음 세션 시작하면 제일 먼저 확인할 것.** 자세한 흐름은 `docs/api-notes.md` 4-4-2, `extension/CLAUDE.md`, `web/CLAUDE.md`.
 
 ### 알려진 미해결

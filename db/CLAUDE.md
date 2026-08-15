@@ -12,6 +12,7 @@ migrations/006_commission_rates.sql  categories.commission_rate를 WING 수수�
 migrations/007_drop_global_commission_default.sql  settings.fee_defaults에서 commission_rate 키 제거(전역 가정치 폐기)
 migrations/008_root_name_trigger.sql  categories.root_name 자동유지 트리거 + 백필 + commission_rate 재적용
 migrations/009_rocket_growth_sales_wing.sql  WING 내부 API 기반 순매출(반품 반영) 스냅샷 — 확장프로그램이 upsert
+migrations/010_rocket_growth_profit_daily.sql  WING 정산현황 API 기반 확정 손익 스냅샷(계정 전체 합계) — 확장프로그램이 upsert
 ```
 
 **이미 실행된 파일은 절대 수정하지 않는다.** 스키마를 바꿔야 하면 `004_설명.sql`처럼 새 번호로 추가한다. 모든 마이그레이션은 `if not exists`/`drop ... if exists`를 써서 **여러 번 실행해도 안전**하게 만든다 — 이 관례를 유지할 것.

@@ -62,7 +62,10 @@
   /* 판매현황(재고현황 위젯) 반품 조사용 — 응답까지 저장 */
   const SALES_PATHS = [
     '/tenants/rfm-inventory/sales/today',
-    '/tenants/rfm-inventory/sales/sold-vendor-item-list'
+    '/tenants/rfm-inventory/sales/sold-vendor-item-list',
+    '/tenants/rfm-inventory/sales/range',
+    '/tenants/rfm/v2/settlements/profit-status/search',
+    '/tenants/rfm/v2/settlements/upcoming-settlement/search'
   ];
   const K_SALES = '__cwc_sales_captures';
 
