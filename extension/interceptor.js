@@ -77,7 +77,7 @@
     return null;
   }
 
-  function saveSalesCapture(url, method, reqBody, resText) {
+  function saveSalesCapture(url, method, reqBody, resText, headers) {
     try {
       const p = salesPathOf(url);
       if (!p) return;
@@ -89,6 +89,7 @@
         url: String(url).slice(0, 300),
         method: method,
         reqBody: typeof reqBody === 'string' ? reqBody.slice(0, 4000) : null,
+        headers: headers || null,
         resText: typeof resText === 'string' ? resText.slice(0, 300000) : null,
         at: Date.now()
       };
@@ -255,10 +256,11 @@
 
       // 판매현황 API는 GET/POST 모두 응답까지 저장
       if (salesPathOf(url)) {
+        const _salesHdrs = headersToObject(init && init.headers);
         p.then((res) => {
           try {
             res.clone().text()
-              .then((t) => saveSalesCapture(url, method, reqBody, t))
+              .then((t) => saveSalesCapture(url, method, reqBody, t, _salesHdrs))
               .catch(() => {});
           } catch (e) { /* 무시 */ }
         }).catch(() => {});
@@ -323,7 +325,7 @@
             maybeSaveCategoryPayload(url, t);
             maybeSaveProductPayload(url, t);
             if (feePathOf(url)) saveFeeCapture(url, method, typeof body === 'string' ? body : null, t, this.__cwc_headers);
-            if (salesPathOf(url)) saveSalesCapture(url, method, typeof body === 'string' ? body : null, t);
+            if (salesPathOf(url)) saveSalesCapture(url, method, typeof body === 'string' ? body : null, t, this.__cwc_headers);
           }
         } catch (e) { /* 무시 */ }
       });

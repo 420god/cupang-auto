@@ -38,22 +38,24 @@ categoryId (상품 응답의)  = kanCategoryId (요금 API의)  ← 같은 값, 
 
 ## 판매현황/반품 동기화 (`background.js`, 2026-08-15)
 
-**진단용 캡처(`interceptor.js`의 `SALES_PATHS`/`saveSalesCapture`, 팝업 "판매현황 API 캡처 보기")는 그대로 남아있다** — WING 내부 판매현황 API의 정확한 요청/응답 구조를 처음 알아낼 때 썼고, 앞으로 이 API가 바뀌었는지 다시 확인할 때도 쓸 수 있어서 지우지 않았다. 하지만 **실제 자동 동기화는 이걸 안 쓰고 `background.js`가 직접 담당**한다(수동 캡처 → 확인 → 나중에 붙이는 방식이 아니라, 능동적으로 API를 호출하는 방식).
+**진단용 캡처(`interceptor.js`의 `SALES_PATHS`/`saveSalesCapture`, 팝업 "판매현황 API 캡처 보기")는 그대로 남아있다** — WING 내부 판매현황/정산 API의 정확한 요청/응답 구조(요청 **헤더**까지, 2026-08-15에 추가함 — 아래 XSRF 함정을 이걸로 찾았다)를 처음 알아낼 때 썼고, 앞으로 이 API들이 바뀌었는지 다시 확인할 때도 쓸 수 있어서 지우지 않았다. 새 WING 내부 API를 조사할 땐 **먼저 이 캡처로 요청 헤더까지 확인할 것** — 응답/바디만 보고 재구현하면 인증 헤더를 놓친다(바로 아래 함정 참조). 하지만 **실제 자동 동기화는 이걸 안 쓰고 `background.js`가 직접 담당**한다(수동 캡처 → 확인 → 나중에 붙이는 방식이 아니라, 능동적으로 API를 호출하는 방식).
 
 ```
 웹의 판매현황 탭 (loadSales())
   → chrome.runtime.sendMessage(SALES_EXT_ID, {type:'SYNC_SALES', dateFrom, dateTo})
   → background.js의 onMessageExternal 리스너가 깨어남
      1. WING 탭 찾기, 없으면 새로 열기(getOrOpenWingTab)
-     2. 날짜별로(범위를 통째로 넣으면 합산되어버리므로 하루씩, docs/api-notes.md 4-4-2 실측 확인)
-        chrome.scripting.executeScript로 그 탭 안에서 sold-vendor-item-list 호출
-        (같은 origin이라 쿠키가 자동으로 붙음, 별도 인증 코드 불필요)
-     3. 로그인 안 돼 있으면(JSON 아닌 응답) notLoggedIn 에러로 즉시 실패 반환
-     4. sbUpsert()로 rocket_growth_sales_wing_daily에 upsert (Supabase 인증은 supabase.js 재사용)
-  → 웹에 {ok, days, rowCount} 응답
+     2. syncSalesForDates: 날짜별로(범위를 통째로 넣으면 합산되어버리므로 하루씩,
+        docs/api-notes.md 4-4-2 실측 확인) executeScript로 그 탭 안에서
+        sold-vendor-item-list 호출 → rocket_growth_sales_wing_daily에 upsert
+     3. syncProfitForDates: 같은 방식으로 하루씩 profit-status/search 호출
+        (x-xsrf-token 헤더 필수, 아래 함정 참조) → rocket_growth_profit_daily에 upsert
+        — 정산이 실패해도(정산 미확정 등) 판매 결과는 그대로 반환(전체를 막지 않음)
+     4. 로그인 안 돼 있으면(JSON 아닌 응답) notLoggedIn 에러로 즉시 전체 실패 반환
+  → 웹에 {ok, days, rowCount, profitRowCount} 응답
 ```
 
-**`syncSales()`가 판매(반품 포함)와 확정 정산 둘 다 같은 WING 탭으로 처리한다(2026-08-15 확장)** — `syncSalesForDates()`(→ `rocket_growth_sales_wing_daily`)와 `syncProfitForDates()`(→ `rocket_growth_profit_daily`, `profit-status/search` 기반, `docs/api-notes.md` 4-4-4)를 순서대로 호출한다. WING 탭을 두 번 찾거나 열지 않기 위해 `getOrOpenWingTab()` 결과를 두 함수에 공유한다. **하루 단위 조회가 실패해도(정산 미확정 등) 그 날짜만 건너뛰고 전체 동기화는 안 막는다** — `notLoggedIn`만 즉시 전체 실패로 처리(로그인부터 해야 어차피 다 실패하므로).
+**함정 — 세션 쿠키만으론 부족하고 `x-xsrf-token` 헤더가 따로 필요한 API가 있다(`profit-status/search`, 2026-08-15에 겪고 해결).** 처음엔 그냥 "Failed to fetch"만 보여서 페이지별 CSP 문제로 오인했다 — `https://wing.coupang.com/tenants/rfm/settlements/home` 페이지로 먼저 이동시키는 우회, 백그라운드에서 `credentials:'include'`로 직접 fetch하는 우회 둘 다 시도했지만 소용없었다(그 둘의 흔적이 커밋 히스토리에 남아있을 수 있는데, 최종적으로는 둘 다 필요 없었다). **진짜 원인은 콘솔에 별도로 뜨는 CORS 에러 메시지**(`Access to fetch at 'https://helpseller.coupang.com/access/logout' (redirected from ...) ... blocked by CORS policy`)에만 있었고, 우리 코드가 잡는 `catch(e)`에는 그냥 "Failed to fetch"로만 보였다 — **콘솔 원문을 반드시 같이 볼 것, 우리 쪽 에러 메시지만 보고 판단하지 말 것.** 해결은 `pageFetchProfitStatus()`처럼 쿠키 `XSRF-TOKEN` 값을 `document.cookie`로 읽어서 `x-xsrf-token` 헤더로 그대로 실어 보내는 것 — 쿠키는 페이지 컨텍스트에서만 읽히므로 `chrome.scripting.executeScript`로 페이지 안에서 호출해야 한다(백그라운드 직접 fetch로는 이 쿠키에 못 닿는다). **페이지 이동은 불필요했다** — 인증 헤더만 맞으면 WING 탭이 어느 페이지에 있든 호출된다. **다른 WING 내부 API에서 "Failed to fetch"를 만나면 페이지 이동부터 시도하지 말고, 이 패턴(헤더 캡처 → XSRF 토큰 확인)부터 확인할 것.**
 
 **기본 동기화 범위는 "오늘+어제" 이틀 고정이다** — `rocket-growth-sync.js`와 같은 이유(자정 근처 타임존 오차, `docs/api-notes.md` 4-1)이자, 판매현황 탭을 열 때마다 매번 30일치를 다 훑으면 느리고 WING에 부담이라 일부러 좁혀둔 것. 더 넓은 범위를 과거로 백필하고 싶으면(예: 지난달 반품까지 채우고 싶을 때) 이 기본값을 바꾸지 말고 **별도의 수동 백필 기능을 새로 만들 것**.
 

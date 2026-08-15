@@ -2731,7 +2731,7 @@ salesBtn.addEventListener('click', async () => {
       return;
     }
     const text = entries.map(([path, c]) =>
-      `--- ${c.method} ${c.url}\n[요청 바디]\n${c.reqBody || '(없음)'}\n[응답]\n${c.resText || '(없음)'}`
+      `--- ${c.method} ${c.url}\n[요청 헤더]\n${c.headers ? JSON.stringify(c.headers, null, 2) : '(없음)'}\n[요청 바디]\n${c.reqBody || '(없음)'}\n[응답]\n${c.resText || '(없음)'}`
     ).join('\n\n');
     setStatus(text);
   } catch (err) {

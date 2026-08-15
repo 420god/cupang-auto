@@ -11,6 +11,25 @@ importScripts('supabase.js');
 const WING_ORIGIN = 'https://wing.coupang.com';
 const MAX_DAYS = 31;
 
+async function waitForTabComplete(tabId, timeoutMs) {
+  const t = await chrome.tabs.get(tabId);
+  if (t.status === 'complete') return;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      reject(new Error('탭 로딩 시간초과'));
+    }, timeoutMs || 20000);
+    function onUpdated(tId, info) {
+      if (tId === tabId && info.status === 'complete') {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve();
+      }
+    }
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+}
+
 function kstDateStr(d) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit'
@@ -35,20 +54,7 @@ async function getOrOpenWingTab() {
   if (existing.length) return existing[0];
 
   const tab = await chrome.tabs.create({ url: WING_ORIGIN + '/', active: false });
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(onUpdated);
-      reject(new Error('WING 탭 로딩 시간초과'));
-    }, 20000);
-    function onUpdated(tabId, info) {
-      if (tabId === tab.id && info.status === 'complete') {
-        clearTimeout(timer);
-        chrome.tabs.onUpdated.removeListener(onUpdated);
-        resolve();
-      }
-    }
-    chrome.tabs.onUpdated.addListener(onUpdated);
-  });
+  await waitForTabComplete(tab.id);
   return tab;
 }
 
@@ -88,18 +94,33 @@ function pageFetchSoldVendorItems(dateStr) {
 }
 
 /* 페이지(WING) 컨텍스트에서 실행됨. dateStr(KST 'YYYY-MM-DD') 하루치 확정 정산 조회.
-   recognitionDateFrom/To는 UTC "T15:00:00.000Z"가 KST 자정 경계다(실측 확인,
-   docs/api-notes.md 4-4-4) — dateStr 하루를 감싸려면 전날 T15:00Z ~ 당일 T15:00Z. */
+   session 쿠키만으론 부족하고 x-xsrf-token 헤더가 필수다(쿠키 XSRF-TOKEN 값을
+   그대로 echo하는 CSRF 이중제출 패턴, 실측 확인) — 이게 없으면 서버가
+   helpseller.coupang.com/access/logout으로 리다이렉트시키고, 그 리다이렉트가
+   CORS 없이 오다 보니 그냥 "Failed to fetch"로만 보였다(docs/api-notes.md 4-4-4).
+   쿠키는 페이지 컨텍스트에서만 읽을 수 있어서(document.cookie) 백그라운드에서
+   직접 fetch하는 방식(더 간단해 보였던)은 포기하고 페이지 주입으로 되돌아왔다.
+   recognitionDateFrom/To는 UTC "T15:00:00.000Z"가 KST 자정 경계다(실측 확인) —
+   dateStr 하루를 감싸려면 전날 T15:00Z ~ 당일 T15:00Z. */
 function pageFetchProfitStatus(dateStr) {
   return (async () => {
     try {
+      function getCookie(name) {
+        const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+        return m ? decodeURIComponent(m[1]) : null;
+      }
+      const xsrfToken = getCookie('XSRF-TOKEN');
+
       const d = new Date(dateStr + 'T00:00:00Z');
       d.setUTCDate(d.getUTCDate() - 1);
       const fromDateStr = d.toISOString().slice(0, 10);
 
+      const headers = { 'content-type': 'application/json' };
+      if (xsrfToken) headers['x-xsrf-token'] = xsrfToken;
+
       const res = await fetch('/tenants/rfm/v2/settlements/profit-status/search', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: JSON.stringify({
           recognitionDateFrom: `${fromDateStr}T15:00:00.000Z`,
           recognitionDateTo: `${dateStr}T15:00:00.000Z`
@@ -121,12 +142,7 @@ function pageFetchProfitStatus(dateStr) {
 async function syncSalesForDates(tab, dates) {
   const rows = [];
   for (const dateStr of dates) {
-    const injected = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: pageFetchSoldVendorItems,
-      args: [dateStr]
-    });
-    const r = injected && injected[0] && injected[0].result;
+    const r = await execWithRetry(tab.id, pageFetchSoldVendorItems, [dateStr]);
     if (!r || !r.ok) {
       if (r && r.notLoggedIn) {
         throw new Error('WING 로그인이 필요합니다. WING 탭에서 로그인한 뒤 다시 시도하세요.');
@@ -148,19 +164,35 @@ async function syncSalesForDates(tab, dates) {
   return { rowCount: rows.length };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/* 판매/정산 조회 공용 — 실제 앱이 iframe 안에 떠 있을 수 있어(popup.js의 다른
+   캡처들도 전부 allFrames:true를 쓴다) 모든 프레임에 주입하고, 그중 성공
+   (ok:true)한 프레임의 결과를 쓴다. executeScript 자체가 실패하면(예: 탭이 막
+   리로드 중이라 "Frame with ID N was removed") 잠깐 쉬었다가 한 번 재시도한다. */
+async function execWithRetry(tabId, func, args) {
+  let injected;
+  try {
+    injected = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func, args });
+  } catch (e) {
+    await sleep(1500);
+    injected = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func, args });
+  }
+  const results = (injected || []).map((fr) => fr && fr.result).filter(Boolean);
+  return results.find((r) => r.ok) || results[0] || null;
+}
+
 async function syncProfitForDates(tab, dates) {
   const rows = [];
   for (const dateStr of dates) {
-    const injected = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: pageFetchProfitStatus,
-      args: [dateStr]
-    });
-    const r = injected && injected[0] && injected[0].result;
+    const r = await execWithRetry(tab.id, pageFetchProfitStatus, [dateStr]);
     if (!r || !r.ok) {
       if (r && r.notLoggedIn) {
         throw new Error('WING 로그인이 필요합니다. WING 탭에서 로그인한 뒤 다시 시도하세요.');
       }
+      console.warn(`[정산 동기화] ${dateStr} 건너뜀 — 원인: ${(r && r.error) || '알 수 없음'}`);
       continue; // 정산 미확정(D-1 지연 등)일 수 있으니 실패해도 건너뛰고 계속
     }
     const d = r.data;
@@ -195,9 +227,17 @@ async function syncSales(dateFrom, dateTo) {
   if (!sbConfigured()) throw new Error('Supabase 설정이 없습니다. 확장프로그램 팝업에서 먼저 로그인하세요.');
 
   const salesResult = await syncSalesForDates(tab, dates);
-  const profitResult = await syncProfitForDates(tab, dates);
 
-  return { days: dates.length, rowCount: salesResult.rowCount, profitRowCount: profitResult.rowCount };
+  // 실패해도(정산 미확정 등) 판매 동기화 결과는 그대로 반환한다.
+  let profitRowCount = 0;
+  try {
+    const profitResult = await syncProfitForDates(tab, dates);
+    profitRowCount = profitResult.rowCount;
+  } catch (e) {
+    console.warn('[정산 동기화] 전체 실패, 판매 동기화 결과만 반환:', e && e.message);
+  }
+
+  return { days: dates.length, rowCount: salesResult.rowCount, profitRowCount };
 }
 
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {

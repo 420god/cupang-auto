@@ -274,9 +274,15 @@ profitAmount          = totalSalesAmountWithRefund - totalDeductionAmount + tota
 
 **결정적 한계 — 옵션(vendorItemId)별로 안 쪼개진다.** `sold-vendor-item-list`와 달리 이건 **계정 전체 합계**만 준다. 그래서 "이 옵션의 정확한 마진"은 여전히 못 만들고, "이 기간 전체의 확정 매출·비용·순이익"만 만들 수 있다 — 판매현황의 옵션별 표에 합치지 말고 **별도의 "확정 정산 요약" 구역**으로 보여주는 게 맞다.
 
-**세션 기반이라 4-4-2와 같은 제약**(VPS 무인 cron 불가, 확장프로그램 경로 필요)이 그대로 적용된다. **"D-1부터 조회 가능"**(사용자 제보) — 오늘 날짜를 넣으면 데이터가 비거나 0에 가까울 것으로 예상(정산 인식에 하루 정도 지연이 있는 걸로 추정, 미확정).
+**세션 기반이라 4-4-2와 같은 제약**(VPS 무인 cron 불가, 확장프로그램 경로 필요)이 그대로 적용된다. **"D-1부터 조회 가능"**(사용자 제보) — 다만 이건 아직 실측으로 검증 못 함(테스트 중엔 항상 아래 인증 함정에 걸려서 진짜 데이터 부족 때문인지 구분이 안 됐음). 실제로 최신 1~2일 범위가 계속 비면 이게 원인일 수 있음 — 확인되면 여기 업데이트할 것.
 
-덤으로 `POST /tenants/rfm/v2/settlements/upcoming-settlement/search`(바디: `{"currentDate":"...Z"}`)도 같이 발견함 — 앞으로 들어올 정산 스케줄(주 단위, `settlementPeriodStartDate/EndDate`, `paymentRatio`, `paymentAmount`, `finalSettlementAmount` 등)을 준다. 판매현황과는 성격이 달라서(현금흐름 예정표) 이번 작업엔 안 쓰지만, 나중에 "정산 예정" 같은 별도 페이지를 만들 때 쓸 수 있음.
+**결정적 함정(2026-08-15, 실제로 겪고 최종 해결함) — `x-xsrf-token` 헤더 없이는 로그인 세션이 있어도 거부된다.** 처음엔 "Failed to fetch"만 보여서 페이지별 CSP 문제로 오인하고, `https://wing.coupang.com/tenants/rfm/settlements/home` 페이지로 먼저 이동시키는 우회를 시도했지만(및 백그라운드에서 직접 fetch하는 시도도) 둘 다 실패했다. **`interceptor.js`에 요청 헤더까지 저장하도록 캡처를 확장(`saveSalesCapture`에 `headers` 인자 추가)해서 실제 정산현황 페이지가 보내는 요청을 헤더까지 캡처하고 나서야 원인이 드러났다**: 이 API는 세션 쿠키와는 별개로 **`x-xsrf-token` 헤더**를 요구하는 CSRF 이중제출 패턴을 쓴다 — 이 헤더가 없으면 서버가 `https://helpseller.coupang.com/access/logout`으로 리다이렉트시키고, 그 리다이렉트 응답에 CORS 헤더가 없어서 브라우저가 그냥 `"Failed to fetch"`로만 보여준 것(진짜 원인은 콘솔에 별도로 뜨는 CORS 에러 메시지에 있었다 — 요약 로그만 보고는 못 찾았음).
+
+**최종 해결책**: 쿠키 `XSRF-TOKEN` 값을 `document.cookie`로 읽어서 그대로 `x-xsrf-token` 헤더에 실어 보내면 된다(`extension/background.js`의 `pageFetchProfitStatus()`). 쿠키는 페이지 컨텍스트에서만 읽히므로(백그라운드 서비스워커에선 `document`가 없음) 반드시 `chrome.scripting.executeScript`로 페이지 안에서 호출해야 한다 — **페이지 이동(정산현황 페이지로 갈 필요)은 불필요했다**, 인증 헤더만 맞으면 WING 탭이 어느 페이지에 있든 호출된다(`sold-vendor-item-list`와 동일). **다른 WING 내부 API를 새로 추가할 때 "Failed to fetch"를 만나면, 페이지 이동보다 먼저 이 패턴(요청 헤더 캡처 → `x-xsrf-token` 같은 CSRF 헤더 누락 의심)부터 확인할 것.**
+
+덤으로 `POST /tenants/rfm/v2/settlements/upcoming-settlement/search`(바디: `{"currentDate":"...Z"}`)도 같이 발견함 — 앞으로 들어올 정산 스케줄(주 단위, `settlementPeriodStartDate/EndDate`, `paymentRatio`, `paymentAmount`, `finalSettlementAmount` 등)을 준다. 판매현황과는 성격이 달라서(현금흐름 예정표) 이번 작업엔 안 쓰지만, 나중에 "정산 예정" 같은 별도 페이지를 만들 때 쓸 수 있음. 캡처된 요청 헤더를 보면 이것도 같은 `x-xsrf-token`을 쓰므로, 나중에 붙일 때 `pageFetchProfitStatus()`와 똑같은 패턴(쿠키에서 토큰 읽어 헤더에 싣기)을 그대로 쓰면 됨.
+
+**구현 완료·실사용 검증됨(2026-08-15).** 판매현황 탭에서 실제로 "정산 M건"이 0이 아닌 값으로 뜨는 것까지 사용자가 최종 확인함. `rocket_growth_profit_daily`(`db/migrations/010`)에 저장되고, `web/app.js`의 `renderProfitSummary()`가 표 위 카드로 보여준다.
 
 ### 4-5. 이익 계산에 필요한 나머지 조각
 원가는 애초에 쿠팡 API 어디에도 없다 — 이미 있는 `user_items.cost_cny`를 써야 한다. 주문 API의 `vendorItemId`로 `product_items.vendor_item_id`를 조인하면 연결된다. 마진 계산은 3번의 `calcMargin()`을 그대로 재사용(별도 계산식 새로 만들지 말 것 — `web/CLAUDE.md` 규칙).
