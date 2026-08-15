@@ -305,16 +305,17 @@ function calcMargin(o) {
     : null;
 
   if (costKrw === null) {
-    return { commission, fulfillment, settlement, cost: null, margin: null, rate: null };
+    return { commission, fulfillment, settlement, cost: null, margin: null, shipWork: null, rate: null };
   }
 
   const outbound = num(o.outbound) ?? settings.outbound;
   const work = num(o.work) ?? settings.work;
-  const margin = settlement - costKrw - outbound - work;
+  const shipWork = outbound + work;
+  const margin = settlement - costKrw - shipWork;
 
   return {
     commission, fulfillment, settlement,
-    cost: costKrw, margin,
+    cost: costKrw, shipWork, margin,
     rate: Math.round(margin / price * 1000) / 10
   };
 }
@@ -1345,110 +1346,38 @@ async function loadSales() {
   if (synced) await fetchAndRenderSales(fromEl.value, toEl.value);
 }
 
-function renderProfitSummary(rows) {
-  const card = $('#salesProfitCard');
-  if (!rows.length) {
-    card.classList.add('hidden');
-    return;
-  }
-
-  const sum = (key) => rows.reduce((s, r) => s + (r[key] || 0), 0);
-  const netSales = sum('net_sales_amount');
-  const commission = sum('commission_amount');
-  const fulfillment = sum('fulfillment_amount');
-  const coupon = sum('coupon_amount');
-  const ad = sum('ad_amount');
-  const milkrun = sum('milkrun_amount');
-  const profit = sum('profit_amount');
-  const ratio = netSales ? (profit / netSales * 100) : 0;
-
-  $('#profitNetSales').textContent = won(netSales);
-  $('#profitCommission').textContent = won(commission);
-  $('#profitFulfillment').textContent = won(fulfillment);
-  $('#profitCoupon').textContent = won(coupon);
-  $('#profitAd').textContent = won(ad);
-  $('#profitMilkrun').textContent = won(milkrun);
-  $('#profitAmount').innerHTML = `<span class="${profit >= 0 ? 'pos' : 'neg'}">${profit.toLocaleString()}원</span>`;
-  $('#profitRatio').textContent = `이익률 ${ratio.toFixed(1)}%`;
-  card.classList.remove('hidden');
+/* ===================== 판매현황 — 날짜 유틸 =====================
+   sale_date는 'YYYY-MM-DD' 캘린더 날짜 문자열이라, 요일·월 경계 계산은
+   타임존과 무관하게 UTC 자정으로 다뤄도 KST로 해석한 것과 같은 결과가 나온다. */
+function addDaysStr(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
 }
-
-async function fetchAndRenderSales(fromDate, toDate) {
-  $('#salesMsg').classList.add('hidden');
-  $('#salesStats').classList.add('hidden');
-  $('#salesEmpty').classList.add('hidden');
-  $('#salesBody').innerHTML = '';
-  $('#salesLoader').classList.remove('hidden');
-
-  try {
-    const [grossRows, wingRows, profitRows] = await Promise.all([
-      api(
-        `rocket_growth_sales_daily?select=sale_date,vendor_item_id,product_name,quantity,revenue` +
-        `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
-      ),
-      api(
-        `rocket_growth_sales_wing_daily?select=sale_date,vendor_item_id,product_name,quantity,revenue` +
-        `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
-      ),
-      api(
-        `rocket_growth_profit_daily?select=net_sales_amount,commission_amount,fulfillment_amount,` +
-        `coupon_amount,ad_amount,milkrun_amount,profit_amount` +
-        `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
-      )
-    ]);
-
-    renderProfitSummary(profitRows || []);
-
-    // 같은 (날짜, 옵션)이면 WING 값(반품 반영)이 Open API 값(반품 미반영)보다 우선한다
-    const merged = {};
-    (grossRows || []).forEach((r) => { merged[r.sale_date + '|' + r.vendor_item_id] = r; });
-    (wingRows || []).forEach((r) => { merged[r.sale_date + '|' + r.vendor_item_id] = r; });
-
-    const rangeTxt = fromDate === toDate ? fromDate : `${fromDate} ~ ${toDate}`;
-    const hasWing = wingRows && wingRows.length > 0;
-    $('#salesSummary').textContent = `${rangeTxt} 기준 (로켓그로스 Open API${hasWing ? ' + WING 반품 반영' : ''})`;
-
-    const byVendorItem = {};
-    Object.values(merged).forEach((r) => {
-      const cur = (byVendorItem[r.vendor_item_id] = byVendorItem[r.vendor_item_id] ||
-        { vendorItemId: r.vendor_item_id, productName: r.product_name, quantity: 0, revenue: 0 });
-      cur.quantity += r.quantity;
-      cur.revenue += r.revenue;
-    });
-    const items = Object.values(byVendorItem);
-
-    const totalQuantity = items.reduce((s, it) => s + it.quantity, 0);
-    const totalRevenue = items.reduce((s, it) => s + it.revenue, 0);
-    $('#statQuantity').textContent = cnt(totalQuantity);
-    $('#statRevenue').textContent = won(totalRevenue);
-
-    if (!items.length) {
-      $('#statCommission').textContent = '—';
-      $('#statFulfillment').textContent = '—';
-      $('#statMargin').textContent = '—';
-      $('#statMarginNote').textContent = '';
-      $('#salesStats').classList.remove('hidden');
-      $('#salesEmpty').classList.remove('hidden');
-      return;
-    }
-
-    await renderSales(items);
-  } catch (e) {
-    $('#salesMsg').textContent = '판매현황을 불러오지 못했습니다: ' + e.message;
-    $('#salesMsg').classList.remove('hidden');
-  } finally {
-    $('#salesLoader').classList.add('hidden');
-  }
+function dateRangeList(fromStr, toStr) {
+  const out = [];
+  for (let d = fromStr; d <= toStr; d = addDaysStr(d, 1)) out.push(d);
+  return out;
 }
+function mondayOnOrBefore(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=일 .. 6=토
+  return addDaysStr(dateStr, -(dow === 0 ? 6 : dow - 1));
+}
+function startOfMonthStr(dateStr) { return dateStr.slice(0, 8) + '01'; }
 
-async function renderSales(items) {
-  const vendorItemIds = items.map((it) => it.vendorItemId);
+/* vendorItemId → 카테고리/원가 메타. 일별집계(buildDailyRow)와 상품별 표(renderSales)가
+   공유한다 — product_items/products/user_items 조회를 범위당 한 번만 하기 위함. */
+async function loadItemMeta(vendorItemIds) {
+  const meta = {};
+  if (!vendorItemIds.length) return meta;
 
   const pItemsRaw = await api(
     `product_items?select=item_id,vendor_item_id,product_id&vendor_item_id=in.(${vendorItemIds.map(encodeURIComponent).join(',')})`
   ) || [];
-  const byVendorItem = {};
-  pItemsRaw.forEach((r) => { byVendorItem[r.vendor_item_id] = r; });
+  const linkByVendorItem = {};
+  pItemsRaw.forEach((r) => { linkByVendorItem[r.vendor_item_id] = r; });
 
   const productIds = Array.from(new Set(pItemsRaw.map((r) => r.product_id).filter(Boolean)));
   const itemIds = pItemsRaw.map((r) => r.item_id).filter(Boolean);
@@ -1461,56 +1390,288 @@ async function renderSales(items) {
       ? api(`user_items?select=item_id,cost_cny,exchange_rate,outbound_fee,work_fee,size_type&item_id=in.(${itemIds.map(encodeURIComponent).join(',')})`)
       : []
   ]);
-
   const catByProduct = {};
   (productsRaw || []).forEach((p) => { catByProduct[p.product_id] = p.category_code; });
   const userItemByItem = {};
   (userItemsRaw || []).forEach((u) => { userItemByItem[u.item_id] = u; });
 
-  await state.readyForMargins; // feeCache 로딩 대기 (enterApp에서 이미 시작됨)
-
-  let totalCommission = 0, totalFulfillment = 0, totalMargin = 0, costedCount = 0, noCommissionCount = 0;
-
-  const rows = items.map((it) => {
-    const link = byVendorItem[it.vendorItemId];
+  vendorItemIds.forEach((vid) => {
+    const link = linkByVendorItem[vid];
     const itemId = link && link.item_id;
     const productId = link && link.product_id;
-    const catCode = productId ? catByProduct[productId] : null;
     const u = (itemId && userItemByItem[itemId]) || {};
+    meta[vid] = {
+      catCode: productId ? catByProduct[productId] : null,
+      size: u.size_type || settings.size,
+      costCny: u.cost_cny, exchangeRate: u.exchange_rate,
+      outboundFee: u.outbound_fee, workFee: u.work_fee
+    };
+  });
+  return meta;
+}
 
+/* 하루치 옵션별 판매(items)를 확정 정산(confirmed, 있으면)과 합쳐 한 줄로 만든다.
+   확정 정산에 있는 필드(수수료/입출고비/쿠폰/밀크런/순이익/매출)는 WING 확정값을 그대로 쓰고,
+   없으면(주로 오늘 — 정산 인식이 D-1 지연) 카테고리 요율+요금표 추정으로 채운다.
+   원가·배송/작업비·영업이익은 정산현황 API 자체에 없는 필드라 항상 옵션별 추정
+   (user_items.cost_cny 등, calcMargin() 재사용)으로만 계산한다 — 확정/추정 여부와 무관. */
+function buildDailyRow(date, items, meta, confirmed) {
+  let quantity = 0, itemRevenue = 0;
+  let estCommission = 0, estFulfillment = 0, estSettlement = 0;
+  let cost = 0, shipWork = 0, opProfit = 0, costedQty = 0;
+
+  items.forEach((it) => {
+    quantity += it.quantity;
+    itemRevenue += it.revenue;
+    const m = meta[it.vendor_item_id] || {};
     const avgPrice = it.quantity ? it.revenue / it.quantity : 0;
-    const size = u.size_type || settings.size;
-    const fee = catCode ? feeFor(catCode, size, avgPrice) : null;
-    const commissionRate = commissionFor(catCode);
+    const commissionRate = commissionFor(m.catCode);
+    const fee = m.catCode ? feeFor(m.catCode, m.size, avgPrice) : null;
+    if (commissionRate == null) return;
+    const c = calcMargin({
+      price: avgPrice, commission: commissionRate, fulfillment: fee,
+      costCny: m.costCny, rate: m.exchangeRate, outbound: m.outboundFee, work: m.workFee
+    });
+    if (!c) return;
+    estCommission += c.commission * it.quantity;
+    estSettlement += c.settlement * it.quantity;
+    if (fee != null) estFulfillment += fee * it.quantity;
+    if (c.margin != null) {
+      cost += c.cost * it.quantity;
+      shipWork += c.shipWork * it.quantity;
+      opProfit += c.margin * it.quantity;
+      costedQty += it.quantity;
+    }
+  });
+
+  const hasConfirmed = !!confirmed;
+  const revenue = hasConfirmed ? confirmed.net_sales_amount : itemRevenue;
+  const netProfit = hasConfirmed ? confirmed.profit_amount : estSettlement;
+  const hasCost = costedQty > 0;
+
+  return {
+    date, quantity, revenue,
+    commission: hasConfirmed ? confirmed.commission_amount : estCommission,
+    fulfillment: hasConfirmed ? confirmed.fulfillment_amount : estFulfillment,
+    coupon: hasConfirmed ? confirmed.coupon_amount : 0,
+    milkrun: hasConfirmed ? confirmed.milkrun_amount : 0,
+    netProfit,
+    cost: hasCost ? cost : null,
+    shipWork: hasCost ? shipWork : null,
+    operatingProfit: hasCost ? (netProfit - cost - shipWork) : null,
+    confirmed: hasConfirmed, itemRevenue
+  };
+}
+
+/* fromDate~toDate 범위의 옵션별 판매(gross+wing 병합)와 확정 정산을 한 번에 불러와
+   날짜별로 묶는다. 상단 고정기간 카드·일별 상세표·상품별 상세표가 이 결과 하나를 공유한다. */
+async function fetchSalesRange(fromDate, toDate) {
+  const [grossRows, wingRows, profitRows] = await Promise.all([
+    api(
+      `rocket_growth_sales_daily?select=sale_date,vendor_item_id,product_name,quantity,revenue` +
+      `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
+    ),
+    api(
+      `rocket_growth_sales_wing_daily?select=sale_date,vendor_item_id,product_name,quantity,revenue` +
+      `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
+    ),
+    api(
+      `rocket_growth_profit_daily?select=sale_date,net_sales_amount,commission_amount,fulfillment_amount,` +
+      `coupon_amount,ad_amount,milkrun_amount,profit_amount` +
+      `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
+    )
+  ]);
+
+  // 같은 (날짜, 옵션)이면 WING 값(반품 반영)이 Open API 값(반품 미반영)보다 우선한다
+  const merged = {};
+  (grossRows || []).forEach((r) => { merged[r.sale_date + '|' + r.vendor_item_id] = r; });
+  (wingRows || []).forEach((r) => { merged[r.sale_date + '|' + r.vendor_item_id] = r; });
+
+  const byDate = {};
+  Object.values(merged).forEach((r) => {
+    (byDate[r.sale_date] = byDate[r.sale_date] || []).push(r);
+  });
+
+  const profitByDate = {};
+  (profitRows || []).forEach((r) => { profitByDate[r.sale_date] = r; });
+
+  const vendorItemIds = Array.from(new Set(Object.values(merged).map((r) => r.vendor_item_id)));
+
+  return { byDate, profitByDate, vendorItemIds, hasWing: (wingRows || []).length > 0 };
+}
+
+function sumDailyRows(dailyRows) {
+  const revenue = dailyRows.reduce((s, r) => s + r.revenue, 0);
+  const coupon = dailyRows.reduce((s, r) => s + r.coupon, 0);
+  const netProfit = dailyRows.reduce((s, r) => s + r.netProfit, 0);
+  const costedRows = dailyRows.filter((r) => r.operatingProfit != null);
+  const operatingProfit = costedRows.length ? costedRows.reduce((s, r) => s + r.operatingProfit, 0) : null;
+  return { revenueNetCoupon: revenue - coupon, netProfit, operatingProfit };
+}
+
+/* 상단 고정기간 카드(이번 달/이번 주/최근 7일/오늘) — 조회 기간 선택과 무관하게 항상 표시.
+   매출은 항상 확정 쿠폰비를 뺀 금액(사용자 요청). */
+function renderPeriodCards(dailyByDate, todayStr) {
+  const periods = [
+    { label: '이번 달', from: startOfMonthStr(todayStr), to: todayStr },
+    { label: '이번 주', from: mondayOnOrBefore(todayStr), to: todayStr },
+    { label: '최근 7일', from: addDaysStr(todayStr, -6), to: todayStr },
+    { label: '오늘', from: todayStr, to: todayStr }
+  ];
+
+  $('#periodBody').innerHTML = periods.map((p) => {
+    const rows = dateRangeList(p.from, p.to).map((d) => dailyByDate[d]).filter(Boolean);
+    const s = sumDailyRows(rows);
+    return `
+<tr>
+  <td>${p.label}</td>
+  <td class="col-num" data-label="매출(쿠폰 제외)">${won(s.revenueNetCoupon)}</td>
+  <td class="col-num" data-label="순수익"><span class="${s.netProfit >= 0 ? 'pos' : 'neg'}">${s.netProfit.toLocaleString()}원</span></td>
+  <td class="col-num" data-label="영업이익">${
+    s.operatingProfit != null
+      ? `<span class="${s.operatingProfit >= 0 ? 'pos' : 'neg'}">${s.operatingProfit.toLocaleString()}원</span>`
+      : '<span class="dim">원가 입력 필요</span>'
+  }</td>
+</tr>`;
+  }).join('');
+}
+
+/* 조회 기간(salesFrom~salesTo)만 표시하는 일별 상세표. */
+function renderDailyTable(dailyByDate, fromDate, toDate) {
+  const dates = dateRangeList(fromDate, toDate).slice().reverse(); // 최신 날짜가 위로
+  const rows = dates.map((d) => dailyByDate[d]).filter(Boolean);
+
+  $('#dailyEmpty').classList.toggle('hidden', rows.length > 0);
+  $('#dailyBody').innerHTML = rows.map((r) => `
+<tr>
+  <td data-label="날짜">${r.date}</td>
+  <td class="col-num" data-label="판매수량">${cnt(r.quantity)}</td>
+  <td class="col-num" data-label="매출">${won(r.revenue)}</td>
+  <td class="col-num" data-label="수수료">${won(r.commission)}</td>
+  <td class="col-num" data-label="입출고비">${won(r.fulfillment)}</td>
+  <td class="col-num" data-label="쿠폰비">${won(r.coupon)}</td>
+  <td class="col-num" data-label="밀크런">${won(r.milkrun)}</td>
+  <td class="col-num" data-label="순이익"><span class="${r.netProfit >= 0 ? 'pos' : 'neg'}">${r.netProfit.toLocaleString()}원</span></td>
+  <td class="col-num" data-label="원가">${r.cost != null ? won(r.cost) : '<span class="dim">—</span>'}</td>
+  <td class="col-num" data-label="배송·작업비">${r.shipWork != null ? won(r.shipWork) : '<span class="dim">—</span>'}</td>
+  <td class="col-num" data-label="영업이익">${
+    r.operatingProfit != null
+      ? `<span class="${r.operatingProfit >= 0 ? 'pos' : 'neg'}">${r.operatingProfit.toLocaleString()}원</span>`
+      : '<span class="dim">원가 입력 필요</span>'
+  }</td>
+</tr>`).join('');
+}
+
+/* 정산현황 API는 계정 전체 합계만 주고 어떤 상품이 팔렸는지는 없다(docs/api-notes.md 4-4-4) —
+   그래서 상품별 합산 매출과 정산 매출을 서로 다른 소스에서 각각 만들 수밖에 없고, 둘이
+   구조적으로 100% 일치할 보장이 없다. 조회 기간 안에 확정 정산이 있는 날짜만 골라 두 값을
+   대조해서 보여준다 — 나중에 상품별 집계 로직을 손볼 때 어디서 얼마나 어긋나는지 바로 보이게. */
+function renderReconcileNote(dailyByDate, fromDate, toDate) {
+  const note = $('#salesReconcileNote');
+  const rows = dateRangeList(fromDate, toDate).map((d) => dailyByDate[d]).filter((r) => r && r.confirmed);
+  if (!rows.length) { note.classList.add('hidden'); return; }
+
+  const itemSum = rows.reduce((s, r) => s + r.itemRevenue, 0);
+  const settleSum = rows.reduce((s, r) => s + r.revenue, 0);
+  const diff = itemSum - settleSum;
+  if (Math.abs(diff) < 1) { note.classList.add('hidden'); return; }
+
+  note.textContent =
+    `대조: 확정 정산이 있는 ${rows.length}일 기준 — 옵션별 합산 매출 ${itemSum.toLocaleString()}원 vs ` +
+    `정산현황 매출 ${settleSum.toLocaleString()}원 (차이 ${diff.toLocaleString()}원). ` +
+    `아래 상품/옵션별 표와 정산 요약이 서로 다른 API를 집계한 값이라 생기는 차이일 수 있음.`;
+  note.classList.remove('hidden');
+}
+
+async function fetchAndRenderSales(fromDate, toDate) {
+  $('#salesMsg').classList.add('hidden');
+  $('#dailyEmpty').classList.add('hidden');
+  $('#dailyBody').innerHTML = '';
+  $('#salesEmpty').classList.add('hidden');
+  $('#salesBody').innerHTML = '';
+  $('#salesLoader').classList.remove('hidden');
+  $('#dailyLoader').classList.remove('hidden');
+
+  try {
+    const todayStr = kstDateStr(new Date());
+    // 상단 고정기간 카드(이번 달 등)까지 커버하도록 조회 범위를 필요한 만큼 넓힌다
+    const fetchFrom = [startOfMonthStr(todayStr), mondayOnOrBefore(todayStr), addDaysStr(todayStr, -6), fromDate].sort()[0];
+    const fetchTo = toDate > todayStr ? toDate : todayStr;
+
+    const { byDate, profitByDate, vendorItemIds, hasWing } = await fetchSalesRange(fetchFrom, fetchTo);
+
+    await state.readyForMargins; // feeCache 로딩 대기 (enterApp에서 이미 시작됨)
+    const meta = await loadItemMeta(vendorItemIds);
+
+    const dailyByDate = {};
+    dateRangeList(fetchFrom, fetchTo).forEach((d) => {
+      dailyByDate[d] = buildDailyRow(d, byDate[d] || [], meta, profitByDate[d]);
+    });
+
+    renderPeriodCards(dailyByDate, todayStr);
+    renderDailyTable(dailyByDate, fromDate, toDate);
+    renderReconcileNote(dailyByDate, fromDate, toDate);
+
+    const rangeTxt = fromDate === toDate ? fromDate : `${fromDate} ~ ${toDate}`;
+    $('#salesSummary').textContent = `${rangeTxt} 기준 (로켓그로스 Open API${hasWing ? ' + WING 반품 반영' : ''})`;
+
+    // 상품/옵션별 표는 선택한 기간(fromDate~toDate)만 옵션 단위로 다시 합산
+    const rangeByVendorItem = {};
+    dateRangeList(fromDate, toDate).forEach((d) => {
+      (byDate[d] || []).forEach((r) => {
+        const cur = (rangeByVendorItem[r.vendor_item_id] = rangeByVendorItem[r.vendor_item_id] ||
+          { vendorItemId: r.vendor_item_id, productName: r.product_name, quantity: 0, revenue: 0 });
+        cur.quantity += r.quantity;
+        cur.revenue += r.revenue;
+      });
+    });
+    const items = Object.values(rangeByVendorItem);
+
+    if (!items.length) {
+      $('#salesEmpty').classList.remove('hidden');
+      return;
+    }
+
+    renderSales(items, meta);
+  } catch (e) {
+    $('#salesMsg').textContent = '판매현황을 불러오지 못했습니다: ' + e.message;
+    $('#salesMsg').classList.remove('hidden');
+  } finally {
+    $('#salesLoader').classList.add('hidden');
+    $('#dailyLoader').classList.add('hidden');
+  }
+}
+
+function renderSales(items, meta) {
+  let costedCount = 0, noCommissionCount = 0;
+
+  const rows = items.map((it) => {
+    const m = meta[it.vendorItemId] || {};
+    const avgPrice = it.quantity ? it.revenue / it.quantity : 0;
+    const fee = m.catCode ? feeFor(m.catCode, m.size, avgPrice) : null;
+    const commissionRate = commissionFor(m.catCode);
 
     if (commissionRate == null) { noCommissionCount++; return { it, noCommission: true }; }
 
     const c = calcMargin({
       price: avgPrice, commission: commissionRate, fulfillment: fee,
-      costCny: u.cost_cny, rate: u.exchange_rate,
-      outbound: u.outbound_fee, work: u.work_fee
+      costCny: m.costCny, rate: m.exchangeRate, outbound: m.outboundFee, work: m.workFee
     });
 
     const commissionSum = c ? c.commission * it.quantity : null;
     const fulfillmentSum = (fee != null) ? fee * it.quantity : null;
     const marginSum = (c && c.margin !== null) ? c.margin * it.quantity : null;
 
-    if (commissionSum != null) totalCommission += commissionSum;
-    if (fulfillmentSum != null) totalFulfillment += fulfillmentSum;
-    if (marginSum != null) { totalMargin += marginSum; costedCount++; }
+    if (marginSum != null) costedCount++;
 
     return { it, commissionSum, fulfillmentSum, marginSum, commissionRate };
   });
 
-  $('#statCommission').textContent = won(totalCommission);
-  $('#statFulfillment').textContent = won(totalFulfillment);
-  $('#statMargin').innerHTML = `<span class="${totalMargin >= 0 ? 'pos' : 'neg'}">${totalMargin.toLocaleString()}원</span>`;
   const uncosted = items.length - costedCount - noCommissionCount;
   const notes = [];
   if (uncosted > 0) notes.push(`원가 미입력 상품 ${uncosted}개`);
   if (noCommissionCount > 0) notes.push(`수수료 정보 없는 상품 ${noCommissionCount}개`);
-  $('#statMarginNote').textContent = notes.length ? `${notes.join(' · ')}는 이익 합계에서 제외됨` : '';
-  $('#salesStats').classList.remove('hidden');
+  $('#salesTableNote').textContent = notes.length ? `${notes.join(' · ')}는 이익 합계에서 제외됨` : '';
 
   $('#salesBody').innerHTML = rows.map((r) => {
     const { it } = r;
@@ -1518,22 +1679,22 @@ async function renderSales(items) {
       return `
 <tr>
   <td>${esc(it.productName || '(이름 없음)')}</td>
-  <td class="col-num">${cnt(it.quantity)}</td>
-  <td class="col-num">${won(it.revenue)}</td>
-  <td class="col-num"><span class="dim">수수료 정보 없음</span></td>
-  <td class="col-num"><span class="dim">수수료 정보 없음</span></td>
-  <td class="col-num"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num" data-label="판매수량">${cnt(it.quantity)}</td>
+  <td class="col-num" data-label="매출">${won(it.revenue)}</td>
+  <td class="col-num" data-label="추정 수수료"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num" data-label="추정 입출고비"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num" data-label="추정 이익"><span class="dim">수수료 정보 없음</span></td>
 </tr>`;
     }
     const { commissionSum, fulfillmentSum, marginSum, commissionRate } = r;
     return `
 <tr>
   <td>${esc(it.productName || '(이름 없음)')}</td>
-  <td class="col-num">${cnt(it.quantity)}</td>
-  <td class="col-num">${won(it.revenue)}</td>
-  <td class="col-num">${commissionSum != null ? `${won(Math.round(commissionSum))} (${commissionRate}%)` : '—'}</td>
-  <td class="col-num">${fulfillmentSum != null ? won(Math.round(fulfillmentSum)) : '<span class="dim">요금표 없음</span>'}</td>
-  <td class="col-num">${
+  <td class="col-num" data-label="판매수량">${cnt(it.quantity)}</td>
+  <td class="col-num" data-label="매출">${won(it.revenue)}</td>
+  <td class="col-num" data-label="추정 수수료">${commissionSum != null ? `${won(Math.round(commissionSum))} (${commissionRate}%)` : '—'}</td>
+  <td class="col-num" data-label="추정 입출고비">${fulfillmentSum != null ? won(Math.round(fulfillmentSum)) : '<span class="dim">요금표 없음</span>'}</td>
+  <td class="col-num" data-label="추정 이익">${
     marginSum != null
       ? `<span class="${marginSum >= 0 ? 'pos' : 'neg'}">${Math.round(marginSum).toLocaleString()}원</span>`
       : '<span class="dim">원가 입력 필요</span>'

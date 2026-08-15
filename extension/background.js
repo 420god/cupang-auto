@@ -100,8 +100,16 @@ function pageFetchSoldVendorItems(dateStr) {
    CORS 없이 오다 보니 그냥 "Failed to fetch"로만 보였다(docs/api-notes.md 4-4-4).
    쿠키는 페이지 컨텍스트에서만 읽을 수 있어서(document.cookie) 백그라운드에서
    직접 fetch하는 방식(더 간단해 보였던)은 포기하고 페이지 주입으로 되돌아왔다.
-   recognitionDateFrom/To는 UTC "T15:00:00.000Z"가 KST 자정 경계다(실측 확인) —
-   dateStr 하루를 감싸려면 전날 T15:00Z ~ 당일 T15:00Z. */
+   recognitionDateFrom/To는 둘 다 "(dateStr-1)일 T15:00:00.000Z"로 같은 값을 넣는다
+   (2026-08-15, WING 정산현황 위젯에서 하루만 선택했을 때 실제로 보내는 요청을 캡처해서
+   확인 — 처음엔 "전날 T15:00Z ~ 당일 T15:00Z"로 반나절 뒤 값을 recognitionDateTo에
+   넣었었는데, 그러면 다음날 데이터까지 같이 잡혀서 하루치 조회가 이틀치로 부풀었다.
+   원인 추정: 서버가 두 타임스탬프를 KST 캘린더 날짜로 변환해서 그 날짜 범위를
+   inclusive하게 조회하는 것으로 보이는데, "당일 T15:00Z"는 KST로 변환하면 이미
+   다음날 00:00:00 정각이라 다음날 날짜로 잡혀버림. recognitionDateTo를
+   recognitionDateFrom과 완전히 같은 값으로 맞추면(둘 다 "dateStr일 KST 00:00 정각"에
+   해당하는 UTC 시각) 그 날짜 하나만 잡힌다 — WING 자체 프론트가 쓰는 방식 그대로.
+   자세한 발견 경위는 docs/api-notes.md 4-4-5. */
 function pageFetchProfitStatus(dateStr) {
   return (async () => {
     try {
@@ -123,7 +131,7 @@ function pageFetchProfitStatus(dateStr) {
         headers,
         body: JSON.stringify({
           recognitionDateFrom: `${fromDateStr}T15:00:00.000Z`,
-          recognitionDateTo: `${dateStr}T15:00:00.000Z`
+          recognitionDateTo: `${fromDateStr}T15:00:00.000Z`
         })
       });
       const text = await res.text();

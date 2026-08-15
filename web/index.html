@@ -121,8 +121,35 @@
         <div class="page-head">
           <div>
             <h2>판매현황</h2>
-            <p class="muted sm" id="salesSummary">오늘 (로켓그로스 Open API)</p>
             <p class="muted xs hidden" id="salesSyncStatus"></p>
+          </div>
+        </div>
+
+        <div class="hint-box">
+          확정 정산(WING)이 있는 날짜는 수수료·입출고비·쿠폰비·밀크런·순이익을 그대로 쓰고,
+          없는 날짜(주로 오늘 — 정산 인식이 하루 지연됨)는 카테고리 실제 요율+요금표로 추정합니다.
+          <b>원가·배송/작업비·영업이익은 정산현황 API 자체에 없는 값이라 항상 옵션별 추정</b>입니다
+          (사이즈·원가 미입력 옵션은 이익 합계에서 빠집니다).
+        </div>
+
+        <div class="table-wrap period-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>기간</th>
+                <th class="col-num">매출 (쿠폰비 제외)</th>
+                <th class="col-num">순수익</th>
+                <th class="col-num">영업이익</th>
+              </tr>
+            </thead>
+            <tbody id="periodBody"></tbody>
+          </table>
+        </div>
+
+        <div class="page-head sales-detail-head">
+          <div>
+            <h3>일별 상세</h3>
+            <p class="muted sm" id="salesSummary">오늘 (로켓그로스 Open API)</p>
           </div>
           <div class="page-actions sales-range">
             <div class="sales-presets">
@@ -138,71 +165,35 @@
           </div>
         </div>
 
-        <div class="hint-box">
-          판매수수료는 카테고리별 실제 요율을 적용합니다. 입출고비·이익은 쿠팡이 확정 정산액을
-          실시간으로 제공하지 않아 <b>요금표 기준 추정치</b>입니다. 실제 정산액과 다를 수 있습니다.
-        </div>
-
-        <div id="salesProfitCard" class="hidden">
-          <p class="muted sm">확정 정산 요약 (WING, 정산 인식 지연으로 최근 1~2일은 비어있을 수 있음)</p>
-          <div class="stat-grid">
-            <div class="stat-card">
-              <div class="stat-label">확정 순매출</div>
-              <div class="stat-value" id="profitNetSales">—</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">확정 수수료</div>
-              <div class="stat-value" id="profitCommission">—</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">확정 입출고비</div>
-              <div class="stat-value" id="profitFulfillment">—</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">확정 쿠폰</div>
-              <div class="stat-value" id="profitCoupon">—</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">확정 광고비</div>
-              <div class="stat-value" id="profitAd">—</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">확정 밀크런</div>
-              <div class="stat-value" id="profitMilkrun">—</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">확정 순이익</div>
-              <div class="stat-value" id="profitAmount">—</div>
-              <div class="stat-note muted xs" id="profitRatio"></div>
-            </div>
-          </div>
-        </div>
-
-        <div id="salesStats" class="stat-grid hidden">
-          <div class="stat-card">
-            <div class="stat-label">오늘 판매수량</div>
-            <div class="stat-value" id="statQuantity">—</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">오늘 매출</div>
-            <div class="stat-value" id="statRevenue">—</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">추정 수수료</div>
-            <div class="stat-value" id="statCommission">—</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">추정 입출고비</div>
-            <div class="stat-value" id="statFulfillment">—</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">추정 이익</div>
-            <div class="stat-value" id="statMargin">—</div>
-            <div class="stat-note muted xs" id="statMarginNote"></div>
-          </div>
-        </div>
-
         <div id="salesMsg" class="hint-box hidden"></div>
+
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>날짜</th>
+                <th class="col-num">판매수량</th>
+                <th class="col-num">매출</th>
+                <th class="col-num">수수료</th>
+                <th class="col-num">입출고비</th>
+                <th class="col-num">쿠폰비</th>
+                <th class="col-num">밀크런</th>
+                <th class="col-num">순이익</th>
+                <th class="col-num">원가</th>
+                <th class="col-num">배송·작업비</th>
+                <th class="col-num">영업이익</th>
+              </tr>
+            </thead>
+            <tbody id="dailyBody"></tbody>
+          </table>
+          <div id="dailyLoader" class="loader hidden"><div class="spinner"></div>불러오는 중…</div>
+          <div id="dailyEmpty" class="empty hidden"><p>선택한 기간에 판매 데이터가 없습니다</p></div>
+        </div>
+
+        <div id="salesReconcileNote" class="hint-box xs hidden"></div>
+
+        <p class="muted sm sales-sub-head">상품/옵션별 상세</p>
+        <p class="muted xs" id="salesTableNote"></p>
 
         <div class="table-wrap">
           <table class="grid">
@@ -219,7 +210,7 @@
             <tbody id="salesBody"></tbody>
           </table>
           <div id="salesLoader" class="loader hidden"><div class="spinner"></div>불러오는 중…</div>
-          <div id="salesEmpty" class="empty hidden"><p>오늘 판매된 상품이 없습니다</p></div>
+          <div id="salesEmpty" class="empty hidden"><p>선택한 기간에 판매된 상품이 없습니다</p></div>
         </div>
       </section>
 

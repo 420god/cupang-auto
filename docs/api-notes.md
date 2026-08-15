@@ -282,7 +282,24 @@ profitAmount          = totalSalesAmountWithRefund - totalDeductionAmount + tota
 
 덤으로 `POST /tenants/rfm/v2/settlements/upcoming-settlement/search`(바디: `{"currentDate":"...Z"}`)도 같이 발견함 — 앞으로 들어올 정산 스케줄(주 단위, `settlementPeriodStartDate/EndDate`, `paymentRatio`, `paymentAmount`, `finalSettlementAmount` 등)을 준다. 판매현황과는 성격이 달라서(현금흐름 예정표) 이번 작업엔 안 쓰지만, 나중에 "정산 예정" 같은 별도 페이지를 만들 때 쓸 수 있음. 캡처된 요청 헤더를 보면 이것도 같은 `x-xsrf-token`을 쓰므로, 나중에 붙일 때 `pageFetchProfitStatus()`와 똑같은 패턴(쿠키에서 토큰 읽어 헤더에 싣기)을 그대로 쓰면 됨.
 
-**구현 완료·실사용 검증됨(2026-08-15).** 판매현황 탭에서 실제로 "정산 M건"이 0이 아닌 값으로 뜨는 것까지 사용자가 최종 확인함. `rocket_growth_profit_daily`(`db/migrations/010`)에 저장되고, `web/app.js`의 `renderProfitSummary()`가 표 위 카드로 보여준다.
+**구현 완료·실사용 검증됨(2026-08-15).** 판매현황 탭에서 실제로 "정산 M건"이 0이 아닌 값으로 뜨는 것까지 사용자가 최종 확인함. `rocket_growth_profit_daily`(`db/migrations/010`)에 저장되고, `web/app.js`의 판매현황 일별표(`renderDailyTable()`)/상단 요약표(`renderPeriodCards()`)가 이 값을 읽어 보여준다(2026-08-15 UI 개편으로 `renderProfitSummary()` 카드는 없어졌음 — `web/CLAUDE.md` 참조).
+
+### 4-4-5. recognitionDateTo 경계 버그 — 하루치 조회가 다음날 데이터까지 합산하고 있었음 (2026-08-15, 발견·원인규명·수정 완료)
+
+사용자가 WING "수익 현황" 위젯에서 **2026-08-14 하루만** 선택해 실제 값(매출 60,000 / 비용 68,313 / 이익 −8,313)을 스크린샷으로 제시 → `rocket_growth_profit_daily`에 저장된 8/14 행과 대조해보니 **7개 필드 전부**에서 "저장된 8/14 값 − 저장된 8/15 값 = 위젯의 진짜 8/14 값"이 정확히 일치했다(순매출 91,800−31,800=60,000, 총공제 85,577−17,264=68,313, 광고비 37,508−0=37,508, 입출고비 36,810−15,160=21,650, 수수료 10,859−4,004=6,855, 쿠폰 400−(−1,900)=2,300, 이익 6,223−14,536=−8,313 — 전부 위젯값과 일치). 즉 **"8/14"로 조회한 결과가 사실 8/14+8/15 두 날짜 합산이었다.**
+
+**원인 확정(실측 캡처, 2026-08-15)** — 사용자가 WING 정산현황 페이지에서 하루(8/14)만 선택했을 때 WING 프론트 자신이 실제로 보낸 요청을 팝업 "판매현황 API 캡처 보기"로 캡처:
+```
+{"recognitionDateFrom":"2026-08-13T15:00:00.000Z","recognitionDateTo":"2026-08-13T15:00:00.000Z"}
+→ 응답: profitAmount:-8313, totalSalesAmountWithRefund:60000, totalDeductionAmount:68313,
+   totalAdDeduction:37508, totalCfsAmountWithVat:21650, totalTakeRateAmountWithVat:6855,
+   totalSellerDiscountAmount:2300  ← 위젯 스크린샷과 전부 정확히 일치
+```
+**WING 자신은 `recognitionDateFrom`과 `recognitionDateTo`에 완전히 같은 값을 넣는다** — 둘 다 "(대상일−1)일 T15:00:00.000Z"(=KST로 대상일 00:00:00 정각). 우리 `pageFetchProfitStatus()`는 `recognitionDateTo`에 `dateStr T15:00:00.000Z`(=KST로 **다음날** 00:00:00 정각)를 넣고 있었던 게 버그 — 서버가 두 타임스탬프를 KST 캘린더 날짜로 변환해서 그 날짜 범위를 inclusive하게 처리하는 것으로 보이는데, `recognitionDateTo`가 다음날 자정 정각이면 그 날짜(다음날)까지 포함돼버린 것. `recognitionDateFrom`은 애초에 대상일 자신의 00:00:00 정각이라 반대 방향(전날)으로는 새지 않았다.
+
+**"100% 검산"했다고 예전에 적었던 것(4-4-4 상단)은 항목 간 산술적 정합성만 확인한 것이지, 캘린더 경계가 실제로 정확한지는 검증한 적이 없었다** — 이번이 그 첫 검증이었고 어긋난다는 게 여기서 처음 드러났다.
+
+**수정 완료(2026-08-15)** — `extension/background.js`의 `pageFetchProfitStatus()`에서 `recognitionDateTo`를 `recognitionDateFrom`과 동일한 값(`${fromDateStr}T15:00:00.000Z`)으로 맞췄다. **과거 데이터 수동 백필 불필요** — 판매현황 탭을 다시 열면 "오늘+어제" 자동 재동기화로 최근 날짜는 저절로 덮어써진다. 이 버그가 있던 기간에 동기화된 더 과거 날짜(있다면)는 여전히 이틀치 합산값으로 남아있을 수 있음 — 발견 당시 DB엔 8/14·8/15 두 행만 있었으니 실질적으로 8/14 하나만 영향받았고 다음 재동기화로 자동 정정된다.
 
 ### 4-5. 이익 계산에 필요한 나머지 조각
 원가는 애초에 쿠팡 API 어디에도 없다 — 이미 있는 `user_items.cost_cny`를 써야 한다. 주문 API의 `vendorItemId`로 `product_items.vendor_item_id`를 조인하면 연결된다. 마진 계산은 3번의 `calcMargin()`을 그대로 재사용(별도 계산식 새로 만들지 말 것 — `web/CLAUDE.md` 규칙).

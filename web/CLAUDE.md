@@ -11,14 +11,27 @@ package.json api/용 npm 의존성(undici) — 프론트엔드는 여전히 완�
 
 Vercel에 **정적 파일 그대로** 올린다(플랫폼 확정, `../CLAUDE.md` 참조). 프레임워크·번들러 도입하지 말 것 — 사용자가 "복잡한 과정 없이"를 명시적으로 요구했다. `api/*.js`는 예외 — Vercel이 번들러 없이 그대로 서버리스 함수로 인식하는 기능이라 이 원칙과 안 부딪힌다.
 
-**판매현황 탭은 다른 탭들과 데이터 소스·계산 시점이 완전히 다르다** — 소싱/즐겨찾기/카테고리는 웹이 실시간으로 계산하지만, 판매현황(`loadSales()`/`fetchAndRenderSales()`)은 두 테이블을 읽기만 한다. `web/api/sales-today.js`는 그 이전 시도의 잔재로 지금은 아무것도 안 부른다 — 왜 이렇게 됐는지는 `../docs/decisions.md` 2026-08-13 항목.
+**판매현황 탭은 다른 탭들과 데이터 소스·계산 시점이 완전히 다르다** — 소싱/즐겨찾기/카테고리는 웹이 실시간으로 계산하지만, 판매현황은 미리 쌓인 테이블을 읽기만 한다. `web/api/sales-today.js`는 그 이전 시도의 잔재로 지금은 아무것도 안 부른다 — 왜 이렇게 됐는지는 `../docs/decisions.md` 2026-08-13 항목.
 
 **판매현황은 테이블이 세 개다(2026-08-15 추가) — 왜 안 합쳤는지 알아둘 것**:
 - `rocket_growth_sales_daily`: 공식 Open API 기반, GCP VPS가 무인 cron으로 채움. 항상 최신이지만 **반품이 반영 안 됨**(`docs/api-notes.md` 4-4-1).
 - `rocket_growth_sales_wing_daily`: WING 내부 API 기반(로그인 세션 필요), **반품이 순액으로 반영됨**(4-4-2), **옵션(vendorItemId)별**. 세션이 필요해서 무인 cron이 못 채우고, `extension/background.js`가 웹의 메시지 요청을 받아서 채운다.
-- `rocket_growth_profit_daily`: 역시 WING 내부 API 기반(4-4-4), **수수료·입출고비·쿠폰·광고비·밀크런까지 전부 확정값**. 단 **계정 전체 합계**만 나오고 옵션별로 안 쪼개진다 — 그래서 옵션별 표(`renderSales()`)에는 못 합치고, 표 위의 별도 "확정 정산 요약" 카드(`renderProfitSummary()`)로만 쓴다.
+- `rocket_growth_profit_daily`: 역시 WING 내부 API 기반(4-4-4), **수수료·입출고비·쿠폰·광고비·밀크런까지 전부 확정값**. 단 **계정 전체 합계**만 나오고 옵션별로 안 쪼개진다.
 
-`rocket_growth_sales_daily`와 `rocket_growth_sales_wing_daily`는 같은 `(sale_date, vendor_item_id)` 행이 있으면 `fetchAndRenderSales()`가 **wing 값을 우선**하고, wing 쪽에 없으면 daily(gross) 값으로 폴백한다 — 한 테이블로 합치지 않은 이유는 서로 다른 스크립트(무인 VPS cron vs. 사용자 브라우저의 확장프로그램)가 같은 컬럼에 동시에 쓰다가 경쟁하는 걸 피하기 위함(`db/CLAUDE.md`가 이미 이 원칙을 씀). `rocket_growth_profit_daily`는 폴백 대상이 없다 — 데이터 있는 날짜만 그대로 합산해서 보여주고, 없으면 카드 자체를 숨긴다(`renderProfitSummary()`가 `rows.length`로 판단).
+`rocket_growth_sales_daily`와 `rocket_growth_sales_wing_daily`는 같은 `(sale_date, vendor_item_id)` 행이 있으면 wing 값을 우선하고, wing 쪽에 없으면 daily(gross) 값으로 폴백한다(`fetchSalesRange()`) — 한 테이블로 합치지 않은 이유는 서로 다른 스크립트(무인 VPS cron vs. 사용자 브라우저의 확장프로그램)가 같은 컬럼에 동시에 쓰다가 경쟁하는 걸 피하기 위함(`db/CLAUDE.md`가 이미 이 원칙을 씀).
+
+**판매현황 UI는 3단 구조다(2026-08-15 개편)** — 조회 기간 선택과 무관하게 항상 고정된 기간(이번 달/이번 주/최근 7일/오늘)을 보여주는 **상단 요약표**(`renderPeriodCards()`), 사용자가 고른 기간을 날짜별로 한 줄씩 보여주는 **일별 상세표**(`renderDailyTable()`), 그리고 그 기간의 옵션별 합산을 보여주는 기존 **상품/옵션별 상세표**(`renderSales()`) 순서다. 셋 다 `fetchAndRenderSales()`가 한 번 호출하는 `fetchSalesRange()`+`loadItemMeta()`의 결과 하나를 공유한다(옵션당 DB 조회를 중복하지 않기 위함) — 새 화면 요소를 추가할 때도 이 두 함수의 결과를 재사용할 것, 별도로 다시 조회하지 말 것.
+
+**일별 한 줄(`buildDailyRow()`)의 필드별 출처가 다르다** — 이게 이 함수의 핵심이니 새로 건드릴 때 꼭 이해할 것:
+- 수수료/입출고비/쿠폰비/밀크런/순이익/매출: 그 날짜에 `rocket_growth_profit_daily`(확정 정산) 행이 있으면 그 값 그대로, 없으면(주로 오늘 — 정산 인식 D-1 지연 추정) 옵션별 `commissionFor()`+`feeFor()` 추정을 그 날의 옵션별 판매에 적용해 합산한 값으로 대체한다. **확정/추정 여부를 화면에 별도로 표시하지 않는다** — 사용자가 명시적으로 "따로 추정치라고 표시할 필요 없다"고 요청함(2026-08-15).
+- 원가/배송·작업비/영업이익: 정산현황 API 자체에 이 개념이 없어서(`docs/api-notes.md` 4-4-4) **항상** 옵션별 추정(`user_items.cost_cny` 등, `calcMargin()`)으로만 계산한다 — 그 날짜가 확정 정산이든 추정이든 상관없이 이 세 필드는 매번 옵션 단위로 다시 계산한다.
+- 그날 판매된 옵션 중 원가가 하나도 입력 안 됐으면(`costedQty === 0`) 원가/배송·작업비/영업이익은 `null`("원가 입력 필요")로 표시 — 일부만 입력됐으면 입력된 만큼만 합산한다(기존 `renderSales()`의 "부분 계산 허용" 관례를 그대로 따름).
+
+**상단 요약표의 "매출"은 항상 확정 쿠폰비를 뺀 값이다(사용자 요청)** — `sumDailyRows()`가 `revenue - coupon`을 계산해서 보여준다. 일별 상세표의 "매출" 칸은 쿠폰비를 빼지 않은 원래 값이고 "쿠폰비" 칸이 따로 있다 — 상단 요약과 하단 상세표에서 "매출"의 의미가 다르니 헷갈리지 말 것.
+
+**대조(reconciliation) 안내(`renderReconcileNote()`, 2026-08-15 신설)** — 정산현황 API는 계정 전체 합계만 주고 어떤 상품이 팔렸는지가 없어서, 상품별 합산 매출과 정산 매출은 서로 다른 API에서 각각 나온 값이라 구조적으로 100% 일치할 보장이 없다. 조회 기간 안에 확정 정산이 있는 날짜만 골라 "옵션별 합산 매출 vs 정산현황 매출"을 대조해서 차이가 나면 보여준다 — 실측해보니 실제로 매번 차이가 남(2026-08-15 확인, 원인 미조사·의도적으로 지금은 안 건드림). 상품별 표 쪽 로직을 손볼 때 이 안내를 참고해서 어디서 얼마나 어긋나는지 확인할 것.
+
+**옛 카드(`salesProfitCard`/`renderProfitSummary()`, `salesStats`)는 위 3단 구조로 완전히 대체되어 삭제됨(2026-08-15)** — 코드나 커밋 히스토리에서 이 이름을 보면 이미 없어진 것이니 되살리지 말 것.
 
 **`loadSales()`가 `syncSalesViaExtension()`을 매번 호출한다** — `chrome.runtime.sendMessage(SALES_EXT_ID, ...)`로 브라우저 확장프로그램(설치돼 있고 WING에 로그인돼 있다면)에게 "오늘+어제" 반품 데이터를 다시 동기화해달라고 요청한다. 확장프로그램이 없거나 응답이 없어도(일반 방문자, 다른 브라우저 등) 타임아웃 후 조용히 기존 방식으로 넘어간다 — **이 호출이 실패해도 판매현황 자체는 항상 정상 동작해야 한다**, 이 전제를 깨는 수정을 하지 말 것. `SALES_EXT_ID`는 확장프로그램의 크롬 ID(`chrome://extensions`에서 확인)라서 확장프로그램을 다른 폴더로 옮기거나 웹스토어에 정식 배포하면 바뀔 수 있음 — 그러면 이 상수도 같이 갱신해야 함.
 
@@ -35,8 +48,10 @@ Vercel에 **정적 파일 그대로** 올린다(플랫폼 확정, `../CLAUDE.md`
 ```javascript
 calcMargin({price, commission, fulfillment, costCny, rate, outbound, work})
 // commission이 null이면 통째로 null 반환(계산 자체를 안 함) — "수수료 정보 없음"
-// costCny가 null이면 margin/rate는 null, settlement까지는 반환됨 — "원가 입력 필요"
+// costCny가 null이면 margin/rate/shipWork는 null, settlement까지는 반환됨 — "원가 입력 필요"
 // 이 둘은 화면에서 서로 다른 문구로 구분해서 보여준다. 섞어서 하나로 뭉치지 말 것.
+// shipWork(=outbound+work, 2026-08-15 추가)는 판매현황 일별표의 "배송·작업비" 칸을 위해
+// margin과 별도로 빼둔 것 — margin 자체가 이미 이 값을 뺀 결과라 이중 계산 아님.
 ```
 
 **전역 기본 수수료율은 없다(2026-08-13 이후).** `commission`은 항상 `commissionFor(catCode)`(카테고리별 실제 요율, `state.catUnits[catCode].commission`)로 구해서 넘긴다 — `settings.commission` 같은 전역 폴백은 의도적으로 없앴다. 매칭 안 된 카테고리는 `commissionFor()`가 null을 반환하니, 호출부에서 `calcMargin()`을 부르기 전에 먼저 null 체크하고 "수수료 정보 없음"을 보여줄 것(소싱 옵션표/판매현황 표의 기존 4개 호출부가 이 패턴이다 — 새로 만들 때 그대로 따라할 것).
