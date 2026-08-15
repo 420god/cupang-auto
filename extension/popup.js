@@ -13,6 +13,7 @@ const treeRawBtn = document.getElementById('treeRawBtn');
 const diagCatBtn = document.getElementById('diagCatBtn');
 const inspectBtn = document.getElementById('inspectBtn');
 const consumerBtn = document.getElementById('consumerBtn');
+const salesBtn = document.getElementById('salesBtn');
 const productProbeBtn = document.getElementById('productProbeBtn');
 const urlTestBtn = document.getElementById('urlTestBtn');
 const resetDetailBtn = document.getElementById('resetDetailBtn');
@@ -126,6 +127,13 @@ function pageReadTemplateBody() {
     if (!body) return { ok: false };
     return { ok: true, body, headers };
   } catch (e) { return { ok: false }; }
+}
+
+function pageReadSalesCaptures() {
+  try {
+    const store = JSON.parse(sessionStorage.getItem('__cwc_sales_captures') || '{}');
+    return { ok: true, store: store && typeof store === 'object' ? store : {} };
+  } catch (e) { return { ok: true, store: {} }; }
 }
 
 function pageReadApiLog() {
@@ -2707,6 +2715,29 @@ inspectBtn.addEventListener('click', async () => {
   }
 });
 
+
+salesBtn.addEventListener('click', async () => {
+  try {
+    const tab = await getWingTab();
+    const results = await runInAllFrames(tab.id, pageReadSalesCaptures);
+    const store = {};
+    results.forEach((fr) => {
+      if (!fr || !fr.result || !fr.result.store) return;
+      Object.assign(store, fr.result.store);
+    });
+    const entries = Object.entries(store);
+    if (!entries.length) {
+      setStatus('캡처된 판매현황 API가 없습니다. WING 재고현황 페이지를 새로고침한 뒤 다시 시도하세요.', true);
+      return;
+    }
+    const text = entries.map(([path, c]) =>
+      `--- ${c.method} ${c.url}\n[요청 바디]\n${c.reqBody || '(없음)'}\n[응답]\n${c.resText || '(없음)'}`
+    ).join('\n\n');
+    setStatus(text);
+  } catch (err) {
+    setStatus('오류: ' + err.message, true);
+  }
+});
 
 consumerBtn.addEventListener('click', async () => {
   try {

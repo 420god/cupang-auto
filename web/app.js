@@ -1254,7 +1254,71 @@ $('#queueRefresh').onclick = loadQueue;
    rocket_growth_sales_daily 테이블에 upsert해두고, 여기서는 그 테이블만 읽는다.
    그 결과를 product_items.vendor_item_id로 조인해 item_id를 찾고, 기존
    feeFor()+calcMargin()으로 수수료·입출고비·마진을 추정한다. 쿠팡이 당일 확정
-   수수료·정산액을 API로 안 주기 때문에 전부 추정치다(docs/api-notes.md 4-4). */
+   수수료·정산액을 API로 안 주기 때문에 전부 추정치다(docs/api-notes.md 4-4).
+
+   반품은 위 방식(공식 Open API)에 아예 없다(docs/api-notes.md 4-4-1). 대신 WING
+   내부 API(로그인 세션 기반)엔 반품이 순액으로 반영돼 있는데(4-4-2), 세션이 필요해서
+   웹이 직접 못 부르고 브라우저 확장프로그램(extension/background.js)에
+   메시지를 보내 대신 호출시킨다 — 성공하면 rocket_growth_sales_wing_daily 테이블에
+   순매출이 채워지고, 아래 fetchAndRenderSales()가 그 테이블 값을 우선 사용한다.
+   확장프로그램이 없거나 응답이 없어도(일반 방문자 등) 기존 방식으로 정상 동작한다. */
+const SALES_EXT_ID = 'jbcbkoclamjhjkoedfjeocnhkgioabaj';
+
+function extensionSendMessage(message, timeoutMs) {
+  return new Promise((resolve) => {
+    if (!(window.chrome && chrome.runtime && chrome.runtime.sendMessage)) {
+      resolve({ ok: false, error: 'no-extension' });
+      return;
+    }
+    let done = false;
+    const timer = setTimeout(() => {
+      if (!done) { done = true; resolve({ ok: false, error: 'timeout' }); }
+    }, timeoutMs || 25000);
+    try {
+      chrome.runtime.sendMessage(SALES_EXT_ID, message, (resp) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        resolve(resp || { ok: false, error: 'empty-response' });
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      resolve({ ok: false, error: e.message });
+    }
+  });
+}
+
+async function syncSalesViaExtension() {
+  const statusEl = $('#salesSyncStatus');
+  const to = kstDateStr(new Date());
+  const from = kstDateStr(new Date(Date.now() - 86400000));
+
+  statusEl.textContent = '확장프로그램으로 반품 포함 데이터 동기화 중…';
+  statusEl.classList.remove('hidden');
+
+  const resp = await extensionSendMessage({ type: 'SYNC_SALES', dateFrom: from, dateTo: to });
+
+  if (resp.ok) {
+    statusEl.textContent = `반품 포함 데이터 동기화 완료 (${resp.rowCount}건)`;
+    setTimeout(() => statusEl.classList.add('hidden'), 4000);
+    return true;
+  }
+  if (resp.error === 'no-extension') {
+    statusEl.classList.add('hidden');
+  } else if (resp.error === 'timeout') {
+    statusEl.textContent = '동기화 응답 시간초과 — 기존 데이터로 표시합니다.';
+    setTimeout(() => statusEl.classList.add('hidden'), 4000);
+  } else {
+    statusEl.textContent = `동기화 실패: ${resp.error} — 기존 데이터로 표시합니다.`;
+    setTimeout(() => statusEl.classList.add('hidden'), 6000);
+  }
+  return false;
+}
+
 function setSalesRange(daysBack) {
   const to = new Date();
   const from = new Date(to.getTime() - daysBack * 86400000);
@@ -1274,6 +1338,14 @@ async function loadSales() {
   const toEl = $('#salesTo');
   if (!fromEl.value || !toEl.value) setSalesRange(0); // 최초 진입 시 기본값: 오늘
 
+  await fetchAndRenderSales(fromEl.value, toEl.value);
+
+  // 확장프로그램으로 반품 포함(WING) 데이터 동기화 시도 — 성공하면 조용히 다시 렌더
+  const synced = await syncSalesViaExtension();
+  if (synced) await fetchAndRenderSales(fromEl.value, toEl.value);
+}
+
+async function fetchAndRenderSales(fromDate, toDate) {
   $('#salesMsg').classList.add('hidden');
   $('#salesStats').classList.add('hidden');
   $('#salesEmpty').classList.add('hidden');
@@ -1281,16 +1353,28 @@ async function loadSales() {
   $('#salesLoader').classList.remove('hidden');
 
   try {
-    const rows = await api(
-      `rocket_growth_sales_daily?select=vendor_item_id,product_name,quantity,revenue` +
-      `&sale_date=gte.${fromEl.value}&sale_date=lte.${toEl.value}`
-    ) || [];
+    const [grossRows, wingRows] = await Promise.all([
+      api(
+        `rocket_growth_sales_daily?select=sale_date,vendor_item_id,product_name,quantity,revenue` +
+        `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
+      ),
+      api(
+        `rocket_growth_sales_wing_daily?select=sale_date,vendor_item_id,product_name,quantity,revenue` +
+        `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
+      )
+    ]);
 
-    const rangeTxt = fromEl.value === toEl.value ? fromEl.value : `${fromEl.value} ~ ${toEl.value}`;
-    $('#salesSummary').textContent = `${rangeTxt} 기준 (로켓그로스 Open API)`;
+    // 같은 (날짜, 옵션)이면 WING 값(반품 반영)이 Open API 값(반품 미반영)보다 우선한다
+    const merged = {};
+    (grossRows || []).forEach((r) => { merged[r.sale_date + '|' + r.vendor_item_id] = r; });
+    (wingRows || []).forEach((r) => { merged[r.sale_date + '|' + r.vendor_item_id] = r; });
+
+    const rangeTxt = fromDate === toDate ? fromDate : `${fromDate} ~ ${toDate}`;
+    const hasWing = wingRows && wingRows.length > 0;
+    $('#salesSummary').textContent = `${rangeTxt} 기준 (로켓그로스 Open API${hasWing ? ' + WING 반품 반영' : ''})`;
 
     const byVendorItem = {};
-    rows.forEach((r) => {
+    Object.values(merged).forEach((r) => {
       const cur = (byVendorItem[r.vendor_item_id] = byVendorItem[r.vendor_item_id] ||
         { vendorItemId: r.vendor_item_id, productName: r.product_name, quantity: 0, revenue: 0 });
       cur.quantity += r.quantity;

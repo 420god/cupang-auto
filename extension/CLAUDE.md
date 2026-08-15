@@ -4,12 +4,15 @@
 ```
 manifest.json    MV3. content_scripts에 interceptor.js를 MAIN world, all_frames:true로 주입
 interceptor.js   fetch/XHR 후킹, 쿠팡 API 요청·응답을 sessionStorage에 캡처
+background.js    서비스워커(2026-08-15 추가). externally_connectable로 웹의 요청을 받아
+                 WING 세션으로 반품 포함 판매현황을 동기화. 아래 섹션 참조
 popup.html       UI. <details>로 접어서 핵심만 노출 (사용자 선호)
 popup.js         전체 로직 (4200여 줄)
-supabase.js       Supabase 인증·REST·데이터 변환. popup.html에서 popup.js보다 먼저 로드됨
+supabase.js       Supabase 인증·REST·데이터 변환. popup.html에서 popup.js보다 먼저 로드됨.
+                 background.js도 importScripts()로 이 파일을 그대로 재사용함(인증 로직 중복 금지)
 ```
 
-**background script 없음.** 팝업이 닫히면 모든 게 멈춘다. "별도 창으로 열기" 기능(`chrome.windows.create`)이 이걸 우회하는 유일한 방법이니 건드릴 때 주의.
+**팝업 쪽(popup.js)엔 여전히 background script가 없다.** 팝업이 닫히면 popup.js 쪽 작업(수집·대기열 폴링 등)은 모두 멈춘다 — "별도 창으로 열기"(`chrome.windows.create`)가 이걸 우회하는 유일한 방법이니 건드릴 때 주의. **다만 `background.js`(서비스워커)는 별개로 상시 존재**하며, 웹이 메시지를 보낼 때만 깨어나 동작한다(팝업 상태와 무관) — 아래 "판매현황/반품 동기화" 섹션 참조.
 
 ## 절대 바꾸지 말 것
 
@@ -32,6 +35,27 @@ displayItemCategoryCode  ← 검색 필터에 쓰는 정답 코드
 displayItemCategoryId    ← 위와 정확히 1000 차이. 절대 이걸 쓰면 안 됨
 categoryId (상품 응답의)  = kanCategoryId (요금 API의)  ← 같은 값, 다른 이름
 ```
+
+## 판매현황/반품 동기화 (`background.js`, 2026-08-15)
+
+**진단용 캡처(`interceptor.js`의 `SALES_PATHS`/`saveSalesCapture`, 팝업 "판매현황 API 캡처 보기")는 그대로 남아있다** — WING 내부 판매현황 API의 정확한 요청/응답 구조를 처음 알아낼 때 썼고, 앞으로 이 API가 바뀌었는지 다시 확인할 때도 쓸 수 있어서 지우지 않았다. 하지만 **실제 자동 동기화는 이걸 안 쓰고 `background.js`가 직접 담당**한다(수동 캡처 → 확인 → 나중에 붙이는 방식이 아니라, 능동적으로 API를 호출하는 방식).
+
+```
+웹의 판매현황 탭 (loadSales())
+  → chrome.runtime.sendMessage(SALES_EXT_ID, {type:'SYNC_SALES', dateFrom, dateTo})
+  → background.js의 onMessageExternal 리스너가 깨어남
+     1. WING 탭 찾기, 없으면 새로 열기(getOrOpenWingTab)
+     2. 날짜별로(범위를 통째로 넣으면 합산되어버리므로 하루씩, docs/api-notes.md 4-4-2 실측 확인)
+        chrome.scripting.executeScript로 그 탭 안에서 sold-vendor-item-list 호출
+        (같은 origin이라 쿠키가 자동으로 붙음, 별도 인증 코드 불필요)
+     3. 로그인 안 돼 있으면(JSON 아닌 응답) notLoggedIn 에러로 즉시 실패 반환
+     4. sbUpsert()로 rocket_growth_sales_wing_daily에 upsert (Supabase 인증은 supabase.js 재사용)
+  → 웹에 {ok, days, rowCount} 응답
+```
+
+**기본 동기화 범위는 "오늘+어제" 이틀 고정이다** — `rocket-growth-sync.js`와 같은 이유(자정 근처 타임존 오차, `docs/api-notes.md` 4-1)이자, 판매현황 탭을 열 때마다 매번 30일치를 다 훑으면 느리고 WING에 부담이라 일부러 좁혀둔 것. 더 넓은 범위를 과거로 백필하고 싶으면(예: 지난달 반품까지 채우고 싶을 때) 이 기본값을 바꾸지 말고 **별도의 수동 백필 기능을 새로 만들 것**.
+
+**`externally_connectable`이 웹 도메인(`https://sourcing-web2.vercel.app/*`)만 허용한다** — 웹 배포 도메인이 바뀌면 `manifest.json`도 같이 고쳐야 한다. 이 메시지 채널은 그 도메인의 웹페이지 JS만 부를 수 있고, 다른 사이트나 페이지 콘텐츠(관찰된 데이터)에서는 절대 트리거되지 않는다 — 신뢰 경계가 도메인 단위인 것.
 
 ## 데이터 흐름 (기능 추가 시 참고)
 

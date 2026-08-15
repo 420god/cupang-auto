@@ -11,7 +11,15 @@ package.json api/용 npm 의존성(undici) — 프론트엔드는 여전히 완�
 
 Vercel에 **정적 파일 그대로** 올린다(플랫폼 확정, `../CLAUDE.md` 참조). 프레임워크·번들러 도입하지 말 것 — 사용자가 "복잡한 과정 없이"를 명시적으로 요구했다. `api/*.js`는 예외 — Vercel이 번들러 없이 그대로 서버리스 함수로 인식하는 기능이라 이 원칙과 안 부딪힌다.
 
-**판매현황 탭은 다른 탭들과 데이터 소스·계산 시점이 완전히 다르다** — 소싱/즐겨찾기/카테고리는 웹이 실시간으로 계산하지만, 판매현황(`loadSales()`/`renderSales()`)은 `rocket_growth_sales_daily` 테이블(GCP VPS가 cron으로 미리 채워둠)을 읽기만 한다. `web/api/sales-today.js`는 그 이전 시도의 잔재로 지금은 아무것도 안 부른다 — 왜 이렇게 됐는지는 `../docs/decisions.md` 2026-08-13 항목.
+**판매현황 탭은 다른 탭들과 데이터 소스·계산 시점이 완전히 다르다** — 소싱/즐겨찾기/카테고리는 웹이 실시간으로 계산하지만, 판매현황(`loadSales()`/`fetchAndRenderSales()`)은 두 테이블을 읽기만 한다. `web/api/sales-today.js`는 그 이전 시도의 잔재로 지금은 아무것도 안 부른다 — 왜 이렇게 됐는지는 `../docs/decisions.md` 2026-08-13 항목.
+
+**판매현황은 테이블이 두 개다(2026-08-15 추가) — 왜 안 합쳤는지 알아둘 것**:
+- `rocket_growth_sales_daily`: 공식 Open API 기반, GCP VPS가 무인 cron으로 채움. 항상 최신이지만 **반품이 반영 안 됨**(`docs/api-notes.md` 4-4-1).
+- `rocket_growth_sales_wing_daily`: WING 내부 API 기반(로그인 세션 필요), **반품이 순액으로 반영됨**(4-4-2). 세션이 필요해서 무인 cron이 못 채우고, `extension/background.js`가 웹의 메시지 요청을 받아서 채운다.
+
+두 테이블에 같은 `(sale_date, vendor_item_id)` 행이 있으면 `fetchAndRenderSales()`가 **wing 값을 우선**하고, wing 쪽에 없으면 daily(gross) 값으로 폴백한다 — 한 테이블로 합치지 않은 이유는 서로 다른 스크립트(무인 VPS cron vs. 사용자 브라우저의 확장프로그램)가 같은 컬럼에 동시에 쓰다가 경쟁하는 걸 피하기 위함(`db/CLAUDE.md`가 이미 이 원칙을 씀).
+
+**`loadSales()`가 `syncSalesViaExtension()`을 매번 호출한다** — `chrome.runtime.sendMessage(SALES_EXT_ID, ...)`로 브라우저 확장프로그램(설치돼 있고 WING에 로그인돼 있다면)에게 "오늘+어제" 반품 데이터를 다시 동기화해달라고 요청한다. 확장프로그램이 없거나 응답이 없어도(일반 방문자, 다른 브라우저 등) 타임아웃 후 조용히 기존 방식으로 넘어간다 — **이 호출이 실패해도 판매현황 자체는 항상 정상 동작해야 한다**, 이 전제를 깨는 수정을 하지 말 것. `SALES_EXT_ID`는 확장프로그램의 크롬 ID(`chrome://extensions`에서 확인)라서 확장프로그램을 다른 폴더로 옮기거나 웹스토어에 정식 배포하면 바뀔 수 있음 — 그러면 이 상수도 같이 갱신해야 함.
 
 ## 절대 바꾸지 말 것
 

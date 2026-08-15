@@ -59,6 +59,41 @@
     } catch (e) { /* 무시 */ }
   }
 
+  /* 판매현황(재고현황 위젯) 반품 조사용 — 응답까지 저장 */
+  const SALES_PATHS = [
+    '/tenants/rfm-inventory/sales/today',
+    '/tenants/rfm-inventory/sales/sold-vendor-item-list'
+  ];
+  const K_SALES = '__cwc_sales_captures';
+
+  function salesPathOf(url) {
+    const u = String(url || '');
+    for (const p of SALES_PATHS) {
+      if (u.indexOf(p) !== -1) return p;
+    }
+    return null;
+  }
+
+  function saveSalesCapture(url, method, reqBody, resText) {
+    try {
+      const p = salesPathOf(url);
+      if (!p) return;
+
+      let store = {};
+      try { store = JSON.parse(ss(K_SALES) || '{}') || {}; } catch (e) { store = {}; }
+
+      store[p] = {
+        url: String(url).slice(0, 300),
+        method: method,
+        reqBody: typeof reqBody === 'string' ? reqBody.slice(0, 4000) : null,
+        resText: typeof resText === 'string' ? resText.slice(0, 300000) : null,
+        at: Date.now()
+      };
+      ssSet(K_SALES, JSON.stringify(store));
+      console.log('[수집기] 판매현황 API 캡처: ' + p);
+    } catch (e) { /* 무시 */ }
+  }
+
   const K_BODY = '__cwc_template_body';
   const K_HEADERS = '__cwc_template_headers';
   const K_AT = '__cwc_template_at';
@@ -215,6 +250,17 @@
         }).catch(() => {});
       }
 
+      // 판매현황 API는 GET/POST 모두 응답까지 저장
+      if (salesPathOf(url)) {
+        p.then((res) => {
+          try {
+            res.clone().text()
+              .then((t) => saveSalesCapture(url, method, reqBody, t))
+              .catch(() => {});
+          } catch (e) { /* 무시 */ }
+        }).catch(() => {});
+      }
+
       // 요금 API는 GET/POST 모두 응답까지 저장
       if (feePathOf(url)) {
         const _pending = window.__cwc_pendingFee || {};
@@ -274,6 +320,7 @@
             maybeSaveCategoryPayload(url, t);
             maybeSaveProductPayload(url, t);
             if (feePathOf(url)) saveFeeCapture(url, method, typeof body === 'string' ? body : null, t, this.__cwc_headers);
+            if (salesPathOf(url)) saveSalesCapture(url, method, typeof body === 'string' ? body : null, t);
           }
         } catch (e) { /* 무시 */ }
       });

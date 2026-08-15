@@ -33,5 +33,13 @@
   ],
   "action": {
     "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "externally_connectable": {
+    "matches": [
+      "https://sourcing-web2.vercel.app/*"
+    ]
   }
 }
