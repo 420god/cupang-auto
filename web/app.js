@@ -1663,14 +1663,19 @@ function renderReconcileNote(dailyByDate, fromDate, toDate) {
 /* 상품별 실제 원가정보(개당 수수료/입출고비/보관비) — WING 재고현황 API 기반(docs/api-notes.md 4-4-6).
    덮어쓰지 않고 스냅샷으로 쌓이므로(db/migrations/012), 조회하는 날짜 이전 중 가장 최근
    스냅샷을 골라 써야 "가격 바뀌기 전에 팔린 건 바뀌기 전 요율로" 계산된다. */
-async function loadItemCostSnapshots(vendorItemIds, uptoDate) {
+async function loadItemCostSnapshots(vendorItemIds) {
   const out = {};
   if (!vendorItemIds.length) return out;
-  const uptoIso = `${uptoDate}T23:59:59.999+09:00`; // 조회 범위 마지막 날 KST 자정 직전까지
+  // 조회 기간 끝 날짜로 필터링하지 않는다 — 예전엔 "captured_at <= 조회기간 끝"으로
+  // 걸렀는데, 스냅샷이 전부 조회기간보다 나중에 찍혔으면(예: 오늘 막 처음 갱신했는데
+  // "어제"만 조회) 그 필터가 스냅샷을 통째로 걸러내서 snapshotAsOf()의 참고용 폴백
+  // (그 상품에 있는 것 중 가장 이른 스냅샷 사용)까지 같이 막아버리는 버그가 있었다
+  // (2026-08-16 실사용 중 발견). snapshotAsOf() 자체가 이미 "그 날짜 이전 것 우선,
+  // 없으면 가장 이른 것"을 골라내므로 여기서는 전체를 다 가져오기만 하면 된다.
   const rows = await api(
     `rocket_growth_item_cost_snapshots?select=vendor_item_id,captured_at,commission_amount,fulfillment_amount,monthly_storage_fee_amount` +
     `&vendor_item_id=in.(${vendorItemIds.map(encodeURIComponent).join(',')})` +
-    `&captured_at=lte.${encodeURIComponent(uptoIso)}&order=vendor_item_id.asc,captured_at.asc`
+    `&order=vendor_item_id.asc,captured_at.asc`
   ) || [];
   rows.forEach((r) => { (out[r.vendor_item_id] = out[r.vendor_item_id] || []).push(r); });
   return out; // 이미 captured_at 오름차순 — 아이템별 배열
@@ -1761,7 +1766,7 @@ async function fetchAndRenderSales(fromDate, toDate) {
       return;
     }
 
-    const costSnapshots = await loadItemCostSnapshots(vendorItemIdsInRange, toDate);
+    const costSnapshots = await loadItemCostSnapshots(vendorItemIdsInRange);
     renderSales(vendorItemIdsInRange, itemNames, itemDays, meta, costSnapshots, rangeDates.length);
   } catch (e) {
     $('#salesMsg').textContent = '판매현황을 불러오지 못했습니다: ' + e.message;
