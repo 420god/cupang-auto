@@ -1685,7 +1685,13 @@ function snapshotAsOf(snapshots, dateStr) {
   for (const s of snapshots) {
     if (new Date(s.captured_at).getTime() <= cutoffMs) picked = s; else break;
   }
-  return picked;
+  if (picked) return { snap: picked, exact: true };
+  // 그 날짜 이전 스냅샷이 없으면(스냅샷을 도입하기 전에 팔린 과거 판매 — 예: 처음
+  // "상품 원가정보 갱신"을 누르기 전 날짜들) 그 상품에 있는 것 중 가장 이른 스냅샷을
+  // 참고값으로 쓴다. 그 날짜의 진짜 요율이 아닐 수 있다는 걸 알고 쓸 것 — 사용자가
+  // "정산현황과 맞는지 검증해보려고" 과거 날짜도 빈칸 대신 값을 채워달라고 요청함
+  // (2026-08-16). renderSales()에서 이 경우만 exact:false로 구분해 표시한다.
+  return { snap: snapshots[0], exact: false };
 }
 
 /* 보관비는 "이번 달 누적" 스냅샷 하나뿐이라 일별로 못 쪼갠다(사용자 확인, 2026-08-16) —
@@ -1772,7 +1778,7 @@ async function fetchAndRenderSales(fromDate, toDate) {
    그 날의 평균단가 대비 비율로 환산해 calcMargin에 넣음 — 반올림 없이 원래 금액으로
    정확히 되돌아오는 계산이라 근사치 아님), 없는 날은 기존 카테고리 요율 추정으로 폴백. */
 function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, rangeDayCount) {
-  let costedCount = 0, noCommissionCount = 0, estimatedCount = 0;
+  let costedCount = 0, noCommissionCount = 0, estimatedCount = 0, approxCount = 0;
 
   const rows = vendorItemIds.map((vid) => {
     const days = itemDays[vid];
@@ -1780,19 +1786,20 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
     let quantity = 0, revenue = 0;
     let commissionSum = 0, fulfillmentSum = 0, settlementSum = 0;
     let cost = 0, shipWork = 0, opProfitSum = 0, costedQty = 0;
-    let hasReal = false, hasEstimate = false, hasAnyCommissionInfo = false;
+    let hasReal = false, hasApprox = false, hasEstimate = false, hasAnyCommissionInfo = false;
 
     days.forEach((day) => {
       quantity += day.quantity;
       revenue += day.revenue;
       const avgPrice = day.quantity ? day.revenue / day.quantity : 0;
-      const snap = snapshotAsOf(costSnapshots[vid], day.date);
+      const snapResult = snapshotAsOf(costSnapshots[vid], day.date);
 
       let commissionRate, fulfillmentAmt;
-      if (snap) {
+      if (snapResult) {
         hasReal = true;
-        commissionRate = avgPrice > 0 ? (snap.commission_amount / avgPrice * 100) : 0;
-        fulfillmentAmt = snap.fulfillment_amount;
+        if (!snapResult.exact) hasApprox = true; // 그 날짜 이전 스냅샷이 없어 이후 스냅샷을 대신 씀
+        commissionRate = avgPrice > 0 ? (snapResult.snap.commission_amount / avgPrice * 100) : 0;
+        fulfillmentAmt = snapResult.snap.fulfillment_amount;
       } else {
         hasEstimate = true;
         commissionRate = commissionFor(m.catCode);
@@ -1819,6 +1826,7 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
 
     if (!hasAnyCommissionInfo) { noCommissionCount++; return { vid, quantity, revenue, noCommission: true }; }
     if (hasEstimate) estimatedCount++;
+    else if (hasApprox) approxCount++;
 
     const hasCost = costedQty > 0;
     if (hasCost) costedCount++;
@@ -1834,7 +1842,9 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
       cost: hasCost ? cost : null,
       shipWork: hasCost ? shipWork : null,
       operatingProfit: hasCost ? (netProfit - cost - shipWork) : null,
-      isEstimate: hasEstimate
+      // 우선순위: 카테고리 추정을 쓴 게 있으면 "(추정)", 아니면 스냅샷은 있는데 그 날짜
+      // 이전 게 아니라 이후 것(참고용)을 쓴 게 있으면 "(참고용)", 둘 다 없으면 라벨 없음.
+      label: hasEstimate ? '(추정)' : (hasApprox ? '(참고용)' : '')
     };
   });
 
@@ -1843,6 +1853,7 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
   if (uncosted > 0) notes.push(`원가 미입력 상품 ${uncosted}개`);
   if (noCommissionCount > 0) notes.push(`수수료 정보 없는 상품 ${noCommissionCount}개`);
   if (estimatedCount > 0) notes.push(`상품 원가정보 스냅샷 없어 카테고리 추정을 쓴 상품 ${estimatedCount}개`);
+  if (approxCount > 0) notes.push(`판매 시점 이전 스냅샷이 없어 이후 스냅샷(참고용)을 쓴 상품 ${approxCount}개`);
   $('#salesTableNote').textContent = notes.length ? `${notes.join(' · ')}` : '';
 
   $('#salesBody').innerHTML = rows.map((r) => {
@@ -1863,7 +1874,7 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
   <td class="col-num" data-label="영업이익"><span class="dim">수수료 정보 없음</span></td>
 </tr>`;
     }
-    const est = r.isEstimate ? ' <span class="dim xs">(추정)</span>' : '';
+    const est = r.label ? ` <span class="dim xs">${r.label}</span>` : '';
     return `
 <tr>
   <td>${name}</td>
