@@ -65,15 +65,28 @@ categoryId (상품 응답의)  = kanCategoryId (요금 API의)  ← 같은 값, 
 
 **`externally_connectable`이 웹 도메인(`https://sourcing-web2.vercel.app/*`)만 허용한다** — 웹 배포 도메인이 바뀌면 `manifest.json`도 같이 고쳐야 한다. 이 메시지 채널은 그 도메인의 웹페이지 JS만 부를 수 있고, 다른 사이트나 페이지 콘텐츠(관찰된 데이터)에서는 절대 트리거되지 않는다 — 신뢰 경계가 도메인 단위인 것.
 
-## 재고현황 보관비·개당 수수료/입출고비 조사 (착수 전, 2026-08-15)
+## 상품별 실제 원가정보(개당 수수료·입출고비·보관비) 동기화 (`syncItemCosts`, 2026-08-16 구현 완료)
 
-판매현황의 상품/옵션별 상세표가 지금은 카테고리 요율표 추정만 쓰는데, WING 재고현황 페이지가 상품별 **실제** "예상(개당)"(판매수수료+입출고·배송비용 분해)과 "이번달 누적보관비"를 보여주는 걸 사용자가 스크린샷으로 확인시켜줬다 — 이걸로 대체하는 게 목표(`web/CLAUDE.md` 참조). `interceptor.js`의 일반 API 로그(`__cwc_api_log`, 팝업 "캡처된 API 호출 목록")로 후보 3개를 찾아 `SALES_PATHS`에 등록만 해뒀다:
+판매현황의 상품/옵션별 상세표가 카테고리 요율표 추정만 쓰던 걸, WING 재고현황이 상품별로 직접 매긴 **실제** 개당 수수료/입출고비와 이번달 누적보관비로 대체했다. API 스펙·캡처 경위는 `docs/api-notes.md` 4-4-6.
+
 ```
-/tenants/rfm-inventory/inventory-health-dashboard/storage-fee-modal/{vendorItemId}  (GET) — 보관기간별 일 보관비 요율표(재고 상세 모달)
-/tenants/rfm-inventory/inventory-health-dashboard/search                            (POST) — 재고현황 목록, "예상(개당)"·"이번달 누적보관비"가 여기 인라인으로 있을 가능성
-/tenants/rfm/pricing-info/{vendorItemId}                                            (GET) — "예상(개당)" 툴팁(판매수수료/입출고·배송비용 분해) 출처로 추정
+웹의 "상품 원가정보 갱신" 버튼
+  → chrome.runtime.sendMessage(SALES_EXT_ID, {type:'SYNC_ITEM_COSTS'})
+  → getOrOpenWingTab() → syncItemCosts(tab):
+     inventory-health-dashboard/search를 pageSize=10 커서 기반으로 끝까지 페이지네이션
+     (MAX_ITEM_COST_PAGES=60 안전장치, pageSize 10 기준 최대 600개 상품)
+     → 상품마다 {commission_amount(=takeRateAmount), fulfillment_amount(=fulfillmentFee+warehousingFee),
+        monthly_storage_fee_amount} 추출 → rocket_growth_item_cost_snapshots(db/migrations/012)에 insert
+  → 웹에 {ok, rowCount} 응답 → fetchAndRenderSales() 재호출로 화면 갱신
 ```
-**아직 요청 바디·헤더·응답 구조를 하나도 캡처 못 했다** — 위 등록은 "판매현황 API 캡처 보기"로 다음에 전체 캡처할 수 있게 준비만 해둔 것. 다음 단계: 확장프로그램 새로고침 → WING 재고현황 페이지에서 보관비 모달·개당수수료 툴팁을 다시 열어서 트리거 → 팝업 "판매현황 API 캡처 보기"로 헤더까지 확인(다른 WING 내부 API 때처럼 XSRF 토큰 등 인증 함정이 또 있을 수 있으니 반드시 헤더까지 볼 것) → 그 결과로 구현.
+
+**`SYNC_SALES`와 별개의 새 메시지 타입(`SYNC_ITEM_COSTS`)** — `onMessageExternal` 리스너 안에서 `message.type`으로 분기한다. 정산 백필과 마찬가지로 **자동으로는 안 돈다**(수백 개 상품까지 갈 수 있는 페이지네이션을 매번 자동으로 돌리면 느리고 WING에 부담 — `RateGovernor`가 있는 이유와 같은 우려, 사용자가 직접 지적함). 웹의 "상품 원가정보 갱신" 버튼(수동)으로만 트리거된다.
+
+**덮어쓰지 않고 스냅샷으로 계속 쌓는다(`sbInsertIgnore`, upsert 아님)** — 상품 가격이 바뀌면 개당 수수료·입출고비도 같이 바뀌는데, **가격이 바뀌기 전에 팔린 것은 바뀌기 전 요율로 계산해야 한다는 게 사용자의 명확한 요구사항**이었다. 그래서 `vendor_item_id` 하나에 최신값만 남기는 대신 `(vendor_item_id, captured_at)`로 이력을 쌓고, 웹 쪽에서 판매 날짜 이전 중 가장 최근 스냅샷을 골라 쓴다(`web/app.js`의 `snapshotAsOf()`, `web/CLAUDE.md` 참조).
+
+**`trigger_source` 컬럼(항상 `'manual_refresh'`, 2026-08-16 결정)** — 지금은 이 수동 버튼만 스냅샷을 만들지만, **나중에 웹에 가격 수정 기능이 생기면 가격을 바꾼 바로 그 순간이 사람이 버튼 누르는 것보다 훨씬 정확한 스냅샷 시점**이라, 그때는 가격 변경 성공 직후 그 상품 하나만(`pricing-info/{vendorItemId}`, 아직 응답 미확인 — 4-4-6 참조) 같은 스냅샷 로직으로 찍도록 확장할 계획이다. `syncItemCosts()`의 핵심 로직을 "이 vendorItemId들의 현재 원가정보를 스냅샷으로 추가"하는 재사용 가능한 단위로 설계해둔 게 이 확장을 염두에 둔 것 — 나중에 가격 수정 기능을 만들 때 이 함수(또는 그 안의 upsert 부분)를 그대로 재사용하고, `trigger_source`만 `'price_change'`로 넘기면 된다. **가격 수정 기능 자체는 아직 없음.**
+
+**페이지네이션은 커서 기반(ES 스타일 search_after)** — `paginationResponse.searchAfterSortValues`를 다음 요청 그대로 전달. `pageSize`는 WING이 실제 쓰는 10 그대로 — 임의로 늘리지 말 것(절대 바꾸지 말 것 규칙 1과 같은 이유, 미검증 변형은 만들지 않는다).
 
 ## 데이터 흐름 (기능 추가 시 참고)
 

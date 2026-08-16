@@ -301,6 +301,38 @@ profitAmount          = totalSalesAmountWithRefund - totalDeductionAmount + tota
 
 **수정 완료(2026-08-15)** — `extension/background.js`의 `pageFetchProfitStatus()`에서 `recognitionDateTo`를 `recognitionDateFrom`과 동일한 값(`${fromDateStr}T15:00:00.000Z`)으로 맞췄다. **과거 데이터 수동 백필 불필요** — 판매현황 탭을 다시 열면 "오늘+어제" 자동 재동기화로 최근 날짜는 저절로 덮어써진다. 이 버그가 있던 기간에 동기화된 더 과거 날짜(있다면)는 여전히 이틀치 합산값으로 남아있을 수 있음 — 발견 당시 DB엔 8/14·8/15 두 행만 있었으니 실질적으로 8/14 하나만 영향받았고 다음 재동기화로 자동 정정된다.
 
+### 4-4-6. WING 재고현황 API — 상품별 실제 개당 수수료·입출고비·보관비 (2026-08-16, 캡처 성공)
+
+지금까지 상품/옵션별 상세표는 카테고리 요율표 기반 추정(`commissionFor()`/`feeFor()`)만 썼는데, 사용자가 WING 재고현황 페이지의 "예상(개당)" 툴팁(판매수수료+입출고·배송비용 분해)과 "이번달 누적보관비"를 스크린샷으로 제시 → 이게 카테고리 추정보다 정확한 **쿠팡이 그 상품에 직접 매긴 실제값**이라는 걸 확인하고 조사 시작. 일반 API 로그(`__cwc_api_log`, 팝업 "캡처된 API 호출 목록")로 후보를 추리고 `SALES_PATHS`에 등록한 뒤 재캡처.
+
+```
+POST https://wing.coupang.com/tenants/rfm-inventory/inventory-health-dashboard/search
+바디: {"paginationRequest":{"pageSize":10,"pageNumber":N,"searchAfterSortValues":cursor|null},
+      "hiddenStatus":"VISIBLE","sort":[{"sortParameter":"ORDERABLE_QUANTITY","sortDirection":"DESCENDING"}],
+      "rrqContext":{"source":"IHD","eventType":"RRQ_SEEN","metadata":"{}"}}
+응답: {"viProperties":[{
+  "vendorItemId", ...,
+  "settlementStatistics": {
+    "takeRateAmount":{"amount"},        ← 개당 판매수수료 (WING "예상(개당)" 툴팁의 "판매수수료"와 일치)
+    "fulfillmentFee":{"amount"},
+    "warehousingFee":{"amount"}         ← 이 둘의 합이 툴팁의 "입출고·배송비용"과 정확히 일치(실측 검산: 1925+1000=2925)
+  },
+  "inventoryDetails": {
+    "storageFee": {"monthlyStorageFeeAmount":{"amount"}}  ← "이번달 누적보관비"와 일치(실측 14,670원 일치)
+  }
+}], "paginationResponse": {"pageNumber","pageSize","totalNumberOfElements","searchAfterSortValues"}}
+```
+
+**페이지네이션은 커서 기반(ES 스타일 search_after)** — 첫 요청은 `searchAfterSortValues:null`, 다음 요청부터는 직전 응답의 `paginationResponse.searchAfterSortValues`를 그대로 실어 보낸다. `pageSize`는 WING 프론트가 실제 보내는 값(10) 그대로 씀 — 더 크게 요청해도 되는지 확인 안 해봤고, 임의로 늘리면 거부당할 수 있어 시도 안 함(절대 바꾸지 말 것 규칙 1과 같은 이유).
+
+**인증은 기존 정산현황 API와 동일한 `x-xsrf-token` 쿠키 패턴** — 새로 풀 함정 없었음.
+
+**`storage-fee-modal/{vendorItemId}`(GET, 재고 상세 모달)도 같이 캡처했지만 원화 요율은 안 줌** — `skuAgeBuckets`(보관기간 구간별 `stowedQuantity`, 수량만)만 응답에 있고, 스크린샷에 보이던 "제품 1개당 1일 보관비"(원 단위, 기본/프로모션/최종 분해) 값은 이 API 응답 어디에도 없다. 지금 목표(상품별 순이익 추정)엔 `inventory-health-dashboard/search`의 `monthlyStorageFeeAmount`만으로 충분해서 더 조사 안 함 — 나중에 일별 보관비 원화 요율이 꼭 필요해지면 이 API 응답에 안 나온 다른 소스를 다시 찾아야 함.
+
+**`pricing-info/{vendorItemId}`(GET)는 아직 응답을 못 봤다** — `SALES_PATHS`에 후보로만 등록해뒀음. 나중에 웹에 가격 수정 기능을 만들 때, 가격 바꾼 상품 하나만 전체 페이지네이션 없이 빠르게 재조회하는 용도로 쓸 수 있을지 그때 확인할 것(아래 "상품별 원가정보 스냅샷" 참고).
+
+**구현 완료(2026-08-16)** — `extension/background.js`의 `syncItemCosts()`/`pageFetchInventoryHealth()`가 전체 상품을 끝까지 페이지네이션해서 `rocket_growth_item_cost_snapshots`(`db/migrations/012`)에 저장한다. 자세한 설계(왜 덮어쓰지 않고 이력으로 쌓는지, 가격 변경 시점과의 연동 계획)는 `extension/CLAUDE.md`, 웹에서 이 값을 쓰는 방식은 `web/CLAUDE.md` 참조.
+
 ### 4-5. 이익 계산에 필요한 나머지 조각
 원가는 애초에 쿠팡 API 어디에도 없다 — 이미 있는 `user_items.cost_cny`를 써야 한다. 주문 API의 `vendorItemId`로 `product_items.vendor_item_id`를 조인하면 연결된다. 마진 계산은 3번의 `calcMargin()`을 그대로 재사용(별도 계산식 새로 만들지 말 것 — `web/CLAUDE.md` 규칙).
 

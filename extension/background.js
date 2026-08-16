@@ -147,6 +147,95 @@ function pageFetchProfitStatus(dateStr) {
   })();
 }
 
+/* 페이지(WING) 컨텍스트에서 실행됨 — 재고현황의 상품별 실제 개당 수수료/입출고비/보관비
+   조회(docs/api-notes.md 4-4-6). pageSize는 WING 프론트가 실제 보내는 값(10) 그대로 —
+   더 크게 하면 거부당할 수 있어 임의로 늘리지 말 것(절대 바꾸지 말 것 규칙 1과 같은 이유).
+   searchAfterSortValues는 이전 응답의 paginationResponse에서 그대로 이어받는 커서. */
+function pageFetchInventoryHealth(pageNumber, searchAfterSortValues) {
+  return (async () => {
+    try {
+      function getCookie(name) {
+        const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+        return m ? decodeURIComponent(m[1]) : null;
+      }
+      const xsrfToken = getCookie('XSRF-TOKEN');
+      const headers = { 'content-type': 'application/json' };
+      if (xsrfToken) headers['x-xsrf-token'] = xsrfToken;
+
+      const res = await fetch('/tenants/rfm-inventory/inventory-health-dashboard/search', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          paginationRequest: { pageSize: 10, pageNumber, searchAfterSortValues: searchAfterSortValues || null },
+          hiddenStatus: 'VISIBLE',
+          sort: [{ sortParameter: 'ORDERABLE_QUANTITY', sortDirection: 'DESCENDING' }],
+          rrqContext: { source: 'IHD', eventType: 'RRQ_SEEN', metadata: '{}' }
+        })
+      });
+      const text = await res.text();
+      let json;
+      try { json = JSON.parse(text); } catch (e) { return { ok: false, notLoggedIn: true }; }
+      if (!res.ok || !Array.isArray(json.viProperties)) {
+        return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
+      }
+      return { ok: true, data: json };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) ? e.message : String(e) };
+    }
+  })();
+}
+
+/* 전체 상품을 페이지당 10개씩 끝까지 순회해서 상품별 실제 원가정보를 스냅샷으로 쌓는다
+   (덮어쓰지 않음 — db/migrations/012 참조, 가격 변경 전/후 요율을 둘 다 남겨야 해서).
+   상품이 수백 개가 되면 그만큼 오래 걸린다 — MAX_ITEM_COST_PAGES는 안전장치일 뿐 정상
+   범위에선 totalNumberOfElements를 다 채우면 그 전에 루프가 끝난다. */
+const MAX_ITEM_COST_PAGES = 60; // pageSize 10 기준 최대 600개 상품까지 커버
+
+async function syncItemCosts(tab) {
+  const rows = [];
+  const capturedAt = new Date().toISOString();
+  let pageNumber = 0;
+  let cursor = null;
+
+  for (let i = 0; i < MAX_ITEM_COST_PAGES; i++) {
+    const r = await execWithRetry(tab.id, pageFetchInventoryHealth, [pageNumber, cursor]);
+    if (!r || !r.ok) {
+      if (r && r.notLoggedIn) {
+        throw new Error('WING 로그인이 필요합니다. WING 탭에서 로그인한 뒤 다시 시도하세요.');
+      }
+      throw new Error((r && r.error) || '상품 원가정보 조회 실패');
+    }
+    const d = r.data;
+    (d.viProperties || []).forEach((vi) => {
+      const ss = vi.settlementStatistics || {};
+      const inv = vi.inventoryDetails || {};
+      rows.push({
+        vendor_item_id: String(vi.vendorItemId),
+        captured_at: capturedAt,
+        commission_amount: Math.round(Number(ss.takeRateAmount && ss.takeRateAmount.amount) || 0),
+        fulfillment_amount: Math.round(
+          (Number(ss.fulfillmentFee && ss.fulfillmentFee.amount) || 0) +
+          (Number(ss.warehousingFee && ss.warehousingFee.amount) || 0)
+        ),
+        monthly_storage_fee_amount: Math.round(
+          Number(inv.storageFee && inv.storageFee.monthlyStorageFeeAmount && inv.storageFee.monthlyStorageFeeAmount.amount) || 0
+        ),
+        trigger_source: 'manual_refresh'
+      });
+    });
+
+    const pr = d.paginationResponse || {};
+    const total = pr.totalNumberOfElements || 0;
+    const nextCursor = pr.searchAfterSortValues;
+    if (!nextCursor || rows.length >= total || !d.viProperties || d.viProperties.length === 0) break;
+    cursor = nextCursor;
+    pageNumber++;
+  }
+
+  if (rows.length) await sbInsertIgnore('rocket_growth_item_cost_snapshots', rows);
+  return { rowCount: rows.length };
+}
+
 async function syncSalesForDates(tab, dates) {
   const rows = [];
   const failed = [];
@@ -264,17 +353,37 @@ async function syncSales(dateFrom, dateTo) {
 }
 
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  if (!message || message.type !== 'SYNC_SALES') return false;
-  (async () => {
-    try {
-      const result = await syncSales(message.dateFrom, message.dateTo);
-      sendResponse({
-        ok: true, days: result.days, rowCount: result.rowCount, profitRowCount: result.profitRowCount,
-        salesFailed: result.salesFailed, profitFailed: result.profitFailed
-      });
-    } catch (e) {
-      sendResponse({ ok: false, error: (e && e.message) ? e.message : String(e) });
-    }
-  })();
-  return true; // sendResponse를 비동기로 나중에 호출하겠다는 표시
+  if (!message) return false;
+
+  if (message.type === 'SYNC_SALES') {
+    (async () => {
+      try {
+        const result = await syncSales(message.dateFrom, message.dateTo);
+        sendResponse({
+          ok: true, days: result.days, rowCount: result.rowCount, profitRowCount: result.profitRowCount,
+          salesFailed: result.salesFailed, profitFailed: result.profitFailed
+        });
+      } catch (e) {
+        sendResponse({ ok: false, error: (e && e.message) ? e.message : String(e) });
+      }
+    })();
+    return true; // sendResponse를 비동기로 나중에 호출하겠다는 표시
+  }
+
+  if (message.type === 'SYNC_ITEM_COSTS') {
+    (async () => {
+      try {
+        const tab = await getOrOpenWingTab();
+        await sbLoadConfig();
+        if (!sbConfigured()) throw new Error('Supabase 설정이 없습니다. 확장프로그램 팝업에서 먼저 로그인하세요.');
+        const result = await syncItemCosts(tab);
+        sendResponse({ ok: true, rowCount: result.rowCount });
+      } catch (e) {
+        sendResponse({ ok: false, error: (e && e.message) ? e.message : String(e) });
+      }
+    })();
+    return true;
+  }
+
+  return false;
 });

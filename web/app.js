@@ -1367,6 +1367,34 @@ async function backfillSales() {
   btn.disabled = false;
 }
 
+/* 상품별 실제 원가정보(개당 수수료/입출고비/보관비) 수동 갱신 — 정산 백필과 마찬가지로
+   자동으로는 안 돈다(전체 상품을 페이지네이션으로 다 훑어야 해서 WING에 부담,
+   extension/CLAUDE.md 참조). 덮어쓰지 않고 새 스냅샷을 쌓는 방식이라 여러 번 눌러도
+   과거 기록이 지워지지 않는다 — 가격을 바꿀 때마다 눌러주면 그 시점 요율이 남는다.
+   상품이 수백 개면 페이지가 많아 오래 걸릴 수 있어 타임아웃을 넉넉히 잡는다. */
+async function refreshItemCosts() {
+  const statusEl = $('#salesSyncStatus');
+  const btn = $('#itemCostRefreshBtn');
+  btn.disabled = true;
+  statusEl.textContent = '상품 원가정보(개당 수수료·입출고비·보관비) 갱신 중… (상품 수가 많으면 오래 걸릴 수 있습니다)';
+  statusEl.classList.remove('hidden');
+
+  const resp = await extensionSendMessage({ type: 'SYNC_ITEM_COSTS' }, 300000);
+
+  if (resp.ok) {
+    statusEl.textContent = `상품 원가정보 갱신 완료 (${resp.rowCount}개 옵션)`;
+    setTimeout(() => statusEl.classList.add('hidden'), 5000);
+    const fromEl = $('#salesFrom');
+    const toEl = $('#salesTo');
+    if (fromEl.value && toEl.value) await fetchAndRenderSales(fromEl.value, toEl.value);
+  } else if (resp.error === 'no-extension') {
+    statusEl.textContent = '확장프로그램이 연결되지 않았습니다 — 설치·로그인 상태를 확인하세요.';
+  } else {
+    statusEl.textContent = `상품 원가정보 갱신 실패: ${resp.error}`;
+  }
+  btn.disabled = false;
+}
+
 function setSalesRange(daysBack) {
   const to = new Date();
   const from = new Date(to.getTime() - daysBack * 86400000);
@@ -1632,6 +1660,49 @@ function renderReconcileNote(dailyByDate, fromDate, toDate) {
   note.classList.remove('hidden');
 }
 
+/* 상품별 실제 원가정보(개당 수수료/입출고비/보관비) — WING 재고현황 API 기반(docs/api-notes.md 4-4-6).
+   덮어쓰지 않고 스냅샷으로 쌓이므로(db/migrations/012), 조회하는 날짜 이전 중 가장 최근
+   스냅샷을 골라 써야 "가격 바뀌기 전에 팔린 건 바뀌기 전 요율로" 계산된다. */
+async function loadItemCostSnapshots(vendorItemIds, uptoDate) {
+  const out = {};
+  if (!vendorItemIds.length) return out;
+  const uptoIso = `${uptoDate}T23:59:59.999+09:00`; // 조회 범위 마지막 날 KST 자정 직전까지
+  const rows = await api(
+    `rocket_growth_item_cost_snapshots?select=vendor_item_id,captured_at,commission_amount,fulfillment_amount,monthly_storage_fee_amount` +
+    `&vendor_item_id=in.(${vendorItemIds.map(encodeURIComponent).join(',')})` +
+    `&captured_at=lte.${encodeURIComponent(uptoIso)}&order=vendor_item_id.asc,captured_at.asc`
+  ) || [];
+  rows.forEach((r) => { (out[r.vendor_item_id] = out[r.vendor_item_id] || []).push(r); });
+  return out; // 이미 captured_at 오름차순 — 아이템별 배열
+}
+
+/* dateStr 하루 끝(KST) 시점에 유효했던 가장 최근 스냅샷. 시각 비교는 오프셋이 서로 다른
+   ISO 문자열(DB는 +00:00, 여기선 +09:00)이라 문자열 비교가 아니라 epoch ms로 해야 한다. */
+function snapshotAsOf(snapshots, dateStr) {
+  if (!snapshots || !snapshots.length) return null;
+  const cutoffMs = new Date(`${dateStr}T23:59:59.999+09:00`).getTime();
+  let picked = null;
+  for (const s of snapshots) {
+    if (new Date(s.captured_at).getTime() <= cutoffMs) picked = s; else break;
+  }
+  return picked;
+}
+
+/* 보관비는 "이번 달 누적" 스냅샷 하나뿐이라 일별로 못 쪼갠다(사용자 확인, 2026-08-16) —
+   가장 최근 스냅샷의 누적액을 그 스냅샷 시점까지의 이번 달 경과일수로 나눠 일평균을 낸 뒤
+   조회 기간 일수만큼 곱해 참고용으로 배분한다. 영업이익 계산엔 포함하지 않는다(사용자 명시). */
+function storageAllocationForItem(snapshots, rangeDayCount) {
+  if (!snapshots || !snapshots.length) return null;
+  const latest = snapshots[snapshots.length - 1];
+  const dayOfMonth = parseInt(kstDateStr(new Date(latest.captured_at)).split('-')[2], 10);
+  if (!dayOfMonth) return null;
+  const dailyRate = latest.monthly_storage_fee_amount / dayOfMonth;
+  return {
+    monthly: latest.monthly_storage_fee_amount,
+    allocated: Math.round(dailyRate * rangeDayCount)
+  };
+}
+
 async function fetchAndRenderSales(fromDate, toDate) {
   $('#salesMsg').classList.add('hidden');
   $('#dailyEmpty').classList.add('hidden');
@@ -1664,24 +1735,28 @@ async function fetchAndRenderSales(fromDate, toDate) {
     const rangeTxt = fromDate === toDate ? fromDate : `${fromDate} ~ ${toDate}`;
     $('#salesSummary').textContent = `${rangeTxt} 기준 (로켓그로스 Open API${hasWing ? ' + WING 반품 반영' : ''})`;
 
-    // 상품/옵션별 표는 선택한 기간(fromDate~toDate)만 옵션 단위로 다시 합산
-    const rangeByVendorItem = {};
-    dateRangeList(fromDate, toDate).forEach((d) => {
+    // 상품/옵션별 표는 선택한 기간(fromDate~toDate)만 다루되, 날짜별 내역을 그대로 들고 있는다
+    // — 스냅샷을 날짜별로 다르게 적용해야 "가격 바뀌기 전/후"가 정확히 갈린다.
+    const rangeDates = dateRangeList(fromDate, toDate);
+    const itemNames = {};
+    const itemDays = {};
+    rangeDates.forEach((d) => {
       (byDate[d] || []).forEach((r) => {
-        const cur = (rangeByVendorItem[r.vendor_item_id] = rangeByVendorItem[r.vendor_item_id] ||
-          { vendorItemId: r.vendor_item_id, productName: r.product_name, quantity: 0, revenue: 0 });
-        cur.quantity += r.quantity;
-        cur.revenue += r.revenue;
+        itemNames[r.vendor_item_id] = r.product_name;
+        (itemDays[r.vendor_item_id] = itemDays[r.vendor_item_id] || []).push(
+          { date: d, quantity: r.quantity, revenue: r.revenue }
+        );
       });
     });
-    const items = Object.values(rangeByVendorItem);
+    const vendorItemIdsInRange = Object.keys(itemDays);
 
-    if (!items.length) {
+    if (!vendorItemIdsInRange.length) {
       $('#salesEmpty').classList.remove('hidden');
       return;
     }
 
-    renderSales(items, meta);
+    const costSnapshots = await loadItemCostSnapshots(vendorItemIdsInRange, toDate);
+    renderSales(vendorItemIdsInRange, itemNames, itemDays, meta, costSnapshots, rangeDates.length);
   } catch (e) {
     $('#salesMsg').textContent = '판매현황을 불러오지 못했습니다: ' + e.message;
     $('#salesMsg').classList.remove('hidden');
@@ -1691,61 +1766,119 @@ async function fetchAndRenderSales(fromDate, toDate) {
   }
 }
 
-function renderSales(items, meta) {
-  let costedCount = 0, noCommissionCount = 0;
+/* 상품/옵션별 상세표. 날짜별로 수수료/입출고비를 계산해서 합산한다(범위 전체를 뭉쳐서
+   한 번에 계산하지 않는 이유) — 같은 상품이라도 날짜에 따라 적용할 원가 스냅샷이
+   다를 수 있어서다(가격 변경 전/후). 스냅샷 있는 날은 WING 실제값(개당 수수료를
+   그 날의 평균단가 대비 비율로 환산해 calcMargin에 넣음 — 반올림 없이 원래 금액으로
+   정확히 되돌아오는 계산이라 근사치 아님), 없는 날은 기존 카테고리 요율 추정으로 폴백. */
+function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, rangeDayCount) {
+  let costedCount = 0, noCommissionCount = 0, estimatedCount = 0;
 
-  const rows = items.map((it) => {
-    const m = meta[it.vendorItemId] || {};
-    const avgPrice = it.quantity ? it.revenue / it.quantity : 0;
-    const fee = m.catCode ? feeFor(m.catCode, m.size, avgPrice) : null;
-    const commissionRate = commissionFor(m.catCode);
+  const rows = vendorItemIds.map((vid) => {
+    const days = itemDays[vid];
+    const m = meta[vid] || {};
+    let quantity = 0, revenue = 0;
+    let commissionSum = 0, fulfillmentSum = 0, settlementSum = 0;
+    let cost = 0, shipWork = 0, opProfitSum = 0, costedQty = 0;
+    let hasReal = false, hasEstimate = false, hasAnyCommissionInfo = false;
 
-    if (commissionRate == null) { noCommissionCount++; return { it, noCommission: true }; }
+    days.forEach((day) => {
+      quantity += day.quantity;
+      revenue += day.revenue;
+      const avgPrice = day.quantity ? day.revenue / day.quantity : 0;
+      const snap = snapshotAsOf(costSnapshots[vid], day.date);
 
-    const c = calcMargin({
-      price: avgPrice, commission: commissionRate, fulfillment: fee,
-      costCny: m.costCny, rate: m.exchangeRate, outbound: m.outboundFee, work: m.workFee
+      let commissionRate, fulfillmentAmt;
+      if (snap) {
+        hasReal = true;
+        commissionRate = avgPrice > 0 ? (snap.commission_amount / avgPrice * 100) : 0;
+        fulfillmentAmt = snap.fulfillment_amount;
+      } else {
+        hasEstimate = true;
+        commissionRate = commissionFor(m.catCode);
+        fulfillmentAmt = m.catCode ? feeFor(m.catCode, m.size, avgPrice) : null;
+      }
+      if (commissionRate == null) return;
+      hasAnyCommissionInfo = true;
+
+      const c = calcMargin({
+        price: avgPrice, commission: commissionRate, fulfillment: fulfillmentAmt,
+        costCny: m.costCny, rate: m.exchangeRate, outbound: m.outboundFee, work: m.workFee
+      });
+      if (!c) return;
+      commissionSum += c.commission * day.quantity;
+      settlementSum += c.settlement * day.quantity;
+      if (fulfillmentAmt != null) fulfillmentSum += fulfillmentAmt * day.quantity;
+      if (c.margin != null) {
+        cost += c.cost * day.quantity;
+        shipWork += c.shipWork * day.quantity;
+        opProfitSum += c.margin * day.quantity;
+        costedQty += day.quantity;
+      }
     });
 
-    const commissionSum = c ? c.commission * it.quantity : null;
-    const fulfillmentSum = (fee != null) ? fee * it.quantity : null;
-    const marginSum = (c && c.margin !== null) ? c.margin * it.quantity : null;
+    if (!hasAnyCommissionInfo) { noCommissionCount++; return { vid, quantity, revenue, noCommission: true }; }
+    if (hasEstimate) estimatedCount++;
 
-    if (marginSum != null) costedCount++;
+    const hasCost = costedQty > 0;
+    if (hasCost) costedCount++;
 
-    return { it, commissionSum, fulfillmentSum, marginSum, commissionRate };
+    const storageInfo = storageAllocationForItem(costSnapshots[vid], rangeDayCount);
+    const netProfit = settlementSum - (storageInfo ? storageInfo.allocated : 0);
+
+    return {
+      vid, quantity, revenue, commissionSum, fulfillmentSum,
+      storageMonthly: storageInfo ? storageInfo.monthly : null,
+      storageAllocated: storageInfo ? storageInfo.allocated : null,
+      netProfit,
+      cost: hasCost ? cost : null,
+      shipWork: hasCost ? shipWork : null,
+      operatingProfit: hasCost ? (netProfit - cost - shipWork) : null,
+      isEstimate: hasEstimate
+    };
   });
 
-  const uncosted = items.length - costedCount - noCommissionCount;
+  const uncosted = rows.length - costedCount - noCommissionCount;
   const notes = [];
   if (uncosted > 0) notes.push(`원가 미입력 상품 ${uncosted}개`);
   if (noCommissionCount > 0) notes.push(`수수료 정보 없는 상품 ${noCommissionCount}개`);
-  $('#salesTableNote').textContent = notes.length ? `${notes.join(' · ')}는 이익 합계에서 제외됨` : '';
+  if (estimatedCount > 0) notes.push(`상품 원가정보 스냅샷 없어 카테고리 추정을 쓴 상품 ${estimatedCount}개`);
+  $('#salesTableNote').textContent = notes.length ? `${notes.join(' · ')}` : '';
 
   $('#salesBody').innerHTML = rows.map((r) => {
-    const { it } = r;
+    const name = esc(itemNames[r.vid] || '(이름 없음)');
     if (r.noCommission) {
       return `
 <tr>
-  <td>${esc(it.productName || '(이름 없음)')}</td>
-  <td class="col-num" data-label="판매수량">${cnt(it.quantity)}</td>
-  <td class="col-num" data-label="매출">${won(it.revenue)}</td>
-  <td class="col-num" data-label="추정 수수료"><span class="dim">수수료 정보 없음</span></td>
-  <td class="col-num" data-label="추정 입출고비"><span class="dim">수수료 정보 없음</span></td>
-  <td class="col-num" data-label="추정 이익"><span class="dim">수수료 정보 없음</span></td>
+  <td>${name}</td>
+  <td class="col-num" data-label="판매수량">${cnt(r.quantity)}</td>
+  <td class="col-num" data-label="매출">${won(r.revenue)}</td>
+  <td class="col-num" data-label="수수료"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num" data-label="입출고비"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num" data-label="보관비"><span class="dim">—</span></td>
+  <td class="col-num" data-label="이번달 누적보관비"><span class="dim">—</span></td>
+  <td class="col-num" data-label="순이익"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num" data-label="원가"><span class="dim">—</span></td>
+  <td class="col-num" data-label="배송·작업비"><span class="dim">—</span></td>
+  <td class="col-num" data-label="영업이익"><span class="dim">수수료 정보 없음</span></td>
 </tr>`;
     }
-    const { commissionSum, fulfillmentSum, marginSum, commissionRate } = r;
+    const est = r.isEstimate ? ' <span class="dim xs">(추정)</span>' : '';
     return `
 <tr>
-  <td>${esc(it.productName || '(이름 없음)')}</td>
-  <td class="col-num" data-label="판매수량">${cnt(it.quantity)}</td>
-  <td class="col-num" data-label="매출">${won(it.revenue)}</td>
-  <td class="col-num" data-label="추정 수수료">${commissionSum != null ? `${won(Math.round(commissionSum))} (${commissionRate}%)` : '—'}</td>
-  <td class="col-num" data-label="추정 입출고비">${fulfillmentSum != null ? won(Math.round(fulfillmentSum)) : '<span class="dim">요금표 없음</span>'}</td>
-  <td class="col-num" data-label="추정 이익">${
-    marginSum != null
-      ? `<span class="${marginSum >= 0 ? 'pos' : 'neg'}">${Math.round(marginSum).toLocaleString()}원</span>`
+  <td>${name}</td>
+  <td class="col-num" data-label="판매수량">${cnt(r.quantity)}</td>
+  <td class="col-num" data-label="매출">${won(r.revenue)}</td>
+  <td class="col-num" data-label="수수료">${won(Math.round(r.commissionSum))}${est}</td>
+  <td class="col-num" data-label="입출고비">${won(Math.round(r.fulfillmentSum))}${est}</td>
+  <td class="col-num" data-label="보관비">${r.storageAllocated != null ? won(r.storageAllocated) : '<span class="dim">—</span>'}</td>
+  <td class="col-num" data-label="이번달 누적보관비">${r.storageMonthly != null ? won(r.storageMonthly) : '<span class="dim">—</span>'}</td>
+  <td class="col-num" data-label="순이익"><span class="${r.netProfit >= 0 ? 'pos' : 'neg'}">${Math.round(r.netProfit).toLocaleString()}원</span></td>
+  <td class="col-num" data-label="원가">${r.cost != null ? won(Math.round(r.cost)) : '<span class="dim">원가 입력 필요</span>'}</td>
+  <td class="col-num" data-label="배송·작업비">${r.shipWork != null ? won(Math.round(r.shipWork)) : '<span class="dim">—</span>'}</td>
+  <td class="col-num" data-label="영업이익">${
+    r.operatingProfit != null
+      ? `<span class="${r.operatingProfit >= 0 ? 'pos' : 'neg'}">${Math.round(r.operatingProfit).toLocaleString()}원</span>`
       : '<span class="dim">원가 입력 필요</span>'
   }</td>
 </tr>`;
@@ -1754,6 +1887,7 @@ function renderSales(items, meta) {
 
 $('#salesRefresh').onclick = loadSales;
 $('#salesBackfillBtn').onclick = backfillSales;
+$('#itemCostRefreshBtn').onclick = refreshItemCosts;
 
 /* ===================== 필터 · 검색 ===================== */
 $('#filterToggle').onclick = () => $('#filterPanel').classList.toggle('hidden');

@@ -66,9 +66,12 @@
     '/tenants/rfm-inventory/sales/range',
     '/tenants/rfm/v2/settlements/profit-status/search',
     '/tenants/rfm/v2/settlements/upcoming-settlement/search',
-    /* 2026-08-15 추가 — 상품별 실제 보관비·개당 수수료/입출고비 조사용(재고현황 페이지).
-       __cwc_api_log(팝업 "캡처된 API 호출 목록")로 후보를 먼저 추리고 등록한 것이라
-       아직 요청/응답 구조는 미확인 — 다음 캡처로 확인할 것. */
+    /* 2026-08-15/16 추가 — 상품별 실제 보관비·개당 수수료/입출고비(재고현황 페이지).
+       inventory-health-dashboard/search: 2026-08-16 캡처 완료, background.js의
+       syncItemCosts()/pageFetchInventoryHealth()가 실제로 씀(요청/응답 구조는
+       docs/api-notes.md 4-4-6). storage-fee-modal/pricing-info는 캡처만 해두고
+       아직 안 씀 — pricing-info는 나중에 웹에 가격 수정 기능을 만들 때 상품 하나만
+       빠르게 재조회하는 용도로 쓸 후보(extension/CLAUDE.md 참조), 응답 구조는 미확인. */
     '/tenants/rfm-inventory/inventory-health-dashboard/storage-fee-modal/',
     '/tenants/rfm-inventory/inventory-health-dashboard/search',
     '/tenants/rfm/pricing-info/'
