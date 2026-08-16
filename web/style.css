@@ -183,7 +183,15 @@ input[type="checkbox"] { width: auto; accent-color: var(--accent); cursor: point
   width: var(--sidebar-w); flex-shrink: 0; padding: 14px 10px;
   background: var(--surface); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 3px; overflow-y: auto;
+  transition: width .16s ease;
 }
+.sidebar.collapsed { width: 56px; }
+.sidebar.collapsed .nav-item { justify-content: center; padding: 9px; }
+.sidebar.collapsed .nav-item span,
+.sidebar.collapsed .nav-user-txt { display: none; }
+.sidebar.collapsed .nav-user { justify-content: center; padding: 10px 0; }
+.nav-collapse-btn svg { transition: transform .16s ease; }
+.sidebar.collapsed .nav-collapse-btn svg { transform: rotate(180deg); }
 .nav-item {
   display: flex; align-items: center; gap: 11px;
   padding: 9px 12px; border: none; border-radius: var(--r-sm);
@@ -227,7 +235,7 @@ input[type="checkbox"] { width: auto; accent-color: var(--accent); cursor: point
 /* ---------- 표 ---------- */
 .table-wrap {
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r); overflow: hidden; box-shadow: var(--shadow-sm);
+  border-radius: var(--r); overflow-x: auto; overflow-y: hidden; box-shadow: var(--shadow-sm);
   margin-bottom: 14px;
 }
 .grid { width: 100%; border-collapse: collapse; }
@@ -239,11 +247,14 @@ input[type="checkbox"] { width: auto; accent-color: var(--accent); cursor: point
 }
 .grid td { padding: 10px 11px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
 .daily-total-row td { background: var(--surface-2); font-weight: 700; border-bottom: 2px solid var(--border-strong); }
-.day-detail { display: inline-block; cursor: pointer; }
-.day-detail summary { list-style: none; }
-.day-detail summary::-webkit-details-marker { display: none; }
-.day-detail[open] summary { color: var(--accent); }
-.day-detail .day-list { margin-top: 3px; font-size: 11px; color: var(--text-3); white-space: normal; max-width: 160px; }
+#salesBody td:first-child { min-width: 200px; }
+#salesBody tr.prow { cursor: pointer; }
+#salesBody tr.prow:hover { background: var(--surface-2); }
+#salesBody tr.prow.open { background: var(--accent-soft); }
+.kv-grid { display: flex; flex-wrap: wrap; gap: 10px 22px; }
+.kv { display: flex; align-items: baseline; gap: 6px; font-size: 12.5px; }
+.kv-k { color: var(--text-3); }
+.kv-v { font-weight: 600; font-variant-numeric: tabular-nums; }
 .grid tbody tr.prow { cursor: pointer; transition: background .1s; }
 .grid tbody tr.prow:hover { background: var(--surface-2); }
 .grid tbody tr.prow.open { background: var(--accent-soft); }
@@ -446,6 +457,8 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
     box-shadow: var(--shadow-lg);
   }
   .sidebar.open { transform: translateX(0); }
+  .sidebar.collapsed { width: var(--sidebar-w); } /* 모바일에선 접기 무의미 — 오프캔버스라 항상 원래 너비 */
+  .nav-collapse-btn { display: none; } /* 접기는 데스크톱 전용, 모바일은 오프캔버스로 이미 안 차지함 */
   .scrim { display: block; position: fixed; inset: var(--topbar-h) 0 0; z-index: 45;
            background: rgba(10,14,20,.45); opacity: 0; pointer-events: none; transition: opacity .22s; }
   .scrim.on { opacity: 1; pointer-events: auto; }
@@ -457,9 +470,13 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
   .grid thead { display: none; }
   .grid, .grid tbody, .grid tr, .grid td { display: block; width: 100%; }
   .grid tbody tr.prow {
-    position: relative; padding: 13px 13px 13px 70px; min-height: 74px;
+    position: relative; padding: 13px; min-height: 0;
     border-bottom: 1px solid var(--border);
   }
+  /* 소싱 탭만 왼쪽에 썸네일(.col-img)이 있어 그만큼 더 필요 — 판매현황 상품/옵션별
+     상세표는 이미지가 없는 .prow라 일반 패딩만 쓴다(2026-08-16, 행 펼치기 추가하며 발견:
+     이 규칙을 공용으로 쓰면 이미지 없는 표에도 빈 여백이 생김). */
+  #sourcingBody tr.prow { padding-left: 70px; min-height: 74px; }
   .grid tbody tr.prow td { border: none; padding: 0; }
   .grid td.col-img { position: absolute; left: 13px; top: 13px; width: 48px; }
   .grid td.col-name { margin-bottom: 7px; padding-right: 34px !important; }

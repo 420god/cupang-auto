@@ -1486,13 +1486,18 @@ async function loadItemMeta(vendorItemIds) {
 }
 
 /* 하루치 옵션별 판매(items)를 확정 정산(confirmed, 있으면)과 합쳐 한 줄로 만든다.
-   확정 정산에 있는 필드(수수료/입출고비/쿠폰/밀크런/순이익/매출)는 WING 확정값을 그대로 쓰고,
-   없으면(주로 오늘 — 정산 인식이 D-1 지연) 카테고리 요율+요금표 추정으로 채운다.
-   원가·배송/작업비·영업이익은 정산현황 API 자체에 없는 필드라 항상 옵션별 추정
-   (user_items.cost_cny 등, calcMargin() 재사용)으로만 계산한다 — 확정/추정 여부와 무관. */
-function buildDailyRow(date, items, meta, confirmed) {
+   확정 정산에 있는 필드(수수료/입출고비/보관비/쿠폰/밀크런/순이익/매출)는 WING 확정값을
+   그대로 쓰고, 없으면(주로 오늘 — 정산 인식이 D-1 지연) 옵션별 추정으로 채운다.
+   추정은 renderSales()와 동일한 우선순위를 따른다 — 상품 원가정보 스냅샷(costSnapshots)이
+   있으면 그 실제 개당 값을, 없는 상품만 카테고리 요율+요금표로 폴백(2026-08-16 개선:
+   예전엔 항상 카테고리 폴백만 써서, 카테고리 매칭이 안 된 계정은 당일 수수료·입출고비·
+   보관비·쿠폰비·순이익이 전부 0으로 보였다 — 매출·판매수량만 별도 경로라 정상이었음).
+   광고비·밀크런은 정산현황 API에만 있는 값이라 추정 방법 자체가 없어 항상 0(사용자 확인:
+   당일엔 몰라도 되는 값). 원가·배송/작업비·영업이익도 정산현황 API에 없는 필드라 항상
+   옵션별 추정(user_items.cost_cny 등, calcMargin() 재사용)으로만 계산 — 확정/추정 여부와 무관. */
+function buildDailyRow(date, items, meta, confirmed, costSnapshots) {
   let quantity = 0, itemRevenue = 0;
-  let estCommission = 0, estFulfillment = 0, estSettlement = 0;
+  let estCommission = 0, estFulfillment = 0, estCoupon = 0, estStorage = 0, estSettlement = 0;
   let cost = 0, shipWork = 0, opProfit = 0, costedQty = 0;
 
   items.forEach((it) => {
@@ -1500,9 +1505,23 @@ function buildDailyRow(date, items, meta, confirmed) {
     itemRevenue += it.revenue;
     const m = meta[it.vendor_item_id] || {};
     const avgPrice = it.quantity ? it.revenue / it.quantity : 0;
-    const commissionRate = commissionFor(m.catCode);
-    const fee = m.catCode ? feeFor(m.catCode, m.size, avgPrice) : null;
+
+    const snapResult = snapshotAsOf(costSnapshots && costSnapshots[it.vendor_item_id], date);
+    let commissionRate, fee, coupon;
+    if (snapResult) {
+      commissionRate = avgPrice > 0 ? (snapResult.snap.commission_amount / avgPrice * 100) : 0;
+      fee = snapResult.snap.fulfillment_amount;
+      coupon = snapResult.snap.coupon_amount || 0;
+    } else {
+      commissionRate = commissionFor(m.catCode);
+      fee = m.catCode ? feeFor(m.catCode, m.size, avgPrice) : null;
+      coupon = 0; // 카테고리 요율표엔 쿠폰 개념이 없어 추정 불가
+    }
     if (commissionRate == null) return;
+    estCoupon += coupon * it.quantity;
+    const storageInfo = storageAllocationForItem(costSnapshots && costSnapshots[it.vendor_item_id], 1);
+    if (storageInfo) estStorage += storageInfo.allocated;
+
     const c = calcMargin({
       price: avgPrice, commission: commissionRate, fulfillment: fee,
       costCny: m.costCny, rate: m.exchangeRate, outbound: m.outboundFee, work: m.workFee
@@ -1529,15 +1548,16 @@ function buildDailyRow(date, items, meta, confirmed) {
   const looksEmpty = confirmed && !confirmed.total_sales_amount && !confirmed.total_deduction_amount;
   const hasConfirmed = !!confirmed && !(looksEmpty && quantity > 0);
   const revenue = hasConfirmed ? confirmed.net_sales_amount : itemRevenue;
-  const netProfit = hasConfirmed ? confirmed.profit_amount : estSettlement;
+  const estNetProfit = estSettlement - estCoupon - estStorage;
+  const netProfit = hasConfirmed ? confirmed.profit_amount : estNetProfit;
   const hasCost = costedQty > 0;
 
   return {
     date, quantity, revenue,
     commission: hasConfirmed ? confirmed.commission_amount : estCommission,
     fulfillment: hasConfirmed ? confirmed.fulfillment_amount : estFulfillment,
-    storage: hasConfirmed ? confirmed.storage_amount : 0,
-    coupon: hasConfirmed ? confirmed.coupon_amount : 0,
+    storage: hasConfirmed ? confirmed.storage_amount : estStorage,
+    coupon: hasConfirmed ? confirmed.coupon_amount : estCoupon,
     ad: hasConfirmed ? confirmed.ad_amount : 0,
     milkrun: hasConfirmed ? confirmed.milkrun_amount : 0,
     netProfit,
@@ -1780,10 +1800,15 @@ async function fetchAndRenderSales(fromDate, toDate) {
 
     await state.readyForMargins; // feeCache 로딩 대기 (enterApp에서 이미 시작됨)
     const meta = await loadItemMeta(vendorItemIds);
+    // 상단 카드·일별 상세표의 추정치도 상품/옵션별 상세표와 같은 실제 개당 원가 스냅샷을
+    // 우선 쓰도록 여기서 한 번만 불러와 공유한다(2026-08-16 개선, 아래 buildDailyRow 참조) —
+    // 조회 범위 전체(fetchFrom~fetchTo)를 커버하니 뒤에서 renderSales()용으로 다시 불러올
+    // 필요 없다.
+    const costSnapshots = await loadItemCostSnapshots(vendorItemIds);
 
     const dailyByDate = {};
     dateRangeList(fetchFrom, fetchTo).forEach((d) => {
-      dailyByDate[d] = buildDailyRow(d, byDate[d] || [], meta, profitByDate[d]);
+      dailyByDate[d] = buildDailyRow(d, byDate[d] || [], meta, profitByDate[d], costSnapshots);
     });
 
     renderPeriodCards(dailyByDate, todayStr);
@@ -1813,7 +1838,6 @@ async function fetchAndRenderSales(fromDate, toDate) {
       return;
     }
 
-    const costSnapshots = await loadItemCostSnapshots(vendorItemIdsInRange);
     renderSales(vendorItemIdsInRange, itemNames, itemDays, meta, costSnapshots, rangeDates.length);
   } catch (e) {
     $('#salesMsg').textContent = '판매현황을 불러오지 못했습니다: ' + e.message;
@@ -1834,11 +1858,10 @@ function mdFmt(dateStr) {
   return `${Number(m)}/${Number(d)}`;
 }
 
-/* "판매일수" 칸 — 숫자만 봐도 되고, 클릭(<details>)하거나 hover(title)하면
-   실제로 팔린 날짜 목록까지 볼 수 있게 한다(사용자 요청, 2026-08-16). */
+/* "판매일" 칸 — 클릭 없이 바로 날짜 목록이 보이게 한다(사용자 요청, 2026-08-16 —
+   처음엔 "N일"+클릭 상세로 만들었다가 바로 눈에 안 보여 불편하다는 피드백으로 변경). */
 function dayDetailCell(dates) {
-  const list = dates.map(mdFmt).join(', ');
-  return `<details class="day-detail" title="${esc(list)}"><summary>${dates.length}일</summary><div class="day-list">${esc(list)}</div></details>`;
+  return esc(dates.map(mdFmt).join(', '));
 }
 
 function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, rangeDayCount) {
@@ -1932,46 +1955,64 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
 <tr>
   <td>${name}</td>
   <td class="col-num" data-label="판매수량">${cnt(r.quantity)}</td>
-  <td class="col-num" data-label="판매일수">${dayDetailCell(r.saleDates)}</td>
+  <td class="col-num" data-label="판매일">${dayDetailCell(r.saleDates)}</td>
   <td class="col-num" data-label="매출">${won(r.revenue)}</td>
-  <td class="col-num" data-label="수수료"><span class="dim">수수료 정보 없음</span></td>
-  <td class="col-num" data-label="입출고비"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num" data-label="수수료 및 입출고비"><span class="dim">수수료 정보 없음</span></td>
   <td class="col-num" data-label="쿠폰비"><span class="dim">—</span></td>
   <td class="col-num" data-label="보관비"><span class="dim">—</span></td>
-  <td class="col-num" data-label="이번달 누적보관비"><span class="dim">—</span></td>
   <td class="col-num" data-label="순이익"><span class="dim">수수료 정보 없음</span></td>
-  <td class="col-num" data-label="원가"><span class="dim">—</span></td>
-  <td class="col-num" data-label="배송·작업비"><span class="dim">—</span></td>
   <td class="col-num" data-label="영업이익"><span class="dim">수수료 정보 없음</span></td>
 </tr>`;
     }
     const est = r.label ? ` <span class="dim xs">${r.label}</span>` : '';
+    const feeCombined = Math.round(r.commissionSum) + Math.round(r.fulfillmentSum);
     return `
-<tr>
-  <td>${name}</td>
+<tr class="prow" data-vid="${esc(r.vid)}">
+  <td>
+    <div class="pname"><svg class="caret" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg><span>${name}</span></div>
+  </td>
   <td class="col-num" data-label="판매수량">${cnt(r.quantity)}</td>
-  <td class="col-num" data-label="판매일수">${dayDetailCell(r.saleDates)}</td>
+  <td class="col-num" data-label="판매일">${dayDetailCell(r.saleDates)}</td>
   <td class="col-num" data-label="매출">${won(r.revenue)}</td>
-  <td class="col-num" data-label="수수료">${won(Math.round(r.commissionSum))}${est}</td>
-  <td class="col-num" data-label="입출고비">${won(Math.round(r.fulfillmentSum))}${est}</td>
+  <td class="col-num" data-label="수수료 및 입출고비">${won(feeCombined)}${est}</td>
   <td class="col-num" data-label="쿠폰비">${won(Math.round(r.couponSum))}${est}</td>
   <td class="col-num" data-label="보관비">${r.storageAllocated != null ? won(r.storageAllocated) : '<span class="dim">—</span>'}</td>
-  <td class="col-num" data-label="이번달 누적보관비">${r.storageMonthly != null ? won(r.storageMonthly) : '<span class="dim">—</span>'}</td>
   <td class="col-num" data-label="순이익"><span class="${r.netProfit >= 0 ? 'pos' : 'neg'}">${Math.round(r.netProfit).toLocaleString()}원</span></td>
-  <td class="col-num" data-label="원가">${r.cost != null ? won(Math.round(r.cost)) : '<span class="dim">원가 입력 필요</span>'}</td>
-  <td class="col-num" data-label="배송·작업비">${r.shipWork != null ? won(Math.round(r.shipWork)) : '<span class="dim">—</span>'}</td>
   <td class="col-num" data-label="영업이익">${
     r.operatingProfit != null
       ? `<span class="${r.operatingProfit >= 0 ? 'pos' : 'neg'}">${Math.round(r.operatingProfit).toLocaleString()}원</span>`
       : '<span class="dim">원가 입력 필요</span>'
   }</td>
-</tr>`;
+</tr>
+<tr class="detail hidden" data-detail="${esc(r.vid)}"><td colspan="9"><div class="detail-inner">
+  <div class="kv-grid">
+    <div class="kv"><span class="kv-k">수수료</span><span class="kv-v">${won(Math.round(r.commissionSum))}</span></div>
+    <div class="kv"><span class="kv-k">입출고비</span><span class="kv-v">${won(Math.round(r.fulfillmentSum))}</span></div>
+    <div class="kv"><span class="kv-k">이번달 누적보관비</span><span class="kv-v">${r.storageMonthly != null ? won(r.storageMonthly) : '<span class="dim">—</span>'}</span></div>
+    <div class="kv"><span class="kv-k">원가</span><span class="kv-v">${r.cost != null ? won(Math.round(r.cost)) : '<span class="dim">원가 입력 필요</span>'}</span></div>
+    <div class="kv"><span class="kv-k">배송·작업비</span><span class="kv-v">${r.shipWork != null ? won(Math.round(r.shipWork)) : '<span class="dim">—</span>'}</span></div>
+  </div>
+</div></td></tr>`;
   }).join('');
 }
 
 $('#salesRefresh').onclick = loadSales;
 $('#salesBackfillBtn').onclick = backfillSales;
 $('#itemCostRefreshBtn').onclick = refreshItemCosts;
+
+/* 상품/옵션별 상세표 행 펼치기 — 소싱 탭(.prow/.detail)과 같은 패턴이지만, 필요한
+   값을 renderSales()가 이미 다 계산해서 HTML에 심어뒀으므로 추가 조회 없이 보이기만
+   전환한다(사용자 요청, 2026-08-16 — 컬럼이 13개라 상품명 칸이 압착되던 문제 해결). */
+$('#salesBody').addEventListener('click', (ev) => {
+  const row = ev.target.closest('tr.prow');
+  if (!row) return;
+  const vid = row.dataset.vid;
+  const detail = document.querySelector(`#salesBody tr[data-detail="${CSS.escape(vid)}"]`);
+  if (!detail) return;
+  const open = !detail.classList.contains('hidden');
+  detail.classList.toggle('hidden', open);
+  row.classList.toggle('open', !open);
+});
 
 /* ===================== 필터 · 검색 ===================== */
 $('#filterToggle').onclick = () => $('#filterPanel').classList.toggle('hidden');
@@ -2105,6 +2146,15 @@ $('#menuBtn').onclick = () => {
 };
 $('#scrim').onclick = closeSidebar;
 
+/* 사이드바 접기(데스크톱 전용, 사용자 요청 2026-08-16) — 5개 탭 아이콘+텍스트가 항상
+   펼쳐진 채로 공간을 차지해서, localStorage에 상태를 저장해 다음 방문에도 유지되게 했다.
+   모바일은 오프캔버스(위 .sidebar.open)라 애초에 공간을 안 차지하므로 버튼 자체를 숨김
+   (CSS .nav-collapse-btn { display:none } @860px 이하). */
+$('#sidebarCollapseBtn').onclick = () => {
+  const collapsed = $('#sidebar').classList.toggle('collapsed');
+  localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0');
+};
+
 /* ===================== 테마 ===================== */
 $('#themeBtn').onclick = () => {
   const cur = document.documentElement.dataset.theme;
@@ -2118,6 +2168,7 @@ $('#themeBtn').onclick = () => {
   document.documentElement.dataset.theme =
     localStorage.getItem('theme') ||
     (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  if (localStorage.getItem('sidebarCollapsed') === '1') $('#sidebar').classList.add('collapsed');
 
   $('#loginView').classList.add('hidden');
 
