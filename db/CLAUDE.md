@@ -13,11 +13,12 @@ migrations/007_drop_global_commission_default.sql  settings.fee_defaults에서 c
 migrations/008_root_name_trigger.sql  categories.root_name 자동유지 트리거 + 백필 + commission_rate 재적용
 migrations/009_rocket_growth_sales_wing.sql  WING 내부 API 기반 순매출(반품 반영) 스냅샷 — 확장프로그램이 upsert
 migrations/010_rocket_growth_profit_daily.sql  WING 정산현황 API 기반 확정 손익 스냅샷(계정 전체 합계) — 확장프로그램이 upsert
+migrations/011_rocket_growth_profit_storage.sql  rocket_growth_profit_daily에 storage_amount(보관비) 컬럼 추가 — 새 API 호출 없이 이미 받던 profit-status 응답 필드를 분리 저장
 ```
 
 **이미 실행된 파일은 절대 수정하지 않는다.** 스키마를 바꿔야 하면 `004_설명.sql`처럼 새 번호로 추가한다. 모든 마이그레이션은 `if not exists`/`drop ... if exists`를 써서 **여러 번 실행해도 안전**하게 만든다 — 이 관례를 유지할 것.
 
-새 세션에서 가장 먼저 확인할 것: **001~007은 실행 확인됨(2026-08-13). 008 실행 여부만 미확인** — 안 됐으면 먼저 실행.
+새 세션에서 가장 먼저 확인할 것: **001~010은 실행 확인됨(2026-08-15, 실사용 중 해당 테이블들이 정상 동작하는 것으로 간접 확인). 011 실행 여부만 미확인** — 안 됐으면 먼저 실행(`alter table ... add column if not exists`라 여러 번 실행해도 안전).
 
 ## 핵심 설계 (코드로는 안 보이는 이유)
 

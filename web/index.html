@@ -129,6 +129,8 @@
           없는 날짜(주로 오늘 — 정산 인식이 하루 지연됨)는 카테고리 실제 요율+요금표로 추정합니다.
           <b>원가·배송/작업비·영업이익은 정산현황 API 자체에 없는 값이라 항상 옵션별 추정</b>입니다
           (사이즈·원가 미입력 옵션은 이익 합계에서 빠집니다).
+          <b>보관비는 입출고비 안에 이미 포함된 금액을 참고용으로 따로 보여주는 것</b>이라
+          두 컬럼을 더하면 중복 계산됩니다.
         </div>
 
         <div class="table-wrap period-wrap">
@@ -178,6 +180,7 @@
                 <th class="col-num">매출</th>
                 <th class="col-num">수수료</th>
                 <th class="col-num">입출고비</th>
+                <th class="col-num">보관비</th>
                 <th class="col-num">쿠폰비</th>
                 <th class="col-num">밀크런</th>
                 <th class="col-num">순이익</th>

@@ -1500,6 +1500,7 @@ function buildDailyRow(date, items, meta, confirmed) {
     date, quantity, revenue,
     commission: hasConfirmed ? confirmed.commission_amount : estCommission,
     fulfillment: hasConfirmed ? confirmed.fulfillment_amount : estFulfillment,
+    storage: hasConfirmed ? confirmed.storage_amount : 0,
     coupon: hasConfirmed ? confirmed.coupon_amount : 0,
     milkrun: hasConfirmed ? confirmed.milkrun_amount : 0,
     netProfit,
@@ -1524,7 +1525,7 @@ async function fetchSalesRange(fromDate, toDate) {
     ),
     api(
       `rocket_growth_profit_daily?select=sale_date,net_sales_amount,commission_amount,fulfillment_amount,` +
-      `coupon_amount,ad_amount,milkrun_amount,profit_amount` +
+      `storage_amount,coupon_amount,ad_amount,milkrun_amount,profit_amount` +
       `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
     )
   ]);
@@ -1596,6 +1597,7 @@ function renderDailyTable(dailyByDate, fromDate, toDate) {
   <td class="col-num" data-label="매출">${won(r.revenue)}</td>
   <td class="col-num" data-label="수수료">${won(r.commission)}</td>
   <td class="col-num" data-label="입출고비">${won(r.fulfillment)}</td>
+  <td class="col-num" data-label="보관비">${won(r.storage)}</td>
   <td class="col-num" data-label="쿠폰비">${won(r.coupon)}</td>
   <td class="col-num" data-label="밀크런">${won(r.milkrun)}</td>
   <td class="col-num" data-label="순이익"><span class="${r.netProfit >= 0 ? 'pos' : 'neg'}">${r.netProfit.toLocaleString()}원</span></td>

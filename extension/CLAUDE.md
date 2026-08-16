@@ -65,6 +65,16 @@ categoryId (상품 응답의)  = kanCategoryId (요금 API의)  ← 같은 값, 
 
 **`externally_connectable`이 웹 도메인(`https://sourcing-web2.vercel.app/*`)만 허용한다** — 웹 배포 도메인이 바뀌면 `manifest.json`도 같이 고쳐야 한다. 이 메시지 채널은 그 도메인의 웹페이지 JS만 부를 수 있고, 다른 사이트나 페이지 콘텐츠(관찰된 데이터)에서는 절대 트리거되지 않는다 — 신뢰 경계가 도메인 단위인 것.
 
+## 재고현황 보관비·개당 수수료/입출고비 조사 (착수 전, 2026-08-15)
+
+판매현황의 상품/옵션별 상세표가 지금은 카테고리 요율표 추정만 쓰는데, WING 재고현황 페이지가 상품별 **실제** "예상(개당)"(판매수수료+입출고·배송비용 분해)과 "이번달 누적보관비"를 보여주는 걸 사용자가 스크린샷으로 확인시켜줬다 — 이걸로 대체하는 게 목표(`web/CLAUDE.md` 참조). `interceptor.js`의 일반 API 로그(`__cwc_api_log`, 팝업 "캡처된 API 호출 목록")로 후보 3개를 찾아 `SALES_PATHS`에 등록만 해뒀다:
+```
+/tenants/rfm-inventory/inventory-health-dashboard/storage-fee-modal/{vendorItemId}  (GET) — 보관기간별 일 보관비 요율표(재고 상세 모달)
+/tenants/rfm-inventory/inventory-health-dashboard/search                            (POST) — 재고현황 목록, "예상(개당)"·"이번달 누적보관비"가 여기 인라인으로 있을 가능성
+/tenants/rfm/pricing-info/{vendorItemId}                                            (GET) — "예상(개당)" 툴팁(판매수수료/입출고·배송비용 분해) 출처로 추정
+```
+**아직 요청 바디·헤더·응답 구조를 하나도 캡처 못 했다** — 위 등록은 "판매현황 API 캡처 보기"로 다음에 전체 캡처할 수 있게 준비만 해둔 것. 다음 단계: 확장프로그램 새로고침 → WING 재고현황 페이지에서 보관비 모달·개당수수료 툴팁을 다시 열어서 트리거 → 팝업 "판매현황 API 캡처 보기"로 헤더까지 확인(다른 WING 내부 API 때처럼 XSRF 토큰 등 인증 함정이 또 있을 수 있으니 반드시 헤더까지 볼 것) → 그 결과로 구현.
+
 ## 데이터 흐름 (기능 추가 시 참고)
 
 ```

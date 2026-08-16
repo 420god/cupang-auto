@@ -65,7 +65,13 @@
     '/tenants/rfm-inventory/sales/sold-vendor-item-list',
     '/tenants/rfm-inventory/sales/range',
     '/tenants/rfm/v2/settlements/profit-status/search',
-    '/tenants/rfm/v2/settlements/upcoming-settlement/search'
+    '/tenants/rfm/v2/settlements/upcoming-settlement/search',
+    /* 2026-08-15 추가 — 상품별 실제 보관비·개당 수수료/입출고비 조사용(재고현황 페이지).
+       __cwc_api_log(팝업 "캡처된 API 호출 목록")로 후보를 먼저 추리고 등록한 것이라
+       아직 요청/응답 구조는 미확인 — 다음 캡처로 확인할 것. */
+    '/tenants/rfm-inventory/inventory-health-dashboard/storage-fee-modal/',
+    '/tenants/rfm-inventory/inventory-health-dashboard/search',
+    '/tenants/rfm/pricing-info/'
   ];
   const K_SALES = '__cwc_sales_captures';
 

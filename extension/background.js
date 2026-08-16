@@ -218,6 +218,7 @@ async function syncProfitForDates(tab, dates) {
       total_deduction_amount: Math.round(Number(d.totalDeductionAmount) || 0),
       commission_amount: Math.round(Number(det.totalTakeRateAmountWithVat) || 0),
       fulfillment_amount: Math.round(Number(det.totalCfsAmountWithVat) || 0),
+      storage_amount: Math.round(Number(det.totalStorageFeeAmount) || 0),
       coupon_amount: Math.round(Number(det.totalSellerDiscountAmount) || 0),
       ad_amount: Math.round(Number(det.totalAdDeduction) || 0),
       milkrun_amount: Math.round(Number(det.totalMilkrunDeduction) || 0),
