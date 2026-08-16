@@ -15,11 +15,12 @@ migrations/009_rocket_growth_sales_wing.sql  WING 내부 API 기반 순매출(�
 migrations/010_rocket_growth_profit_daily.sql  WING 정산현황 API 기반 확정 손익 스냅샷(계정 전체 합계) — 확장프로그램이 upsert
 migrations/011_rocket_growth_profit_storage.sql  rocket_growth_profit_daily에 storage_amount(보관비) 컬럼 추가 — 새 API 호출 없이 이미 받던 profit-status 응답 필드를 분리 저장
 migrations/012_rocket_growth_item_cost_snapshots.sql  상품별 실제 개당 수수료·입출고비·보관비 이력 테이블(덮어쓰지 않고 스냅샷으로 쌓음) — 확장프로그램의 "상품 원가정보 갱신"이 insert
+migrations/013_rocket_growth_item_cost_coupon.sql  rocket_growth_item_cost_snapshots에 coupon_amount(개당 쿠폰비) 컬럼 추가 — 새 API 호출 없이 이미 받던 재고현황 응답 필드를 추가 저장
 ```
 
 **이미 실행된 파일은 절대 수정하지 않는다.** 스키마를 바꿔야 하면 `004_설명.sql`처럼 새 번호로 추가한다. 모든 마이그레이션은 `if not exists`/`drop ... if exists`를 써서 **여러 번 실행해도 안전**하게 만든다 — 이 관례를 유지할 것.
 
-새 세션에서 가장 먼저 확인할 것: **001~011은 실행 확인됨(2026-08-16). 012 실행 여부만 미확인** — 안 됐으면 먼저 실행(`create table if not exists`라 여러 번 실행해도 안전).
+새 세션에서 가장 먼저 확인할 것: **001~012는 실행 확인됨(2026-08-16). 013 실행 여부만 미확인** — 안 됐으면 먼저 실행(`alter table ... add column if not exists`라 여러 번 실행해도 안전).
 
 ## 핵심 설계 (코드로는 안 보이는 이유)
 

@@ -76,6 +76,7 @@ categoryId (상품 응답의)  = kanCategoryId (요금 API의)  ← 같은 값, 
      inventory-health-dashboard/search를 pageSize=10 커서 기반으로 끝까지 페이지네이션
      (MAX_ITEM_COST_PAGES=60 안전장치, pageSize 10 기준 최대 600개 상품)
      → 상품마다 {commission_amount(=takeRateAmount), fulfillment_amount(=fulfillmentFee+warehousingFee),
+        coupon_amount(=allMemberInstantDiscount+allMemberDownloadableDiscount, db/migrations/013),
         monthly_storage_fee_amount} 추출 → rocket_growth_item_cost_snapshots(db/migrations/012)에 insert
   → 웹에 {ok, rowCount} 응답 → fetchAndRenderSales() 재호출로 화면 갱신
 ```

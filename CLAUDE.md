@@ -66,7 +66,7 @@ Vercel 배포(`420god/cupang-auto` → `sourcing-web2.vercel.app`), `main` push 
 **주의: GitHub→Vercel 웹훅이 가끔 유실된다(2026-08-13 실제로 겪음)** — 푸시했는데 사이트에 반영이 안 되면, 배포 목록에 그 커밋이 아예 없는지부터 확인. 없으면 `git commit --allow-empty` + push로 재트리거하면 됨(빌드 실패가 아니라 웹훅이 안 온 것이라 로그 볼 필요 없음).
 
 ### DB 마이그레이션
-001~011 실행 완료 확인됨(2026-08-16). **012(`rocket_growth_item_cost_snapshots` 테이블 신설)는 실행 여부 미확인 — 세션 시작하면 제일 먼저 확인할 것.**
+001~012 실행 완료 확인됨(2026-08-16). **013(`rocket_growth_item_cost_snapshots.coupon_amount` 컬럼 추가)은 실행 여부 미확인 — 세션 시작하면 제일 먼저 확인할 것.**
 
 ### 판매수수료 (내부 역공학 API 계산용)
 카테고리별 실제 요율 사용 중, 전역 가정치(10.8%) 폴백 없음(`web/app.js`의 `commissionFor()`). 매칭 안 된 카테고리는 "수수료 정보 없음"으로 표시하고 마진 계산을 안 한다 — 의도된 동작.

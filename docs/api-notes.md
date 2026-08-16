@@ -225,7 +225,9 @@ todayHourlySales의 12시 구간: gmv -18000, unitsSold -2       ← 반품 시�
 
 **캡처 인프라(진단용, 지금도 남아있음)**: `extension/interceptor.js`의 `SALES_PATHS`/`saveSalesCapture()`가 이 두 API의 요청·응답을 `sessionStorage.__cwc_sales_captures`에 저장하고, 팝업의 "판매현황 API 캡처 보기" 버튼으로 확인 가능 — 이 API가 나중에 또 바뀌었는지 확인할 때 씀.
 
-**구현 완료(2026-08-15)**: 실제 자동 동기화는 `extension/background.js`(신설 서비스워커)가 담당한다. 웹의 판매현황 탭이 열릴 때마다 `chrome.runtime.sendMessage`로 "오늘+어제" 동기화를 요청하고, 백그라운드가 WING 탭에서 하루씩 호출해 `rocket_growth_sales_wing_daily`(`db/migrations/009`)에 upsert한다. 자세한 흐름은 `extension/CLAUDE.md` "판매현황/반품 동기화" 섹션, 웹 쪽 병합 로직(같은 날짜·옵션이면 이 테이블 값이 기존 `rocket_growth_sales_daily`보다 우선)은 `web/CLAUDE.md` 참조.
+**구현 완료(2026-08-15)**: 실제 자동 동기화는 `extension/background.js`(신설 서비스워커)가 담당한다. 웹의 판매현황 탭이 열릴 때마다 `chrome.runtime.sendMessage`로 "오늘+어제" 동기화를 요청하고, 백그라운드가 WING 탭에서 하루씩 호출해 `rocket_growth_sales_wing_daily`(`db/migrations/009`)에 upsert한다. 자세한 흐름은 `extension/CLAUDE.md` "판매현황/반품 동기화" 섹션, 웹 쪽 병합 로직(같은 날짜에 WING 데이터가 있으면 그 날짜는 공식 Open API를 통째로 무시하고 WING만 씀 — 2026-08-16 수정, 아래 참조)은 `web/CLAUDE.md` 참조.
+
+**순매출이 정확히 0이 된 항목은 이 API 목록 자체에서 빠진다(2026-08-16 실측 확인)** — 같은 날 매입과 반품이 겹쳐서 net GMV/수량이 정확히 0이 되면, `soldVendorItems[]`에 그 항목이 0으로 찍히는 게 아니라 **아예 없다**. 처음엔 웹이 "WING에 있으면 WING값, 없으면 공식 Open API값"으로 항목별 병합을 해서, 이런 순제로 항목이 공식 Open API의 반품 미반영 값 그대로 남아 매출이 과다 계상되는 버그가 있었다(2026-08-15 실측 사례: 12,900원 과다 계상). **날짜 단위로 "그 날짜에 WING 데이터가 하나라도 있으면 그 날짜는 WING만 쓴다"로 병합 단위를 바꿔서 해결** — WING이 그 날짜를 동기화했다면 원래 완전한 목록이므로 항목별로 섞을 이유가 없다.
 
 **그린 47g의 800원 잔존액(2026-08-15, 정정)**: "반품배송비 차감분"이라는 앞선 추정은 근거 없는 추측이었다. 더 설득력 있는 설명(사용자 제보, 미확정이지만 유력): 그린은 오늘 새벽에 팔리고 오늘 낮에 반품된 "당일 판매+당일 반품" 케이스인데(퍼플은 반품만 있고 판매가 없어서 깨끗하게 나옴, 위 참조), **"판매" 쪽 금액과 "반품(환불)" 쪽 금액이 서로 다른 가격 기준으로 잡혔을 가능성**이 있다 — 예: 판매 시점 가격과 환불 처리 시점 가격이 다르거나(사용자가 그 사이 가격을 800원 올렸다고 함), 판매 쪽은 쿠폰 할인 전 정가로 잡히고 환불 쪽은 쿠폰 할인 후 실제 결제액 기준으로 처리됐거나. 어느 쪽이 맞는지는 아직 실측 검증 안 됨 — 급한 문제는 아니라서 보류. **중요한 건 net 값(`gmv`/`unitsSold`) 자체는 쿠팡이 실제 거래를 합산한 결과라 신뢰할 수 있다는 것** — 판매가를 우리가 따로 추적/캐싱하는 게 아니므로 가격을 자주 바꿔도 이 net 값엔 왜곡이 없다.
 
@@ -332,6 +334,16 @@ POST https://wing.coupang.com/tenants/rfm-inventory/inventory-health-dashboard/s
 **`pricing-info/{vendorItemId}`(GET)는 아직 응답을 못 봤다** — `SALES_PATHS`에 후보로만 등록해뒀음. 나중에 웹에 가격 수정 기능을 만들 때, 가격 바꾼 상품 하나만 전체 페이지네이션 없이 빠르게 재조회하는 용도로 쓸 수 있을지 그때 확인할 것(아래 "상품별 원가정보 스냅샷" 참고).
 
 **구현 완료(2026-08-16)** — `extension/background.js`의 `syncItemCosts()`/`pageFetchInventoryHealth()`가 전체 상품을 끝까지 페이지네이션해서 `rocket_growth_item_cost_snapshots`(`db/migrations/012`)에 저장한다. 자세한 설계(왜 덮어쓰지 않고 이력으로 쌓는지, 가격 변경 시점과의 연동 계획)는 `extension/CLAUDE.md`, 웹에서 이 값을 쓰는 방식은 `web/CLAUDE.md` 참조.
+
+**개당 쿠폰비도 같은 응답에 있음(`db/migrations/013`, 2026-08-16 추가)** — `viProperties[].pricing`에:
+```
+"pricing": {
+  "salesPrice": {"amount"},
+  "allMemberInstantDiscount": {"amount"},      ← 즉시할인쿠폰(판매자 부담)
+  "allMemberDownloadableDiscount": {"amount"}  ← 다운로드쿠폰(판매자 부담)
+}
+```
+이 둘의 합을 개당 쿠폰비로 쓴다 — 확정 정산(profit-status)의 `totalSellerInstantDiscountAmount`+`totalSellerDownloadDiscountAmount`(=`totalSellerDiscountAmount`, 4-4-4)와 이름·구조가 대응돼서 같은 개념으로 판단했다. **`creturnConfigViewDto.salePrice`라는 필드도 같은 응답에 있는데 이건 반품 수수료 계산용 컨텍스트 필드로 보여서 안 씀** — 사용자가 WING 화면에서 말한 "최종구매가"가 정확히 이 계산과 일치하는지 실측 검증은 아직 안 됨(2026-08-16 기준), 웹 화면 hint-box에 "다르면 알려달라"는 안내를 남겨둠.
 
 ### 4-5. 이익 계산에 필요한 나머지 조각
 원가는 애초에 쿠팡 API 어디에도 없다 — 이미 있는 `user_items.cost_cny`를 써야 한다. 주문 API의 `vendorItemId`로 `product_items.vendor_item_id`를 조인하면 연결된다. 마진 계산은 3번의 `calcMargin()`을 그대로 재사용(별도 계산식 새로 만들지 말 것 — `web/CLAUDE.md` 규칙).

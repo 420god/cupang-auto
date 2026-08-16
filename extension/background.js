@@ -209,6 +209,7 @@ async function syncItemCosts(tab) {
     (d.viProperties || []).forEach((vi) => {
       const ss = vi.settlementStatistics || {};
       const inv = vi.inventoryDetails || {};
+      const pr2 = vi.pricing || {};
       rows.push({
         vendor_item_id: String(vi.vendorItemId),
         captured_at: capturedAt,
@@ -219,6 +220,12 @@ async function syncItemCosts(tab) {
         ),
         monthly_storage_fee_amount: Math.round(
           Number(inv.storageFee && inv.storageFee.monthlyStorageFeeAmount && inv.storageFee.monthlyStorageFeeAmount.amount) || 0
+        ),
+        // 판매자 부담 쿠폰(개당) — 확정 정산의 totalSellerInstantDiscountAmount+
+        // totalSellerDownloadDiscountAmount와 같은 개념·명명 규칙(docs/api-notes.md 4-4-6).
+        coupon_amount: Math.round(
+          (Number(pr2.allMemberInstantDiscount && pr2.allMemberInstantDiscount.amount) || 0) +
+          (Number(pr2.allMemberDownloadableDiscount && pr2.allMemberDownloadableDiscount.amount) || 0)
         ),
         trigger_source: 'manual_refresh'
       });

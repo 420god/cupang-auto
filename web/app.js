@@ -1530,6 +1530,7 @@ function buildDailyRow(date, items, meta, confirmed) {
     fulfillment: hasConfirmed ? confirmed.fulfillment_amount : estFulfillment,
     storage: hasConfirmed ? confirmed.storage_amount : 0,
     coupon: hasConfirmed ? confirmed.coupon_amount : 0,
+    ad: hasConfirmed ? confirmed.ad_amount : 0,
     milkrun: hasConfirmed ? confirmed.milkrun_amount : 0,
     netProfit,
     cost: hasCost ? cost : null,
@@ -1558,22 +1559,36 @@ async function fetchSalesRange(fromDate, toDate) {
     )
   ]);
 
-  // 같은 (날짜, 옵션)이면 WING 값(반품 반영)이 Open API 값(반품 미반영)보다 우선한다
-  const merged = {};
-  (grossRows || []).forEach((r) => { merged[r.sale_date + '|' + r.vendor_item_id] = r; });
-  (wingRows || []).forEach((r) => { merged[r.sale_date + '|' + r.vendor_item_id] = r; });
-
+  /* 날짜 단위로 병합한다(항목별 병합 아님, 2026-08-16 수정) — WING의
+     sold-vendor-item-list는 그 날짜를 동기화했다면 "순매출이 있는 항목 전체"를
+     완전한 목록으로 준다. 그런데 당일 매입+반품으로 순매출이 정확히 0이 된 항목은
+     그 목록 자체에서 빠진다(0을 보여주는 게 아니라 아예 없음). 예전엔 항목별로
+     "WING에 있으면 WING, 없으면 Open API" 식으로 병합해서, 이런 순제로 항목이
+     Open API의 반품 반영 전 값 그대로 남아 매출이 과다 계상되는 버그가 있었다
+     (실사용 중 발견: 2026-08-15에 "덴넬 빅치즈...510g"가 당일 매입+반품으로 WING
+     목록엔 없는데 Open API엔 12,900원으로 남아있어 그만큼 이중 계상됨).
+     그래서 "이 날짜에 WING 데이터가 하나라도 있으면 그 날짜는 WING만 쓰고
+     Open API는 통째로 무시"로 바꿨다 — WING이 그 날짜를 동기화했다면 원래
+     완전한 목록이라 섞을 필요가 없다. WING이 아예 동기화 안 된 날짜만
+     Open API로 폴백한다(반품 미반영이라 부정확할 수 있지만 없는 것보단 낫다). */
+  const wingDates = new Set((wingRows || []).map((r) => r.sale_date));
   const byDate = {};
-  Object.values(merged).forEach((r) => {
+  (grossRows || []).forEach((r) => {
+    if (wingDates.has(r.sale_date)) return; // 이 날짜는 WING이 완전한 진실 — Open API 무시
+    (byDate[r.sale_date] = byDate[r.sale_date] || []).push(r);
+  });
+  (wingRows || []).forEach((r) => {
     (byDate[r.sale_date] = byDate[r.sale_date] || []).push(r);
   });
 
   const profitByDate = {};
   (profitRows || []).forEach((r) => { profitByDate[r.sale_date] = r; });
 
-  const vendorItemIds = Array.from(new Set(Object.values(merged).map((r) => r.vendor_item_id)));
+  const vendorItemIds = Array.from(new Set(
+    Object.values(byDate).flat().map((r) => r.vendor_item_id)
+  ));
 
-  return { byDate, profitByDate, vendorItemIds, hasWing: (wingRows || []).length > 0 };
+  return { byDate, profitByDate, vendorItemIds, hasWing: wingDates.size > 0 };
 }
 
 function sumDailyRows(dailyRows) {
@@ -1627,6 +1642,7 @@ function renderDailyTable(dailyByDate, fromDate, toDate) {
   <td class="col-num" data-label="입출고비">${won(r.fulfillment)}</td>
   <td class="col-num" data-label="보관비">${won(r.storage)}</td>
   <td class="col-num" data-label="쿠폰비">${won(r.coupon)}</td>
+  <td class="col-num" data-label="광고비">${won(r.ad)}</td>
   <td class="col-num" data-label="밀크런">${won(r.milkrun)}</td>
   <td class="col-num" data-label="순이익"><span class="${r.netProfit >= 0 ? 'pos' : 'neg'}">${r.netProfit.toLocaleString()}원</span></td>
   <td class="col-num" data-label="원가">${r.cost != null ? won(r.cost) : '<span class="dim">—</span>'}</td>
@@ -1673,7 +1689,7 @@ async function loadItemCostSnapshots(vendorItemIds) {
   // (2026-08-16 실사용 중 발견). snapshotAsOf() 자체가 이미 "그 날짜 이전 것 우선,
   // 없으면 가장 이른 것"을 골라내므로 여기서는 전체를 다 가져오기만 하면 된다.
   const rows = await api(
-    `rocket_growth_item_cost_snapshots?select=vendor_item_id,captured_at,commission_amount,fulfillment_amount,monthly_storage_fee_amount` +
+    `rocket_growth_item_cost_snapshots?select=vendor_item_id,captured_at,commission_amount,fulfillment_amount,coupon_amount,monthly_storage_fee_amount` +
     `&vendor_item_id=in.(${vendorItemIds.map(encodeURIComponent).join(',')})` +
     `&order=vendor_item_id.asc,captured_at.asc`
   ) || [];
@@ -1789,7 +1805,7 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
     const days = itemDays[vid];
     const m = meta[vid] || {};
     let quantity = 0, revenue = 0;
-    let commissionSum = 0, fulfillmentSum = 0, settlementSum = 0;
+    let commissionSum = 0, fulfillmentSum = 0, couponSum = 0, settlementSum = 0;
     let cost = 0, shipWork = 0, opProfitSum = 0, costedQty = 0;
     let hasReal = false, hasApprox = false, hasEstimate = false, hasAnyCommissionInfo = false;
 
@@ -1799,19 +1815,22 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
       const avgPrice = day.quantity ? day.revenue / day.quantity : 0;
       const snapResult = snapshotAsOf(costSnapshots[vid], day.date);
 
-      let commissionRate, fulfillmentAmt;
+      let commissionRate, fulfillmentAmt, couponAmt;
       if (snapResult) {
         hasReal = true;
         if (!snapResult.exact) hasApprox = true; // 그 날짜 이전 스냅샷이 없어 이후 스냅샷을 대신 씀
         commissionRate = avgPrice > 0 ? (snapResult.snap.commission_amount / avgPrice * 100) : 0;
         fulfillmentAmt = snapResult.snap.fulfillment_amount;
+        couponAmt = snapResult.snap.coupon_amount || 0;
       } else {
         hasEstimate = true;
         commissionRate = commissionFor(m.catCode);
         fulfillmentAmt = m.catCode ? feeFor(m.catCode, m.size, avgPrice) : null;
+        couponAmt = 0; // 카테고리 요율표엔 쿠폰 개념이 없어 추정 불가
       }
       if (commissionRate == null) return;
       hasAnyCommissionInfo = true;
+      couponSum += couponAmt * day.quantity;
 
       const c = calcMargin({
         price: avgPrice, commission: commissionRate, fulfillment: fulfillmentAmt,
@@ -1837,10 +1856,10 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
     if (hasCost) costedCount++;
 
     const storageInfo = storageAllocationForItem(costSnapshots[vid], rangeDayCount);
-    const netProfit = settlementSum - (storageInfo ? storageInfo.allocated : 0);
+    const netProfit = settlementSum - couponSum - (storageInfo ? storageInfo.allocated : 0);
 
     return {
-      vid, quantity, revenue, commissionSum, fulfillmentSum,
+      vid, quantity, revenue, commissionSum, fulfillmentSum, couponSum,
       storageMonthly: storageInfo ? storageInfo.monthly : null,
       storageAllocated: storageInfo ? storageInfo.allocated : null,
       netProfit,
@@ -1871,6 +1890,7 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
   <td class="col-num" data-label="매출">${won(r.revenue)}</td>
   <td class="col-num" data-label="수수료"><span class="dim">수수료 정보 없음</span></td>
   <td class="col-num" data-label="입출고비"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num" data-label="쿠폰비"><span class="dim">—</span></td>
   <td class="col-num" data-label="보관비"><span class="dim">—</span></td>
   <td class="col-num" data-label="이번달 누적보관비"><span class="dim">—</span></td>
   <td class="col-num" data-label="순이익"><span class="dim">수수료 정보 없음</span></td>
@@ -1887,6 +1907,7 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
   <td class="col-num" data-label="매출">${won(r.revenue)}</td>
   <td class="col-num" data-label="수수료">${won(Math.round(r.commissionSum))}${est}</td>
   <td class="col-num" data-label="입출고비">${won(Math.round(r.fulfillmentSum))}${est}</td>
+  <td class="col-num" data-label="쿠폰비">${won(Math.round(r.couponSum))}${est}</td>
   <td class="col-num" data-label="보관비">${r.storageAllocated != null ? won(r.storageAllocated) : '<span class="dim">—</span>'}</td>
   <td class="col-num" data-label="이번달 누적보관비">${r.storageMonthly != null ? won(r.storageMonthly) : '<span class="dim">—</span>'}</td>
   <td class="col-num" data-label="순이익"><span class="${r.netProfit >= 0 ? 'pos' : 'neg'}">${Math.round(r.netProfit).toLocaleString()}원</span></td>
