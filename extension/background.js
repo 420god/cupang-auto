@@ -306,6 +306,19 @@ async function syncProfitForDates(tab, dates) {
     }
     const d = r.data;
     const det = d.profitStatusDeductionDetail || {};
+    // WING이 아직 그 날짜를 인식 안 했을 때도 HTTP 200 + profitAmount:0인 "빈" 응답을
+    // 준다(필드는 다 있지만 전부 0) — 주로 당일(정산 인식 D-1 지연) 자정 직후 자동
+    // 동기화에서 겪음(2026-08-16 실사용 중 발견: totalSalesAmount/totalDeductionAmount
+    // 둘 다 0인 행이 그대로 저장돼 웹의 buildDailyRow()가 이걸 "확정"으로 믿고 실제
+    // 판매(수량 2건)가 있는데도 매출·수수료·순이익을 전부 0으로 덮어썼다). 이 신호를
+    // 실패와 동일하게 취급해 저장을 건너뛴다 — 실제 0원 정산일도 있을 수 있지만, 그런
+    // 날은 애초에 판매 자체가 없어 웹의 옵션별 추정 폴백도 똑같이 0을 보여주므로
+    // 안전하다.
+    if (!Number(d.totalSalesAmount) && !Number(d.totalDeductionAmount)) {
+      console.warn(`[정산 동기화] ${dateStr} 건너뜀 — 원인: 정산 미인식(빈 응답)`);
+      failed.push({ date: dateStr, error: '정산 미인식(D-1 지연 등)' });
+      continue;
+    }
     rows.push({
       sale_date: dateStr,
       total_sales_amount: Math.round(Number(d.totalSalesAmount) || 0),

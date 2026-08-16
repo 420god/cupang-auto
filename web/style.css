@@ -238,6 +238,12 @@ input[type="checkbox"] { width: auto; accent-color: var(--accent); cursor: point
   text-align: left; white-space: nowrap;
 }
 .grid td { padding: 10px 11px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+.daily-total-row td { background: var(--surface-2); font-weight: 700; border-bottom: 2px solid var(--border-strong); }
+.day-detail { display: inline-block; cursor: pointer; }
+.day-detail summary { list-style: none; }
+.day-detail summary::-webkit-details-marker { display: none; }
+.day-detail[open] summary { color: var(--accent); }
+.day-detail .day-list { margin-top: 3px; font-size: 11px; color: var(--text-3); white-space: normal; max-width: 160px; }
 .grid tbody tr.prow { cursor: pointer; transition: background .1s; }
 .grid tbody tr.prow:hover { background: var(--surface-2); }
 .grid tbody tr.prow.open { background: var(--accent-soft); }

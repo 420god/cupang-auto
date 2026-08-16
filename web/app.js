@@ -1519,7 +1519,15 @@ function buildDailyRow(date, items, meta, confirmed) {
     }
   });
 
-  const hasConfirmed = !!confirmed;
+  // WING이 그 날짜를 아직 인식 안 했는데도(주로 당일, D-1 지연) total_sales_amount/
+  // total_deduction_amount가 둘 다 0인 "빈" 확정 행이 저장돼 있을 수 있다(2026-08-16
+  // 실사용 중 발견 — background.js는 이후 이런 행 자체를 안 만들도록 고쳤지만, 과거에
+  // 이미 저장된 행이나 다른 경로로 또 들어올 경우를 대비해 웹에서도 방어한다). 실제
+  // 판매(quantity)가 있는데 확정 행이 이렇게 비어있으면 확정으로 믿지 않고 옵션별
+  // 추정으로 폴백 — 반대로 quantity도 0인 진짜 무판매일은 그대로 확정 취급해도
+  // 어차피 추정 폴백도 0이라 결과가 같다.
+  const looksEmpty = confirmed && !confirmed.total_sales_amount && !confirmed.total_deduction_amount;
+  const hasConfirmed = !!confirmed && !(looksEmpty && quantity > 0);
   const revenue = hasConfirmed ? confirmed.net_sales_amount : itemRevenue;
   const netProfit = hasConfirmed ? confirmed.profit_amount : estSettlement;
   const hasCost = costedQty > 0;
@@ -1553,8 +1561,8 @@ async function fetchSalesRange(fromDate, toDate) {
       `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
     ),
     api(
-      `rocket_growth_profit_daily?select=sale_date,net_sales_amount,commission_amount,fulfillment_amount,` +
-      `storage_amount,coupon_amount,ad_amount,milkrun_amount,profit_amount` +
+      `rocket_growth_profit_daily?select=sale_date,total_sales_amount,total_deduction_amount,net_sales_amount,` +
+      `commission_amount,fulfillment_amount,storage_amount,coupon_amount,ad_amount,milkrun_amount,profit_amount` +
       `&sale_date=gte.${fromDate}&sale_date=lte.${toDate}`
     )
   ]);
@@ -1627,15 +1635,22 @@ function renderPeriodCards(dailyByDate, todayStr) {
   }).join('');
 }
 
-/* 조회 기간(salesFrom~salesTo)만 표시하는 일별 상세표. */
+/* 조회 기간(salesFrom~salesTo)만 표시하는 일별 상세표. 날짜가 2개 이상이면 맨 위에
+   합계 행을 고정 표시한다(사용자 요청, 2026-08-16) — 날짜 정렬과 무관하게 항상 맨 위. */
 function renderDailyTable(dailyByDate, fromDate, toDate) {
   const dates = dateRangeList(fromDate, toDate).slice().reverse(); // 최신 날짜가 위로
   const rows = dates.map((d) => dailyByDate[d]).filter(Boolean);
 
   $('#dailyEmpty').classList.toggle('hidden', rows.length > 0);
-  $('#dailyBody').innerHTML = rows.map((r) => `
-<tr>
-  <td data-label="날짜">${r.date}</td>
+  const totalHtml = rows.length > 1 ? dailyRowHtml(sumDailyFullRows(rows), '합계', true) : '';
+  $('#dailyBody').innerHTML = totalHtml + rows.map((r) => dailyRowHtml(r, r.date, false)).join('');
+}
+
+/* 일별 상세표 한 줄 렌더러 — 날짜별 행과 맨 위 합계 행이 이 함수 하나를 공유한다. */
+function dailyRowHtml(r, dateLabel, isTotal) {
+  return `
+<tr class="${isTotal ? 'daily-total-row' : ''}">
+  <td data-label="날짜">${dateLabel}</td>
   <td class="col-num" data-label="판매수량">${cnt(r.quantity)}</td>
   <td class="col-num" data-label="매출">${won(r.revenue)}</td>
   <td class="col-num" data-label="수수료">${won(r.commission)}</td>
@@ -1652,7 +1667,23 @@ function renderDailyTable(dailyByDate, fromDate, toDate) {
       ? `<span class="${r.operatingProfit >= 0 ? 'pos' : 'neg'}">${r.operatingProfit.toLocaleString()}원</span>`
       : '<span class="dim">원가 입력 필요</span>'
   }</td>
-</tr>`).join('');
+</tr>`;
+}
+
+/* renderDailyTable() 합계 행 전용 — sumDailyRows()(상단 카드용, 매출/순이익/영업이익 3개만)와
+   달리 일별 상세표의 모든 칸을 채워야 해서 별도로 둔다. cost/shipWork/operatingProfit은
+   원가 입력된 날짜만 골라 합산(부분 계산 허용 관례, buildDailyRow()와 동일). */
+function sumDailyFullRows(rows) {
+  const sum = (key) => rows.reduce((s, r) => s + r[key], 0);
+  const costedRows = rows.filter((r) => r.cost != null);
+  return {
+    quantity: sum('quantity'), revenue: sum('revenue'), commission: sum('commission'),
+    fulfillment: sum('fulfillment'), storage: sum('storage'), coupon: sum('coupon'),
+    ad: sum('ad'), milkrun: sum('milkrun'), netProfit: sum('netProfit'),
+    cost: costedRows.length ? costedRows.reduce((s, r) => s + r.cost, 0) : null,
+    shipWork: costedRows.length ? costedRows.reduce((s, r) => s + r.shipWork, 0) : null,
+    operatingProfit: costedRows.length ? costedRows.reduce((s, r) => s + r.operatingProfit, 0) : null
+  };
 }
 
 /* 정산현황 API는 계정 전체 합계만 주고 어떤 상품이 팔렸는지는 없다(docs/api-notes.md 4-4-4) —
@@ -1798,6 +1829,18 @@ async function fetchAndRenderSales(fromDate, toDate) {
    다를 수 있어서다(가격 변경 전/후). 스냅샷 있는 날은 WING 실제값(개당 수수료를
    그 날의 평균단가 대비 비율로 환산해 calcMargin에 넣음 — 반올림 없이 원래 금액으로
    정확히 되돌아오는 계산이라 근사치 아님), 없는 날은 기존 카테고리 요율 추정으로 폴백. */
+function mdFmt(dateStr) {
+  const [, m, d] = dateStr.split('-');
+  return `${Number(m)}/${Number(d)}`;
+}
+
+/* "판매일수" 칸 — 숫자만 봐도 되고, 클릭(<details>)하거나 hover(title)하면
+   실제로 팔린 날짜 목록까지 볼 수 있게 한다(사용자 요청, 2026-08-16). */
+function dayDetailCell(dates) {
+  const list = dates.map(mdFmt).join(', ');
+  return `<details class="day-detail" title="${esc(list)}"><summary>${dates.length}일</summary><div class="day-list">${esc(list)}</div></details>`;
+}
+
 function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, rangeDayCount) {
   let costedCount = 0, noCommissionCount = 0, estimatedCount = 0, approxCount = 0;
 
@@ -1848,7 +1891,9 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
       }
     });
 
-    if (!hasAnyCommissionInfo) { noCommissionCount++; return { vid, quantity, revenue, noCommission: true }; }
+    const saleDates = Array.from(new Set(days.map((d) => d.date))).sort();
+
+    if (!hasAnyCommissionInfo) { noCommissionCount++; return { vid, quantity, revenue, saleDates, noCommission: true }; }
     if (hasEstimate) estimatedCount++;
     else if (hasApprox) approxCount++;
 
@@ -1859,7 +1904,7 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
     const netProfit = settlementSum - couponSum - (storageInfo ? storageInfo.allocated : 0);
 
     return {
-      vid, quantity, revenue, commissionSum, fulfillmentSum, couponSum,
+      vid, quantity, revenue, saleDates, commissionSum, fulfillmentSum, couponSum,
       storageMonthly: storageInfo ? storageInfo.monthly : null,
       storageAllocated: storageInfo ? storageInfo.allocated : null,
       netProfit,
@@ -1887,6 +1932,7 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
 <tr>
   <td>${name}</td>
   <td class="col-num" data-label="판매수량">${cnt(r.quantity)}</td>
+  <td class="col-num" data-label="판매일수">${dayDetailCell(r.saleDates)}</td>
   <td class="col-num" data-label="매출">${won(r.revenue)}</td>
   <td class="col-num" data-label="수수료"><span class="dim">수수료 정보 없음</span></td>
   <td class="col-num" data-label="입출고비"><span class="dim">수수료 정보 없음</span></td>
@@ -1904,6 +1950,7 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
 <tr>
   <td>${name}</td>
   <td class="col-num" data-label="판매수량">${cnt(r.quantity)}</td>
+  <td class="col-num" data-label="판매일수">${dayDetailCell(r.saleDates)}</td>
   <td class="col-num" data-label="매출">${won(r.revenue)}</td>
   <td class="col-num" data-label="수수료">${won(Math.round(r.commissionSum))}${est}</td>
   <td class="col-num" data-label="입출고비">${won(Math.round(r.fulfillmentSum))}${est}</td>
