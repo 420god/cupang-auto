@@ -84,7 +84,7 @@
 10. **`rocket_growth_item_cost_snapshots`를 덮어쓰지(upsert) 말 것 — 항상 insert로 쌓을 것.** 가격 변경 전/후 요율을 구분해야 하는 게 이 테이블의 존재 이유다(`web/CLAUDE.md`). `loadItemCostSnapshots()`에 날짜 필터를 다시 추가하지도 말 것(트러블슈팅 25번).
 
 ### 헷갈리기 쉬운 것
-- ID 자릿수: productId **10자리**, itemId·vendorItemId **11자리**
+- ID 자릿수(내부 역공학 API, 소싱 탭 기준): productId **10자리**, itemId·vendorItemId **11자리**. **주의: 이건 소비자 상품페이지 스크래핑(`docs/api-notes.md` 2-5) 문맥의 값이고, 로켓그로스 공식 Open API(4-7)의 sellerProductId·productId·vendorItemId·itemId와 자릿수가 다시 검증된 적은 없다** — 4-7에서 실측한 값은 sellerProductId/sellerProductItemId/vendorItemId=11자리, itemId=10자리. 두 체계를 섞어서 "productId는 항상 10자리"처럼 단정하지 말 것, 필요하면 그때그때 실측할 것.
 - 카테고리 코드: `displayItemCategoryCode`(정답) vs `displayItemCategoryId`(1000 차이)
 - `has_rocket`은 true/false 요약. 실제 유형은 `product_items.delivery_badge`
 - `pvLast28dRank`, `lowerPvLast28d`는 **상품 단위**(같은 상품의 옵션끼리 동일)

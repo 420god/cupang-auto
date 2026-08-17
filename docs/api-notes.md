@@ -394,4 +394,33 @@ VPS 스크립트가 Supabase에 쓸 때 `service_role` 키를 쓰지 않는다 �
 
 **구현**: `db/migrations/014_rocket_growth_product_registry.sql`(새 테이블, 이력 아님 — 최신값으로 upsert), `scripts/rocket-growth-sync.js`의 `fetchProductRegistry()`/`flattenProductRegistry()`/`upsertProductRegistry()`(`--products` 플래그로 별도 실행 — 전체 카탈로그 페이지네이션이라 주문 동기화처럼 자주 돌릴 필요 없음), 웹은 `web/app.js`의 `loadProductRegistry()`가 읽어서 `optionSubtitle()`/`coupangProductUrl()`에 씀. 자세한 사용 맥락은 `web/CLAUDE.md` 참조.
 
+### 4-8. 로켓그로스 API 카탈로그 — 지금까지 조사한 것 전부, 뭘 할 수 있고 뭘 못 하나 (2026-08-17 정리)
+
+> 판매현황 작업을 잠시 마무리하면서 다음 세션(재고 페이지 등)이 API를 다시 처음부터 뒤지지 않도록 한곳에 모았다. 세로축은 지금까지 나온 API 전부, "연동" 컬럼은 실제로 우리 DB에 들어오고 있는지.
+
+**공식 Open API(HMAC 서명, GCP VPS 고정 IP로 무인 호출 — WING 로그인 불필요, `scripts/rocket-growth-sync.js`가 이 그룹만 다룸)**
+
+| API | 주는 것 | 연동 |
+|---|---|---|
+| 로켓그로스 주문 조회(RG Orders, `rg/orders`) | vendorItemId, 상품명, 판매수량, 단가(매출) | ✅ `rocket_growth_sales_daily` |
+| 로켓창고 재고 API(`rg-inventory-api`) | vendorItemId, `externalSkuId`(판매자가 직접 입력한 SKU 코드, WING 화면 8자리 SKU ID와 다름), 재고수량, 최근30일판매량 | ❌ 미연동 — 재고 페이지 만들 때 검토 |
+| 상품 목록 페이징 조회(`seller-products`, businessTypes=rocketGrowth) | sellerProductId(등록상품ID), productId(상품ID), vendorItemId(옵션ID), sellerProductItemId, vendorInventoryItemId | ✅ `rocket_growth_product_registry`(2026-08-17 신설) |
+| 상품 조회 단건(`query-product`, path param sellerProductId) | 위와 동일 + itemId(10자리), externalVendorSku, barcode, skuInfo, priceData, modelNo 등 | ❌ 미연동 — 페이징 API로 이미 필요한 걸 다 얻어서 안 씀. 재고 페이지에서 상품 단건 상세(바코드·모델번호 등)가 필요해지면 여기 씀 |
+
+**WING 내부 API(로그인 세션 + `x-xsrf-token` 필요, 확장프로그램의 `background.js`가 브라우저 탭 안에서 실행 — 사용자가 WING에 로그인해 있어야 동작)**
+
+| API | 주는 것 | 연동 |
+|---|---|---|
+| `profit-status/search`(정산현황) | 수수료·입출고비·보관비·쿠폰·광고비·밀크런·순이익 — **계정 전체 합계**, 옵션별 아님. D-1 지연 | ✅ `rocket_growth_profit_daily` |
+| `inventory-health-dashboard/search`(재고현황) | 상품별 **개당** 수수료·입출고비·쿠폰비("예상(개당)", 부가세 별도), 이번달 누적보관비 | ✅ `rocket_growth_item_cost_snapshots` |
+| `sold-vendor-item-list`(판매현황) | 옵션별 일별 순매출(반품 반영) | ✅ `rocket_growth_sales_wing_daily` — 순수량 0인 옵션은 목록에서 아예 빠짐(4-4-2) |
+| `sales/today` | 오늘 매출·판매량 시간대별 트렌드 | ❌ 미연동(진단용 캡처만 있음) — 대시보드성 위젯 만들 때 후보 |
+| 반품/취소 개별 조회 | — | **없음, 확인 완료(2026-08-17)** — 로켓그로스는 CS·반품을 쿠팡이 전담해서 판매자용 반품 조회 화면 자체가 WING에 없다. 다시 찾지 말 것(`docs/decisions.md` 2026-08-17) |
+
+**아직 확실히 없는 것(찾아봤지만 실패)**
+- 입출고비 실제값을 주는 공식 Open API — 로켓그로스 전용 비용이라 마켓플레이스 정산 API엔 개념 자체가 없음(4-4).
+- 카테고리별 판매수수료율 API — WING "수수료 안내" 페이지(HTML)를 파싱해서 해결(4-4-3), API 경로는 없음.
+- WING 화면의 8자리 SKU ID를 주는 API — 위 표의 `externalSkuId`/`itemId`/`sellerProductItemId` 전부 자릿수가 안 맞음(4-7).
+- 로켓그로스 개별 반품 조회 API — 위 표 참조, 구조적으로 없음.
+
 ---
