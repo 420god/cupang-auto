@@ -1574,15 +1574,22 @@ function buildDailyRow(date, items, meta, confirmed, costSnapshots) {
     }
   });
 
-  // WING이 그 날짜를 아직 인식 안 했는데도(주로 당일, D-1 지연) total_sales_amount/
-  // total_deduction_amount가 둘 다 0인 "빈" 확정 행이 저장돼 있을 수 있다(2026-08-16
-  // 실사용 중 발견 — background.js는 이후 이런 행 자체를 안 만들도록 고쳤지만, 과거에
-  // 이미 저장된 행이나 다른 경로로 또 들어올 경우를 대비해 웹에서도 방어한다). 실제
-  // 판매(quantity)가 있는데 확정 행이 이렇게 비어있으면 확정으로 믿지 않고 옵션별
-  // 추정으로 폴백 — 반대로 quantity도 0인 진짜 무판매일은 그대로 확정 취급해도
-  // 어차피 추정 폴백도 0이라 결과가 같다.
+  // WING 정산현황 페이지 자체가 "오늘" 날짜는 절대 안 보여준다(항상 D-1까지만,
+  // 사용자 확인 2026-08-17) — 그런데 profit-status/search API는 오늘 날짜로 조회해도
+  // 가끔 필드가 채워진(0이 아닌) 응답을 준다. 처음엔 "전부 0이면 빈 응답"으로만
+  // 걸렀는데(바로 아래 looksEmpty, 2026-08-16), 그건 놓치는 경우가 있었다 — 실사용
+  // 사례(2026-08-17): 오늘 실제 판매 0건인데 profit-status가 fulfillment_amount:6470,
+  // storage_amount:1282(0이 아님)를 줘서 "빈 응답" 필터를 통과해버렸고, 순이익 -6,470원이
+  // "확정"으로 화면에 떴다. 보관비 같은 항목은 판매 이벤트 없이도(창고에 쌓인 재고
+  // 기준으로) 매일 누적되는 비용이라 이런 식으로 부분 데이터가 먼저 채워질 수 있는
+  // 것으로 보인다 — 즉 "0이 아니다"가 "그날 정산이 최종 확정됐다"를 보장하지 않는다.
+  // **그래서 날짜 자체가 오늘(KST)이면 confirmed 내용과 무관하게 항상 확정으로 안 믿는다**
+  // — WING 자신도 오늘 날짜는 화면에 아예 안 보여주는 것과 원칙을 맞춘 것. 옵션별
+  // 추정으로 폴백해서 "정보 없음"보다야 낫지만, 이것도 결국 추정치일 뿐이라는 걸
+  // 감안할 것.
+  const isToday = date === kstDateStr(new Date());
   const looksEmpty = confirmed && !confirmed.total_sales_amount && !confirmed.total_deduction_amount;
-  const hasConfirmed = !!confirmed && !(looksEmpty && quantity > 0);
+  const hasConfirmed = !!confirmed && !isToday && !(looksEmpty && quantity > 0);
   const revenue = hasConfirmed ? confirmed.net_sales_amount : itemRevenue;
   const estNetProfit = estSettlement - estCoupon - estStorage;
   const netProfit = hasConfirmed ? confirmed.profit_amount : estNetProfit;

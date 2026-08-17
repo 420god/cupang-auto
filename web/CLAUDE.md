@@ -31,7 +31,13 @@ Vercel에 **정적 파일 그대로** 올린다(플랫폼 확정, `../CLAUDE.md`
 
 **상단 요약표의 "매출"은 항상 확정 쿠폰비를 뺀 값이다(사용자 요청)** — `sumDailyRows()`가 `revenue - coupon`을 계산해서 보여준다. 일별 상세표의 "매출" 칸은 쿠폰비를 빼지 않은 원래 값이고 "쿠폰비" 칸이 따로 있다 — 상단 요약과 하단 상세표에서 "매출"의 의미가 다르니 헷갈리지 말 것.
 
-**`buildDailyRow()`는 확정 정산(`confirmed`) 행이 있어도 무조건 안 믿는다 — "빈" 확정 행 방어(2026-08-16 버그 수정, `docs/troubleshooting.md` #27)** — WING `profit-status/search`가 그 날짜를 아직 인식 안 했을 때도 HTTP 200 + `profitAmount:0`인 "필드는 다 있지만 전부 0" 응답을 줄 수 있는데(주로 당일 자정 직후 자동 동기화), 예전엔 `syncProfitForDates()`가 이걸 성공으로 오인해 그대로 저장했었다. 그 결과 실제 판매(quantity)가 있는데도 매출·수수료·순이익 등이 전부 0으로 덮어써졌다(상품/옵션별 상세표는 이 테이블을 안 쓰므로 정상이었음 — "quantity만 맞고 나머지는 다 0/공백"이라는 증상으로 알아챌 것). `confirmed.total_sales_amount`와 `confirmed.total_deduction_amount`가 **둘 다 0이면서 그날 실제 판매수량(quantity)이 있으면** 확정으로 안 믿고 옵션별 추정 폴백으로 전환한다(`looksEmpty` 변수). `fetchSalesRange()`의 select에 이 두 컬럼을 추가해야 이 체크가 동작한다 — 지우지 말 것. 확장프로그램(`extension/background.js`)도 이제 이런 빈 응답 자체를 저장 안 하도록 고쳤지만(근본 수정), 과거에 이미 저장된 빈 행이나 확장프로그램 미설치 상태에서 다른 경로로 또 들어올 경우를 대비해 웹 쪽에도 이 방어를 남겨둔다.
+**`buildDailyRow()`는 오늘(KST) 날짜의 확정 정산(`confirmed`) 행은 내용과 무관하게 무조건 안 믿는다(`isToday` 체크, 2026-08-17, `docs/troubleshooting.md` #27·#29)** — 두 단계로 발견된 문제다.
+
+1차(#27, 2026-08-16): WING `profit-status/search`가 그 날짜를 아직 인식 안 했을 때도 HTTP 200 + `profitAmount:0`인 "필드는 다 있지만 전부 0" 응답을 줄 수 있는데, 예전엔 `syncProfitForDates()`가 이걸 성공으로 오인해 그대로 저장했었다. `confirmed.total_sales_amount`/`total_deduction_amount`가 **둘 다 0이면서 그날 실제 판매수량(quantity)이 있으면** 확정으로 안 믿는 `looksEmpty` 체크로 1차 방어함.
+
+2차(#29, 2026-08-17): 그런데 이 휴리스틱으로도 못 잡는 사례가 실사용 중 나왔다 — 오늘 실제 판매 0건인데 `profit-status`가 `fulfillment_amount:6470`, `storage_amount:1282`(**0이 아님**, `looksEmpty` 통과)를 줘서 순이익 −6,470원이 "확정"으로 화면에 떴다. 보관비 같은 항목은 판매 이벤트 없이도 창고 재고 기준으로 매일 누적되는 비용이라 부분적으로 먼저 채워질 수 있는 것으로 보인다 — **"필드가 0이 아니다"가 "그날 정산이 최종 확정됐다"를 보장하지 않는다.** 사용자가 WING 정산현황 페이지에서 "오늘 날짜 자체가 원래 안 나온다(항상 D-1까지만)"고 확인해줘서, "전부 0인지" 휴리스틱 대신 **`date === kstDateStr(new Date())`(오늘이면 무조건)** 규칙으로 바꿨다 — WING 자신의 D-1 표시 경계와 원칙을 맞춘 것이라 더 단순하고 확실하다. `looksEmpty` 체크는 오늘이 아닌 날짜(예: 정산 백필한 과거 날짜)에 비슷한 빈 행이 생기는 경우까지 방어하려고 그대로 남겨둠 — 두 조건 다 `hasConfirmed` 계산에 들어감.
+
+`fetchSalesRange()`의 select에 `total_sales_amount`/`total_deduction_amount` 컬럼이 있어야 `looksEmpty` 체크가 동작한다 — 지우지 말 것. 확장프로그램(`extension/background.js`)도 완전히 빈(전부 0) 응답은 저장 안 하도록 고쳤지만(근본 방어 중 하나), 오늘 날짜의 "부분적으로 채워진" 응답까지는 확장프로그램 단에서 걸러낼 뾰족한 기준이 없어서 — **웹의 `isToday` 체크가 최종 방어선**이다.
 
 **일별 상세표는 날짜가 2개 이상이면 맨 위에 "합계" 행을 고정 표시한다(사용자 요청, 2026-08-16)** — `renderDailyTable()`이 `sumDailyFullRows()`로 조회 기간 전체를 합산해서 날짜별 행들 위에 얹는다. 날짜 정렬(최신이 위)과 무관하게 합계는 항상 맨 위 고정. `sumDailyRows()`(상단 고정기간 카드용, 매출/순이익/영업이익 3개 필드만 반환)와는 별개 함수 — 일별 상세표는 칸이 더 많아서(수수료·입출고비·보관비 등) 재사용하지 않고 `sumDailyFullRows()`를 새로 뒀다. cost/shipWork/operatingProfit은 원가 입력된 날짜만 골라 합산(기존 "부분 계산 허용" 관례 그대로).
 
