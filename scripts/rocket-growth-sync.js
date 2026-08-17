@@ -18,9 +18,14 @@
    --products 플래그를 추가하면 상품 등록정보(등록상품ID·상품ID·옵션ID 매핑,
    rocket_growth_product_registry, db/migrations/014)도 같이 동기화한다.
    전체 카탈로그를 페이지네이션하는 무거운 호출이라 주문 동기화처럼 몇 분마다
-   돌리면 낭비다 — cron에 **별도의 낮은 빈도(예: 하루 1회) 줄로 따로** 등록할 것:
-     */5 * * * *  node rocket-growth-sync.js               (주문, 5분마다)
-     0 3 * * *    node rocket-growth-sync.js --products     (상품 레지스트리, 하루 1회)
+   돌리면 낭비다 — cron에 별도의 낮은 빈도(예: 하루 1회) 줄로 따로 등록할 것.
+   예시(주문 동기화는 몇 분 간격, 상품 레지스트리는 새벽 3시에 하루 1회):
+     node rocket-growth-sync.js            (기존 주문 동기화 크론, 그대로 둠)
+     node rocket-growth-sync.js --products (새로 추가, 0 3 dot dot dot 형태로 하루 1회)
+   주의: 이 주석 블록 안에는 cron의 분 단위 반복 기호를 별표+슬래시로 쓴 리터럴을
+   넣지 말 것 — JS 블록 주석에서 별표+슬래시는 "주석 끝"으로 해석돼 그 뒤 전체가
+   코드로 파싱되면서 SyntaxError가 난다(2026-08-17 실제로 겪음: 별표/5 * * * * 를
+   그대로 적었다가 VPS에서 파일 전체가 깨졌었다 — 크론 예시는 항상 말로 풀어 쓸 것).
 */
 
 const crypto = require('crypto');
