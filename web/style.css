@@ -255,6 +255,12 @@ input[type="checkbox"] { width: auto; accent-color: var(--accent); cursor: point
 .kv { display: flex; align-items: baseline; gap: 6px; font-size: 12.5px; }
 .kv-k { color: var(--text-3); }
 .kv-v { font-weight: 600; font-variant-numeric: tabular-nums; }
+.date-group-head td {
+  background: var(--surface-2); font-weight: 700; font-size: 12.5px;
+  color: var(--text-2); padding: 8px 11px; border-bottom: 1px solid var(--border-strong);
+}
+.psub a { color: inherit; text-decoration: none; }
+.psub a:hover { color: var(--accent); text-decoration: underline; }
 .grid tbody tr.prow { cursor: pointer; transition: background .1s; }
 .grid tbody tr.prow:hover { background: var(--surface-2); }
 .grid tbody tr.prow.open { background: var(--accent-soft); }

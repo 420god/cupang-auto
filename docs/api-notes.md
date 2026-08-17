@@ -364,4 +364,34 @@ GCP e2-micro 무료 VPS(고정 IP) → scripts/rocket-growth-sync.js가 cron으�
 
 VPS 스크립트가 Supabase에 쓸 때 `service_role` 키를 쓰지 않는다 — "secret 키를 어떤 파일에도 넣지 말 것" 규칙을 VPS의 로컬(비 git) `.env`까지 지켰다. 대신 관리자 계정(`SB_ADMIN_EMAIL`/`SB_ADMIN_PASSWORD`)으로 로그인해 `is_admin()` RLS로 쓰기 권한을 얻는다(확장프로그램과 같은 방식).
 
+### 4-7. 등록상품ID·상품ID·SKU ID — 공식 문서로 재조사 (2026-08-16 저녁)
+
+**출발점의 오류부터 기록**: 판매현황의 상품/옵션별 상세표에 "등록상품ID·옵션ID·SKU ID"를 보여달라는 요청을 처음엔 `product_items`(소싱 DB, 카테고리 소싱으로 수집한 **다른 상품 목록** — 사용자 표현으로 "입고 전" 마진 조사용 데이터)에서 vendor_item_id로 조인해서 채웠는데, 사용자가 "그 데이터랑 실제 판매 데이터는 별개 아니냐"고 지적해서 바로 발견됨 — 실제 판매된 vendor_item_id가 `product_items`에 있을 이유가 애초에 없다(둘은 서로 다른 상품 모집단). **`product_items`를 실제 판매 데이터와 조인하는 코드는 다시 만들지 말 것.**
+
+**사용자가 공식 API 문서 3개 URL을 직접 제시해서 재조사**(`developers.coupang.com/ko/api/rocket-growth/...`):
+
+**① 상품 목록 페이징 조회** (`GET /v2/providers/seller_api/apis/api/v1/marketplace/seller-products`, `seller_api` 계열 — RG 전용 엔드포인트 아님에 주의)
+```
+쿼리: vendorId(필수), businessTypes=rocketGrowth(필수, RG 상품만 필터), maxPerPage(기본10 최대100), nextToken
+응답: { data: [{
+  sellerProductId,   ← 등록상품ID (WING 화면 라벨과 정확히 일치)
+  productId,         ← 상품ID (쿠팡 소비자 페이지 /vp/products/{productId} URL에 씀)
+  sellerProductName, categoryId, displayCategoryCode, vendorId, brand, statusName, ...
+  items: [{
+    itemName, sellerProductItemId,
+    marketPlaceItem: { vendorInventoryItemId, vendorItemId },
+    rocketGrowthItem: { vendorInventoryItemId, vendorItemId }  ← 옵션ID는 이 안에 있음
+  }]
+}], nextToken }
+```
+하이브리드(로켓그로스+마켓플레이스 동시운영) 상품은 `marketPlaceItem`/`rocketGrowthItem`이 둘 다 있을 수 있다 — 판매현황은 로켓그로스 vendorItemId 기준이라 `rocketGrowthItem`을 우선 쓴다(`scripts/rocket-growth-sync.js`의 `flattenProductRegistry()`).
+
+**② 상품 조회**(`query-product`, path param `sellerProductId`) — 단건 상세용. 여기서 `itemId`(10자리, `rocketGrowthItemData` 안)와 `externalVendorSku`(문자열, 판매자상품코드)도 확인했지만 **WING 화면의 8자리 SKU ID와 자릿수가 안 맞는다**(`itemId` 예시값 `4300564093`=10자리, `sellerProductItemId` 예시값 `30100598574`=11자리, 스크린샷 SKU ID `76795171`=8자리). `externalVendorSku`는 판매자가 직접 입력하는 코드라 자동 발급 ID와 성격이 다름.
+
+**③ 로켓창고 재고 API**(`rg-inventory-api`, RG 전용) — `vendorItemId`, `externalSkuId`("판매자가 정의한 SKU ID")도 확인했지만 마찬가지로 자릿수 불일치, 그리고 이것도 "판매자가 정의"라 자동 발급 ID가 아니다.
+
+**결론(2026-08-16 저녁 기준)**: 등록상품ID(`sellerProductId`)·상품ID(`productId`)·옵션ID(`vendorItemId`)는 ①로 확실히 해결. **SKU ID(WING 화면의 8자리 값)는 이 세 공식 API 어디에도 자릿수가 맞는 필드가 없어서 이번엔 뺐다** — 사용자 결정(2026-08-16): "재고 페이지를 만들 때 그때 다시 구조를 생각하기로 하고, 지금은 SKU ID 제외하고 가져오는 걸로 하자." 나중에 재고 페이지 작업 시 WING 내부 API(재고현황 화면, `inventory-health-dashboard/search` 등)를 실제 캡처해서 8자리 필드를 다시 찾아야 한다.
+
+**구현**: `db/migrations/014_rocket_growth_product_registry.sql`(새 테이블, 이력 아님 — 최신값으로 upsert), `scripts/rocket-growth-sync.js`의 `fetchProductRegistry()`/`flattenProductRegistry()`/`upsertProductRegistry()`(`--products` 플래그로 별도 실행 — 전체 카탈로그 페이지네이션이라 주문 동기화처럼 자주 돌릴 필요 없음), 웹은 `web/app.js`의 `loadProductRegistry()`가 읽어서 `optionSubtitle()`/`coupangProductUrl()`에 씀. 자세한 사용 맥락은 `web/CLAUDE.md` 참조.
+
 ---

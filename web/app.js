@@ -1480,9 +1480,45 @@ async function loadItemMeta(vendorItemIds) {
       size: u.size_type || settings.size,
       costCny: u.cost_cny, exchangeRate: u.exchange_rate,
       outboundFee: u.outbound_fee, workFee: u.work_fee
+      // 옵션ID 클릭용 등록상품ID·상품ID는 여기 안 넣는다 — product_items는 카테고리
+      // 소싱(마진 조사용으로 수집한 다른 상품 목록)이라 실제 판매된 vendor_item_id와는
+      // 무관한 데이터라 여기서 조인하면 틀린 값이 나온다(2026-08-16 사용자 지적으로
+      // 발견 — web/CLAUDE.md 참조). 대신 loadProductRegistry()가 실제 등록정보
+      // 테이블(rocket_growth_product_registry)에서 따로 가져온다.
     };
   });
   return meta;
+}
+
+/* 등록상품ID·상품ID — rocket_growth_product_registry(db/migrations/014)에서 가져온다.
+   GCP VPS의 rocket-growth-sync.js --products가 공식 Open API "상품 목록 페이징 조회"로
+   채운 실제 등록정보다(docs/api-notes.md 4-7). product_items(소싱 DB)와는 완전히
+   별개 — 그쪽은 카테고리 소싱(마진 조사용으로 수집한 다른 상품 목록)이라 실제로
+   판매된 vendor_item_id와 무관하다(2026-08-16 사용자 지적). SKU ID는 이 API에
+   없어서 안 채움(나중에 재고 페이지 만들 때 다시 조사하기로 함) — meta에 없는
+   vendor_item_id는 그 옵션이 아직 이 계정에서 동기화 안 됐거나(레지스트리 동기화
+   전) 로켓그로스 상품이 아닌 경우다. */
+async function loadProductRegistry(vendorItemIds) {
+  const out = {};
+  if (!vendorItemIds.length) return out;
+  let rows;
+  try {
+    // 마이그레이션 014 미실행이거나 --products 동기화를 아직 한 번도 안 돌렸으면
+    // 테이블이 없거나 비어있을 수 있다 — 이 표 하나 때문에 판매현황 전체가
+    // 멎으면 안 되므로 실패해도 조용히 빈 값으로 폴백한다(등록상품ID·쿠팡 링크만
+    // "—"로 빠지고 나머지 화면은 항상 정상 동작해야 하는 기존 원칙과 동일).
+    rows = await api(
+      `rocket_growth_product_registry?select=vendor_item_id,seller_product_id,product_id` +
+      `&vendor_item_id=in.(${vendorItemIds.map(encodeURIComponent).join(',')})`
+    ) || [];
+  } catch (e) {
+    console.warn('[판매현황] 상품 등록정보 조회 실패(등록상품ID/링크만 빠짐):', e.message);
+    return out;
+  }
+  rows.forEach((r) => {
+    out[r.vendor_item_id] = { sellerProductId: r.seller_product_id, productId: r.product_id };
+  });
+  return out;
 }
 
 /* 하루치 옵션별 판매(items)를 확정 정산(confirmed, 있으면)과 합쳐 한 줄로 만든다.
@@ -1805,6 +1841,11 @@ async function fetchAndRenderSales(fromDate, toDate) {
     // 조회 범위 전체(fetchFrom~fetchTo)를 커버하니 뒤에서 renderSales()용으로 다시 불러올
     // 필요 없다.
     const costSnapshots = await loadItemCostSnapshots(vendorItemIds);
+    // 등록상품ID·상품ID(옵션ID 클릭용) — meta에 병합해서 renderSales()가 그대로 씀.
+    const registry = await loadProductRegistry(vendorItemIds);
+    vendorItemIds.forEach((vid) => {
+      if (registry[vid]) Object.assign(meta[vid], registry[vid]);
+    });
 
     const dailyByDate = {};
     dateRangeList(fetchFrom, fetchTo).forEach((d) => {
@@ -1818,27 +1859,17 @@ async function fetchAndRenderSales(fromDate, toDate) {
     const rangeTxt = fromDate === toDate ? fromDate : `${fromDate} ~ ${toDate}`;
     $('#salesSummary').textContent = `${rangeTxt} 기준 (로켓그로스 Open API${hasWing ? ' + WING 반품 반영' : ''})`;
 
-    // 상품/옵션별 표는 선택한 기간(fromDate~toDate)만 다루되, 날짜별 내역을 그대로 들고 있는다
-    // — 스냅샷을 날짜별로 다르게 적용해야 "가격 바뀌기 전/후"가 정확히 갈린다.
+    // 상품/옵션별 표는 선택한 기간(fromDate~toDate)만 다루되, 날짜별로 묶어서 보여준다
+    // — 아래 renderSales() 참조.
     const rangeDates = dateRangeList(fromDate, toDate);
-    const itemNames = {};
-    const itemDays = {};
-    rangeDates.forEach((d) => {
-      (byDate[d] || []).forEach((r) => {
-        itemNames[r.vendor_item_id] = r.product_name;
-        (itemDays[r.vendor_item_id] = itemDays[r.vendor_item_id] || []).push(
-          { date: d, quantity: r.quantity, revenue: r.revenue }
-        );
-      });
-    });
-    const vendorItemIdsInRange = Object.keys(itemDays);
+    const hasAnyInRange = rangeDates.some((d) => (byDate[d] || []).length);
 
-    if (!vendorItemIdsInRange.length) {
+    if (!hasAnyInRange) {
       $('#salesEmpty').classList.remove('hidden');
       return;
     }
 
-    renderSales(vendorItemIdsInRange, itemNames, itemDays, meta, costSnapshots, rangeDates.length);
+    renderSales(rangeDates, byDate, meta, costSnapshots);
   } catch (e) {
     $('#salesMsg').textContent = '판매현황을 불러오지 못했습니다: ' + e.message;
     $('#salesMsg').classList.remove('hidden');
@@ -1848,42 +1879,42 @@ async function fetchAndRenderSales(fromDate, toDate) {
   }
 }
 
-/* 상품/옵션별 상세표. 날짜별로 수수료/입출고비를 계산해서 합산한다(범위 전체를 뭉쳐서
-   한 번에 계산하지 않는 이유) — 같은 상품이라도 날짜에 따라 적용할 원가 스냅샷이
-   다를 수 있어서다(가격 변경 전/후). 스냅샷 있는 날은 WING 실제값(개당 수수료를
-   그 날의 평균단가 대비 비율로 환산해 calcMargin에 넣음 — 반올림 없이 원래 금액으로
-   정확히 되돌아오는 계산이라 근사치 아님), 없는 날은 기존 카테고리 요율 추정으로 폴백. */
 function mdFmt(dateStr) {
   const [, m, d] = dateStr.split('-');
   return `${Number(m)}/${Number(d)}`;
 }
 
-/* "판매일" 칸 — 클릭 없이 바로 날짜 목록이 보이게 한다(사용자 요청, 2026-08-16 —
-   처음엔 "N일"+클릭 상세로 만들었다가 바로 눈에 안 보여 불편하다는 피드백으로 변경). */
-function dayDetailCell(dates) {
-  return esc(dates.map(mdFmt).join(', '));
+/* 쿠팡 실제 판매 페이지 URL(옵션ID 클릭 시 이동, 사용자 요청 2026-08-16) — 등록정보
+   레지스트리(rocket_growth_product_registry)에 그 옵션이 아직 없으면(동기화 전이거나
+   로켓그로스 상품이 아님) null 반환, 호출부에서 링크 없이 표시. itemId는 지금 안 받아오므로
+   (SKU ID 보류, 위 loadProductRegistry 참조) 빼고 productId+vendorItemId만으로 연결한다
+   — docs/api-notes.md 2-5에 정리된 URL 시도 순서 중 "?vendorItemId=" 패턴, 실사용 확인됨. */
+function coupangProductUrl(m, vid) {
+  if (!m || !m.productId) return null;
+  return `https://www.coupang.com/vp/products/${encodeURIComponent(m.productId)}?vendorItemId=${encodeURIComponent(vid)}`;
 }
 
-function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, rangeDayCount) {
-  let costedCount = 0, noCommissionCount = 0, estimatedCount = 0, approxCount = 0;
+/* 상품/옵션별 상세표 — 2026-08-16 오후 재개편: 기존엔 상품 기준으로 조회 기간 전체를
+   합쳐서 한 줄로 보여줬는데("이 상품이 기간 동안 총 얼마 팔렸다"), 사용자가 "분류가
+   이상하다"고 지적해서 **날짜별로 그룹핑**하는 방식으로 바꿨다 — 날짜 섹션 헤더 아래에
+   그 날짜에 팔린 옵션들을 그 날짜의 값 그대로(기간 합산 없이) 보여준다. 같은 상품이
+   여러 날 팔렸으면 날짜마다 별도 행으로 나뉜다(기간 합계는 이미 일별 상세표가 담당).
+   날짜별로 원가 스냅샷을 다르게 적용하는 기존 취지(가격 변경 전/후 구분)는 자연히 유지됨
+   — 스냅샷 있는 날은 WING 실제값, 없는 날은 카테고리 요율 추정으로 폴백. 보관비는 이제
+   "그 하루치" 배분(`storageAllocationForItem(..., 1)`)이라 예전의 "조회 기간 전체 배분"과
+   숫자가 다르다 — 여러 날 조회해도 각 행은 그 날 하루의 배분값만 보여준다. */
+function renderSales(rangeDates, byDate, meta, costSnapshots) {
+  let costedCount = 0, noCommissionCount = 0, estimatedCount = 0, approxCount = 0, rowCount = 0;
 
-  const rows = vendorItemIds.map((vid) => {
-    const days = itemDays[vid];
-    const m = meta[vid] || {};
-    let quantity = 0, revenue = 0;
-    let commissionSum = 0, fulfillmentSum = 0, couponSum = 0, settlementSum = 0;
-    let cost = 0, shipWork = 0, opProfitSum = 0, costedQty = 0;
-    let hasReal = false, hasApprox = false, hasEstimate = false, hasAnyCommissionInfo = false;
+  const sections = rangeDates.slice().reverse().map((date) => {
+    const rows = (byDate[date] || []).map((r) => {
+      const vid = r.vendor_item_id;
+      const m = meta[vid] || {};
+      const avgPrice = r.quantity ? r.revenue / r.quantity : 0;
+      const snapResult = snapshotAsOf(costSnapshots[vid], date);
 
-    days.forEach((day) => {
-      quantity += day.quantity;
-      revenue += day.revenue;
-      const avgPrice = day.quantity ? day.revenue / day.quantity : 0;
-      const snapResult = snapshotAsOf(costSnapshots[vid], day.date);
-
-      let commissionRate, fulfillmentAmt, couponAmt;
+      let commissionRate, fulfillmentAmt, couponAmt, hasApprox = false, hasEstimate = false;
       if (snapResult) {
-        hasReal = true;
         if (!snapResult.exact) hasApprox = true; // 그 날짜 이전 스냅샷이 없어 이후 스냅샷을 대신 씀
         commissionRate = avgPrice > 0 ? (snapResult.snap.commission_amount / avgPrice * 100) : 0;
         fulfillmentAmt = snapResult.snap.fulfillment_amount;
@@ -1894,88 +1925,117 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
         fulfillmentAmt = m.catCode ? feeFor(m.catCode, m.size, avgPrice) : null;
         couponAmt = 0; // 카테고리 요율표엔 쿠폰 개념이 없어 추정 불가
       }
-      if (commissionRate == null) return;
-      hasAnyCommissionInfo = true;
-      couponSum += couponAmt * day.quantity;
+
+      rowCount++;
+      const url = coupangProductUrl(m, vid);
+      if (commissionRate == null) {
+        noCommissionCount++;
+        return {
+          vid, name: r.product_name, url, productId: m.productId, sellerProductId: m.sellerProductId,
+          quantity: r.quantity, revenue: r.revenue, noCommission: true
+        };
+      }
+      if (hasEstimate) estimatedCount++;
+      else if (hasApprox) approxCount++;
 
       const c = calcMargin({
         price: avgPrice, commission: commissionRate, fulfillment: fulfillmentAmt,
         costCny: m.costCny, rate: m.exchangeRate, outbound: m.outboundFee, work: m.workFee
       });
-      if (!c) return;
-      commissionSum += c.commission * day.quantity;
-      settlementSum += c.settlement * day.quantity;
-      if (fulfillmentAmt != null) fulfillmentSum += fulfillmentAmt * day.quantity;
-      if (c.margin != null) {
-        cost += c.cost * day.quantity;
-        shipWork += c.shipWork * day.quantity;
-        opProfitSum += c.margin * day.quantity;
-        costedQty += day.quantity;
-      }
+      const commission = c ? c.commission * r.quantity : 0;
+      const fulfillment = (c && fulfillmentAmt != null) ? fulfillmentAmt * r.quantity : 0;
+      const coupon = couponAmt * r.quantity;
+      const settlement = c ? c.settlement * r.quantity : 0;
+      const storageInfo = storageAllocationForItem(costSnapshots[vid], 1); // 이 날 하루치
+      const storageAllocated = storageInfo ? storageInfo.allocated : 0;
+      const netProfit = settlement - coupon - storageAllocated;
+      const hasCost = !!(c && c.margin != null);
+      if (hasCost) costedCount++;
+
+      return {
+        vid, name: r.product_name, url, productId: m.productId, sellerProductId: m.sellerProductId,
+        quantity: r.quantity, revenue: r.revenue,
+        commission, fulfillment, coupon,
+        storageMonthly: storageInfo ? storageInfo.monthly : null,
+        storageAllocated: storageInfo ? storageInfo.allocated : null,
+        netProfit,
+        cost: hasCost ? c.cost * r.quantity : null,
+        shipWork: hasCost ? c.shipWork * r.quantity : null,
+        operatingProfit: hasCost ? (netProfit - c.cost * r.quantity - c.shipWork * r.quantity) : null,
+        // 우선순위: 카테고리 추정을 쓰면 "(추정)", 아니면 스냅샷은 있는데 그 날짜 이전 게
+        // 아니라 이후 것(참고용)을 쓰면 "(참고용)", 둘 다 없으면 라벨 없음.
+        label: hasEstimate ? '(추정)' : (hasApprox ? '(참고용)' : '')
+      };
     });
+    return { date, rows };
+  }).filter((sec) => sec.rows.length);
 
-    const saleDates = Array.from(new Set(days.map((d) => d.date))).sort();
-
-    if (!hasAnyCommissionInfo) { noCommissionCount++; return { vid, quantity, revenue, saleDates, noCommission: true }; }
-    if (hasEstimate) estimatedCount++;
-    else if (hasApprox) approxCount++;
-
-    const hasCost = costedQty > 0;
-    if (hasCost) costedCount++;
-
-    const storageInfo = storageAllocationForItem(costSnapshots[vid], rangeDayCount);
-    const netProfit = settlementSum - couponSum - (storageInfo ? storageInfo.allocated : 0);
-
-    return {
-      vid, quantity, revenue, saleDates, commissionSum, fulfillmentSum, couponSum,
-      storageMonthly: storageInfo ? storageInfo.monthly : null,
-      storageAllocated: storageInfo ? storageInfo.allocated : null,
-      netProfit,
-      cost: hasCost ? cost : null,
-      shipWork: hasCost ? shipWork : null,
-      operatingProfit: hasCost ? (netProfit - cost - shipWork) : null,
-      // 우선순위: 카테고리 추정을 쓴 게 있으면 "(추정)", 아니면 스냅샷은 있는데 그 날짜
-      // 이전 게 아니라 이후 것(참고용)을 쓴 게 있으면 "(참고용)", 둘 다 없으면 라벨 없음.
-      label: hasEstimate ? '(추정)' : (hasApprox ? '(참고용)' : '')
-    };
-  });
-
-  const uncosted = rows.length - costedCount - noCommissionCount;
+  const uncosted = rowCount - costedCount - noCommissionCount;
   const notes = [];
-  if (uncosted > 0) notes.push(`원가 미입력 상품 ${uncosted}개`);
-  if (noCommissionCount > 0) notes.push(`수수료 정보 없는 상품 ${noCommissionCount}개`);
-  if (estimatedCount > 0) notes.push(`상품 원가정보 스냅샷 없어 카테고리 추정을 쓴 상품 ${estimatedCount}개`);
-  if (approxCount > 0) notes.push(`판매 시점 이전 스냅샷이 없어 이후 스냅샷(참고용)을 쓴 상품 ${approxCount}개`);
+  if (uncosted > 0) notes.push(`원가 미입력 ${uncosted}건`);
+  if (noCommissionCount > 0) notes.push(`수수료 정보 없는 판매 ${noCommissionCount}건`);
+  if (estimatedCount > 0) notes.push(`상품 원가정보 스냅샷 없어 카테고리 추정을 쓴 판매 ${estimatedCount}건`);
+  if (approxCount > 0) notes.push(`판매 시점 이전 스냅샷이 없어 이후 스냅샷(참고용)을 쓴 판매 ${approxCount}건`);
   $('#salesTableNote').textContent = notes.length ? `${notes.join(' · ')}` : '';
 
-  $('#salesBody').innerHTML = rows.map((r) => {
-    const name = esc(itemNames[r.vid] || '(이름 없음)');
-    if (r.noCommission) {
-      return `
+  $('#salesBody').innerHTML = sections.map((sec) => {
+    const headHtml = `<tr class="date-group-head"><td colspan="9">${sec.date} (${mdFmt(sec.date)}) <span class="muted xs">${sec.rows.length}건</span></td></tr>`;
+    const rowsHtml = sec.rows.map((r) => salesRowHtml(r)).join('');
+    return headHtml + rowsHtml;
+  }).join('');
+}
+
+/* 등록상품ID·옵션ID를 WING 상품 목록 화면과 같은 순서·구분자("·")로 보여준다
+   (사용자가 WING 화면 스크린샷으로 요청, 2026-08-16) — WING도 옵션ID(=vendorItemId)에만
+   외부링크 아이콘을 붙여 클릭 가능하게 하므로 우리도 옵션ID만 <a>로 감싼다.
+   등록상품ID=rocket_growth_product_registry.seller_product_id(공식 Open API "상품 목록
+   페이징 조회"로 채움, docs/api-notes.md 4-7) — 그 옵션이 레지스트리 동기화 전이면 "—".
+   **SKU ID는 뺐다(2026-08-16 사용자 결정)** — 공식 Open API 세 개(상품목록/상품조회/
+   재고) 어디에도 WING이 보여주는 8자리 SKU ID와 자릿수가 맞는 필드가 없어서, 나중에
+   재고 페이지를 만들 때 WING 내부 API 캡처로 다시 조사하기로 함. */
+function optionSubtitle(r) {
+  const pid = r.sellerProductId ? esc(r.sellerProductId) : '—';
+  const vidHtml = r.url
+    ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" title="옵션ID — 쿠팡 판매 페이지로 이동" onclick="event.stopPropagation()">${esc(r.vid)}</a>`
+    : `<span title="옵션ID">${esc(r.vid)}</span>`;
+  return `<div class="psub"><span title="등록상품ID">${pid}</span> · ${vidHtml}</div>`;
+}
+
+function salesRowHtml(r) {
+  const name = esc(r.name || '(이름 없음)');
+  // 광고비는 계정 전체 합계로만 나와 상품별로 못 구한다(WING 정산현황·재고현황 둘 다 항목
+  // 단위 데이터 없음, 2026-08-16 확인) — 나중에 외부 연동이 생기면 채울 자리만 미리 만들어둠.
+  const adCell = '<span class="dim" title="상품별 광고비는 아직 연동된 데이터 소스가 없습니다(추후 연동 예정)">—</span>';
+  if (r.noCommission) {
+    return `
 <tr>
-  <td>${name}</td>
+  <td>
+    <div class="pname"><span>${name}</span></div>
+    ${optionSubtitle(r)}
+  </td>
   <td class="col-num" data-label="판매수량">${cnt(r.quantity)}</td>
-  <td class="col-num" data-label="판매일">${dayDetailCell(r.saleDates)}</td>
   <td class="col-num" data-label="매출">${won(r.revenue)}</td>
   <td class="col-num" data-label="수수료 및 입출고비"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num" data-label="광고비">${adCell}</td>
   <td class="col-num" data-label="쿠폰비"><span class="dim">—</span></td>
   <td class="col-num" data-label="보관비"><span class="dim">—</span></td>
   <td class="col-num" data-label="순이익"><span class="dim">수수료 정보 없음</span></td>
   <td class="col-num" data-label="영업이익"><span class="dim">수수료 정보 없음</span></td>
 </tr>`;
-    }
-    const est = r.label ? ` <span class="dim xs">${r.label}</span>` : '';
-    const feeCombined = Math.round(r.commissionSum) + Math.round(r.fulfillmentSum);
-    return `
-<tr class="prow" data-vid="${esc(r.vid)}">
+  }
+  const est = r.label ? ` <span class="dim xs">${r.label}</span>` : '';
+  const feeCombined = Math.round(r.commission) + Math.round(r.fulfillment);
+  return `
+<tr class="prow">
   <td>
     <div class="pname"><svg class="caret" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg><span>${name}</span></div>
+    ${optionSubtitle(r)}
   </td>
   <td class="col-num" data-label="판매수량">${cnt(r.quantity)}</td>
-  <td class="col-num" data-label="판매일">${dayDetailCell(r.saleDates)}</td>
   <td class="col-num" data-label="매출">${won(r.revenue)}</td>
   <td class="col-num" data-label="수수료 및 입출고비">${won(feeCombined)}${est}</td>
-  <td class="col-num" data-label="쿠폰비">${won(Math.round(r.couponSum))}${est}</td>
+  <td class="col-num" data-label="광고비">${adCell}</td>
+  <td class="col-num" data-label="쿠폰비">${won(Math.round(r.coupon))}${est}</td>
   <td class="col-num" data-label="보관비">${r.storageAllocated != null ? won(r.storageAllocated) : '<span class="dim">—</span>'}</td>
   <td class="col-num" data-label="순이익"><span class="${r.netProfit >= 0 ? 'pos' : 'neg'}">${Math.round(r.netProfit).toLocaleString()}원</span></td>
   <td class="col-num" data-label="영업이익">${
@@ -1984,16 +2044,15 @@ function renderSales(vendorItemIds, itemNames, itemDays, meta, costSnapshots, ra
       : '<span class="dim">원가 입력 필요</span>'
   }</td>
 </tr>
-<tr class="detail hidden" data-detail="${esc(r.vid)}"><td colspan="9"><div class="detail-inner">
+<tr class="detail hidden"><td colspan="9"><div class="detail-inner">
   <div class="kv-grid">
-    <div class="kv"><span class="kv-k">수수료</span><span class="kv-v">${won(Math.round(r.commissionSum))}</span></div>
-    <div class="kv"><span class="kv-k">입출고비</span><span class="kv-v">${won(Math.round(r.fulfillmentSum))}</span></div>
+    <div class="kv"><span class="kv-k">수수료</span><span class="kv-v">${won(Math.round(r.commission))}</span></div>
+    <div class="kv"><span class="kv-k">입출고비</span><span class="kv-v">${won(Math.round(r.fulfillment))}</span></div>
     <div class="kv"><span class="kv-k">이번달 누적보관비</span><span class="kv-v">${r.storageMonthly != null ? won(r.storageMonthly) : '<span class="dim">—</span>'}</span></div>
     <div class="kv"><span class="kv-k">원가</span><span class="kv-v">${r.cost != null ? won(Math.round(r.cost)) : '<span class="dim">원가 입력 필요</span>'}</span></div>
     <div class="kv"><span class="kv-k">배송·작업비</span><span class="kv-v">${r.shipWork != null ? won(Math.round(r.shipWork)) : '<span class="dim">—</span>'}</span></div>
   </div>
 </div></td></tr>`;
-  }).join('');
 }
 
 $('#salesRefresh').onclick = loadSales;
@@ -2002,13 +2061,15 @@ $('#itemCostRefreshBtn').onclick = refreshItemCosts;
 
 /* 상품/옵션별 상세표 행 펼치기 — 소싱 탭(.prow/.detail)과 같은 패턴이지만, 필요한
    값을 renderSales()가 이미 다 계산해서 HTML에 심어뒀으므로 추가 조회 없이 보이기만
-   전환한다(사용자 요청, 2026-08-16 — 컬럼이 13개라 상품명 칸이 압착되던 문제 해결). */
+   전환한다(사용자 요청, 2026-08-16 — 컬럼이 13개라 상품명 칸이 압착되던 문제 해결).
+   detail 행은 항상 그 prow 바로 다음 형제로 붙인다(nextElementSibling으로 찾음) —
+   날짜별 그룹핑 이후 같은 vendor_item_id가 여러 날짜 섹션에 중복해서 나올 수 있어서
+   (2026-08-16 오후) id로 매칭하면 첫 번째 행만 계속 찾게 되는 버그가 생김. */
 $('#salesBody').addEventListener('click', (ev) => {
   const row = ev.target.closest('tr.prow');
   if (!row) return;
-  const vid = row.dataset.vid;
-  const detail = document.querySelector(`#salesBody tr[data-detail="${CSS.escape(vid)}"]`);
-  if (!detail) return;
+  const detail = row.nextElementSibling;
+  if (!detail || !detail.classList.contains('detail')) return;
   const open = !detail.classList.contains('hidden');
   detail.classList.toggle('hidden', open);
   row.classList.toggle('open', !open);

@@ -14,6 +14,13 @@
      SB_ADMIN_EMAIL, SB_ADMIN_PASSWORD (관리자 계정 — is_admin() RLS로 쓰기 허용됨)
 
    실행: node rocket-growth-sync.js [--days=N]   (기본 N=2, 오늘+어제)
+
+   --products 플래그를 추가하면 상품 등록정보(등록상품ID·상품ID·옵션ID 매핑,
+   rocket_growth_product_registry, db/migrations/014)도 같이 동기화한다.
+   전체 카탈로그를 페이지네이션하는 무거운 호출이라 주문 동기화처럼 몇 분마다
+   돌리면 낭비다 — cron에 **별도의 낮은 빈도(예: 하루 1회) 줄로 따로** 등록할 것:
+     */5 * * * *  node rocket-growth-sync.js               (주문, 5분마다)
+     0 3 * * *    node rocket-growth-sync.js --products     (상품 레지스트리, 하루 1회)
 */
 
 const crypto = require('crypto');
@@ -122,6 +129,81 @@ function groupByDay(orders) {
   return rows;
 }
 
+/* 상품 목록 페이징 조회(공식 Open API, seller_api 계열 — RG 전용 API 아님에 주의) —
+   등록상품ID(sellerProductId)·상품ID(productId)·옵션ID(vendorItemId)를 매핑해서
+   rocket_growth_product_registry에 채운다. docs/api-notes.md 4-7 참조.
+   SKU ID는 이 API에 없어서 뺐다(2026-08-16 사용자 결정, 나중에 재고 페이지 만들 때
+   다시 조사하기로 함).
+   businessTypes=rocketGrowth로 걸러도 하이브리드(로켓그로스+마켓플레이스 동시운영)
+   상품은 items[].rocketGrowthItem과 items[].marketPlaceItem이 둘 다 있을 수 있어서,
+   rocketGrowthItem을 우선 쓰고 없으면 marketPlaceItem으로 폴백한다(판매현황이
+   로켓그로스 vendorItemId 기준이라 원칙적으로는 rocketGrowthItem이 맞음). */
+async function fetchProductRegistry() {
+  const path = '/v2/providers/seller_api/apis/api/v1/marketplace/seller-products';
+  let nextToken = '';
+  let products = [];
+
+  for (let page = 0; page < 200; page++) {
+    const query = `vendorId=${COUPANG_VENDOR_ID}&businessTypes=rocketGrowth&maxPerPage=100` +
+      (nextToken ? `&nextToken=${encodeURIComponent(nextToken)}` : '');
+    const header = authHeader('GET', path, query);
+
+    const res = await fetch(`${HOST}${path}?${query}`, {
+      headers: { Authorization: header, 'Content-Type': 'application/json;charset=UTF-8' }
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`쿠팡 상품목록 API 오류 (HTTP ${res.status}): ${text.slice(0, 300)}`);
+
+    const body = JSON.parse(text);
+    products = products.concat(body.data || []);
+    nextToken = body.nextToken || '';
+    if (!nextToken) break;
+  }
+  return products;
+}
+
+function flattenProductRegistry(products) {
+  const rows = [];
+  products.forEach((p) => {
+    (p.items || []).forEach((it) => {
+      const rg = it.rocketGrowthItem || it.marketPlaceItem;
+      if (!rg || rg.vendorItemId == null) return;
+      rows.push({
+        vendor_item_id: String(rg.vendorItemId),
+        seller_product_id: p.sellerProductId != null ? String(p.sellerProductId) : null,
+        seller_product_item_id: it.sellerProductItemId != null ? String(it.sellerProductItemId) : null,
+        product_id: p.productId != null ? String(p.productId) : null,
+        vendor_inventory_item_id: rg.vendorInventoryItemId != null ? String(rg.vendorInventoryItemId) : null,
+        seller_product_name: p.sellerProductName || null,
+        updated_at: new Date().toISOString()
+      });
+    });
+  });
+  return rows;
+}
+
+async function upsertProductRegistry(accessToken, rows) {
+  if (!rows.length) return;
+  const chunkSize = 500;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rocket_growth_product_registry?on_conflict=vendor_item_id`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        authorization: `Bearer ${accessToken}`,
+        'content-type': 'application/json',
+        prefer: 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify(chunk)
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Supabase upsert 실패 (상품 레지스트리, HTTP ${res.status}): ${text.slice(0, 300)}`);
+    }
+  }
+}
+
 async function supabaseLogin() {
   const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
     method: 'POST',
@@ -172,6 +254,16 @@ async function main() {
 
   const accessToken = await supabaseLogin();
   await upsertRows(accessToken, rows);
+
+  if (process.argv.includes('--products')) {
+    console.log('상품 등록정보 동기화 시작...');
+    const products = await fetchProductRegistry();
+    console.log(`상품 ${products.length}건 조회됨`);
+    const registryRows = flattenProductRegistry(products);
+    console.log(`레지스트리 upsert 대상: ${registryRows.length}행`);
+    await upsertProductRegistry(accessToken, registryRows);
+  }
+
   console.log('완료');
 }
 
