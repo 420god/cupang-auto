@@ -1545,8 +1545,8 @@ function buildDailyRow(date, items, meta, confirmed, costSnapshots) {
     const snapResult = snapshotAsOf(costSnapshots && costSnapshots[it.vendor_item_id], date);
     let commissionRate, fee, coupon;
     if (snapResult) {
-      commissionRate = avgPrice > 0 ? (snapResult.snap.commission_amount / avgPrice * 100) : 0;
-      fee = snapResult.snap.fulfillment_amount;
+      commissionRate = avgPrice > 0 ? (withSnapshotVat(snapResult.snap.commission_amount) / avgPrice * 100) : 0;
+      fee = withSnapshotVat(snapResult.snap.fulfillment_amount);
       coupon = snapResult.snap.coupon_amount || 0;
     } else {
       commissionRate = commissionFor(m.catCode);
@@ -1607,7 +1607,11 @@ function buildDailyRow(date, items, meta, confirmed, costSnapshots) {
     cost: hasCost ? cost : null,
     shipWork: hasCost ? shipWork : null,
     operatingProfit: hasCost ? (netProfit - cost - shipWork) : null,
-    confirmed: hasConfirmed, itemRevenue
+    // itemRevenue와 같은 이유로, hasConfirmed 여부와 무관하게 옵션별 추정치를
+    // 그대로 같이 들고 있는다 — renderReconcileNote()가 확정값과 대조할 때 씀
+    // (2026-08-17, 수수료+입출고비·순이익도 매출처럼 대조하기 위해 추가).
+    confirmed: hasConfirmed, itemRevenue,
+    itemFeeCombined: estCommission + estFulfillment, itemNetProfit: estNetProfit
   };
 }
 
@@ -1750,23 +1754,41 @@ function sumDailyFullRows(rows) {
 }
 
 /* 정산현황 API는 계정 전체 합계만 주고 어떤 상품이 팔렸는지는 없다(docs/api-notes.md 4-4-4) —
-   그래서 상품별 합산 매출과 정산 매출을 서로 다른 소스에서 각각 만들 수밖에 없고, 둘이
-   구조적으로 100% 일치할 보장이 없다. 조회 기간 안에 확정 정산이 있는 날짜만 골라 두 값을
-   대조해서 보여준다 — 나중에 상품별 집계 로직을 손볼 때 어디서 얼마나 어긋나는지 바로 보이게. */
+   그래서 상품별 합산과 정산 매출을 서로 다른 소스에서 각각 만들 수밖에 없고, 둘이 구조적으로
+   100% 일치할 보장이 없다. 조회 기간 안에 확정 정산이 있는 날짜만 골라 매출·수수료+입출고비·
+   순이익 세 가지를 대조해서 보여준다(2026-08-17, 원래 매출만 보던 걸 확장 — 사용자가 8/16
+   수수료+입출고비·순이익이 다르다고 지적해서 원인을 조사했고, 그 결과를 매번 수동으로 찾을
+   필요 없이 화면에서 바로 보이게 함).
+
+   **알려진 구조적 원인 두 가지(2026-08-17 조사, docs/decisions.md 참조)**:
+   1. 상품별 수수료·입출고비 추정은 WING 재고현황의 "예상(개당)" 값(부가세 별도)에
+      ×1.1(부가세)을 보정해서 쓴다(`withSnapshotVat()`) — 이걸로 수수료 쪽 차이는
+      거의 없어짐(8/16 실측: 정확히 일치).
+   2. 입출고비는 보정해도 차이가 남을 수 있다 — 당일 매입+당일 반품으로 순수량이
+      정확히 0이 된 옵션은 WING 판매목록(`sold-vendor-item-list`) 자체에서 빠져서
+      (0으로 안 찍히고 아예 없음) 그 옵션의 반품처리비가 상품별 어디에도 안 잡힌다.
+      이건 코드로 못 고치는 한계 — WING에 반품만 따로 보여주는 API가 있는지 별도
+      조사 중(2026-08-17 착수). */
 function renderReconcileNote(dailyByDate, fromDate, toDate) {
   const note = $('#salesReconcileNote');
   const rows = dateRangeList(fromDate, toDate).map((d) => dailyByDate[d]).filter((r) => r && r.confirmed);
   if (!rows.length) { note.classList.add('hidden'); return; }
 
-  const itemSum = rows.reduce((s, r) => s + r.itemRevenue, 0);
-  const settleSum = rows.reduce((s, r) => s + r.revenue, 0);
-  const diff = itemSum - settleSum;
-  if (Math.abs(diff) < 1) { note.classList.add('hidden'); return; }
+  const sums = {
+    revenue: [rows.reduce((s, r) => s + r.itemRevenue, 0), rows.reduce((s, r) => s + r.revenue, 0), '매출'],
+    fee: [rows.reduce((s, r) => s + r.itemFeeCombined, 0), rows.reduce((s, r) => s + r.commission + r.fulfillment, 0), '수수료+입출고비'],
+    profit: [rows.reduce((s, r) => s + r.itemNetProfit, 0), rows.reduce((s, r) => s + r.netProfit, 0), '순이익']
+  };
 
-  note.textContent =
-    `대조: 확정 정산이 있는 ${rows.length}일 기준 — 옵션별 합산 매출 ${itemSum.toLocaleString()}원 vs ` +
-    `정산현황 매출 ${settleSum.toLocaleString()}원 (차이 ${diff.toLocaleString()}원). ` +
-    `아래 상품/옵션별 표와 정산 요약이 서로 다른 API를 집계한 값이라 생기는 차이일 수 있음.`;
+  const lines = Object.values(sums)
+    .map(([itemSum, settleSum, label]) => ({ itemSum, settleSum, label, diff: itemSum - settleSum }))
+    .filter((x) => Math.abs(x.diff) >= 1);
+  if (!lines.length) { note.classList.add('hidden'); return; }
+
+  note.innerHTML =
+    `대조: 확정 정산이 있는 ${rows.length}일 기준 — 옵션별 합산 vs 정산현황(둘 다 부가세 보정 반영):<br>` +
+    lines.map((x) => `${x.label} ${x.itemSum.toLocaleString()}원 vs ${x.settleSum.toLocaleString()}원 (차이 ${x.diff.toLocaleString()}원)`).join(' · ') +
+    `<br><span class="dim xs">수수료+입출고비·순이익 차이는 주로 당일 매입+당일 반품으로 순수량이 0이 된 옵션의 반품처리비가 WING 판매목록 자체에서 빠지기 때문(구조적 한계, web/CLAUDE.md 참조)</span>`;
   note.classList.remove('hidden');
 }
 
@@ -1789,6 +1811,21 @@ async function loadItemCostSnapshots(vendorItemIds) {
   ) || [];
   rows.forEach((r) => { (out[r.vendor_item_id] = out[r.vendor_item_id] || []).push(r); });
   return out; // 이미 captured_at 오름차순 — 아이템별 배열
+}
+
+/* 상품별 원가 스냅샷(commission_amount/fulfillment_amount)은 WING 재고현황의
+   "예상(개당)" 툴팁 값 — 부가세 별도. 반면 확정 정산(rocket_growth_profit_daily)의
+   commission_amount/fulfillment_amount는 필드명 자체가 totalTakeRateAmountWithVat/
+   totalCfsAmountWithVat, 즉 부가세 포함이다. 2026-08-17 실사용 대조로 확인:
+   8/16 스냅샷 기반 수수료 합(3,758원)×1.1=4,134원이 그날 확정 수수료(4,134원)와
+   정확히 일치 — 부가세 차이였다는 걸 산술로 검증함(`docs/decisions.md` 참조).
+   **카테고리 요율 폴백(commissionFor/feeFor)에는 이 보정을 적용하지 않는다** —
+   그쪽은 부가세 포함 여부를 검증한 적이 없어서(요율표·요금표 출처가 다름), 근거
+   없이 같은 보정을 씌우면 오히려 새로운 오차를 만들 수 있다. 쿠폰비(coupon_amount)도
+   보정 대상 아님 — 8/16 대조에서 쿠폰비는 보정 없이 이미 정확히 일치했다. */
+const SNAPSHOT_VAT_RATE = 1.1;
+function withSnapshotVat(amount) {
+  return amount == null ? amount : Math.round(amount * SNAPSHOT_VAT_RATE);
 }
 
 /* dateStr 하루 끝(KST) 시점에 유효했던 가장 최근 스냅샷. 시각 비교는 오프셋이 서로 다른
@@ -1923,8 +1960,8 @@ function renderSales(rangeDates, byDate, meta, costSnapshots) {
       let commissionRate, fulfillmentAmt, couponAmt, hasApprox = false, hasEstimate = false;
       if (snapResult) {
         if (!snapResult.exact) hasApprox = true; // 그 날짜 이전 스냅샷이 없어 이후 스냅샷을 대신 씀
-        commissionRate = avgPrice > 0 ? (snapResult.snap.commission_amount / avgPrice * 100) : 0;
-        fulfillmentAmt = snapResult.snap.fulfillment_amount;
+        commissionRate = avgPrice > 0 ? (withSnapshotVat(snapResult.snap.commission_amount) / avgPrice * 100) : 0;
+        fulfillmentAmt = withSnapshotVat(snapResult.snap.fulfillment_amount);
         couponAmt = snapResult.snap.coupon_amount || 0;
       } else {
         hasEstimate = true;
@@ -1986,7 +2023,7 @@ function renderSales(rangeDates, byDate, meta, costSnapshots) {
   $('#salesTableNote').textContent = notes.length ? `${notes.join(' · ')}` : '';
 
   $('#salesBody').innerHTML = sections.map((sec) => {
-    const headHtml = `<tr class="date-group-head"><td colspan="9">${sec.date} (${mdFmt(sec.date)}) <span class="muted xs">${sec.rows.length}건</span></td></tr>`;
+    const headHtml = dateGroupHeadHtml(sec.date, sec.rows);
     const rowsHtml = sec.rows.map((r) => salesRowHtml(r)).join('');
     return headHtml + rowsHtml;
   }).join('');
@@ -2006,6 +2043,43 @@ function optionSubtitle(r) {
     ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" title="옵션ID — 쿠팡 판매 페이지로 이동" onclick="event.stopPropagation()">${esc(r.vid)}</a>`
     : `<span title="옵션ID">${esc(r.vid)}</span>`;
   return `<div class="psub"><span title="등록상품ID">${pid}</span> · ${vidHtml}</div>`;
+}
+
+/* 그 날짜의 상품/옵션 행들을 합산 — 일별 상세표의 같은 날짜 행(확정 정산 또는 추정)과
+   나란히 비교하기 쉽게 하려고 둠(사용자 요청, 2026-08-17). 두 표는 애초에 서로 다른
+   API에서 나온 값이라(일별 상세표는 계정 전체 합계인 확정 정산 or 옵션별 추정, 이 표는
+   상품마다 실제 스냅샷/카테고리 추정을 항목별로 더한 것) 100% 일치를 보장 못 한다 —
+   `renderReconcileNote()`가 이미 매출 기준으로 이 구조적 차이를 안내하고 있음, 여기서는
+   나머지 항목(수수료+입출고비·순이익 등)도 한눈에 비교할 수 있게 보여주기만 한다. */
+function sumSalesRows(rows) {
+  const sum = (key) => rows.reduce((s, r) => s + (r[key] || 0), 0);
+  const feeCombined = rows.reduce((s, r) => s + (r.noCommission ? 0 : Math.round(r.commission || 0) + Math.round(r.fulfillment || 0)), 0);
+  const costedRows = rows.filter((r) => r.cost != null);
+  return {
+    quantity: sum('quantity'), revenue: sum('revenue'), feeCombined,
+    coupon: sum('coupon'), storageAllocated: sum('storageAllocated'), netProfit: sum('netProfit'),
+    operatingProfit: costedRows.length ? costedRows.reduce((s, r) => s + r.operatingProfit, 0) : null
+  };
+}
+
+function dateGroupHeadHtml(date, rows) {
+  const s = sumSalesRows(rows);
+  return `
+<tr class="date-group-head">
+  <td>${date} (${mdFmt(date)}) <span class="muted xs">${rows.length}건</span></td>
+  <td class="col-num" data-label="판매수량">${cnt(s.quantity)}</td>
+  <td class="col-num" data-label="매출">${won(s.revenue)}</td>
+  <td class="col-num" data-label="수수료 및 입출고비">${won(s.feeCombined)}</td>
+  <td class="col-num" data-label="광고비"><span class="dim">—</span></td>
+  <td class="col-num" data-label="쿠폰비">${won(s.coupon)}</td>
+  <td class="col-num" data-label="보관비">${won(s.storageAllocated)}</td>
+  <td class="col-num" data-label="순이익"><span class="${s.netProfit >= 0 ? 'pos' : 'neg'}">${s.netProfit.toLocaleString()}원</span></td>
+  <td class="col-num" data-label="영업이익">${
+    s.operatingProfit != null
+      ? `<span class="${s.operatingProfit >= 0 ? 'pos' : 'neg'}">${Math.round(s.operatingProfit).toLocaleString()}원</span>`
+      : '<span class="dim">원가 입력 필요</span>'
+  }</td>
+</tr>`;
 }
 
 function salesRowHtml(r) {
