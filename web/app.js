@@ -1545,8 +1545,14 @@ function buildDailyRow(date, items, meta, confirmed, costSnapshots) {
     const snapResult = snapshotAsOf(costSnapshots && costSnapshots[it.vendor_item_id], date);
     let commissionRate, fee, coupon;
     if (snapResult) {
+      // 수수료는 그 자체로 부가세 포함 확정값과 대응되는 독립 항목이라 여기서 바로
+      // 보정한다(withSnapshotVat, 2026-08-17 실측 검증됨). 입출고비는 다르다 — WING
+      // 자신의 "풀필먼트서비스 비용" 상세(사용자 스크린샷)를 보면 부가세는 입출고비
+      // 하나가 아니라 "입출고비+보관비를 합친 금액의 10%"로 계산된다. 그래서 여기서는
+      // fee를 세전 원값 그대로 두고, 보관비까지 합산한 뒤 아래에서 부가세를 한 번에
+      // 계산한다 — withSnapshotVat을 fee에 바로 곱하면 보관비 몫의 부가세가 빠진다.
       commissionRate = avgPrice > 0 ? (withSnapshotVat(snapResult.snap.commission_amount) / avgPrice * 100) : 0;
-      fee = withSnapshotVat(snapResult.snap.fulfillment_amount);
+      fee = snapResult.snap.fulfillment_amount;
       coupon = snapResult.snap.coupon_amount || 0;
     } else {
       commissionRate = commissionFor(m.catCode);
@@ -1591,7 +1597,18 @@ function buildDailyRow(date, items, meta, confirmed, costSnapshots) {
   const looksEmpty = confirmed && !confirmed.total_sales_amount && !confirmed.total_deduction_amount;
   const hasConfirmed = !!confirmed && !isToday && !(looksEmpty && quantity > 0);
   const revenue = hasConfirmed ? confirmed.net_sales_amount : itemRevenue;
-  const estNetProfit = estSettlement - estCoupon - estStorage;
+  // 풀필먼트서비스 부가세 — WING 자신의 "수익 현황" 화면(사용자 스크린샷, 2026-08-17)에서
+  // "부가가치세는 조회된 기간에 발생한 요금의 10%로 계산"됨을 확인, 실측 검산(9,336원)까지
+  // 정확히 일치했다. 확정일은 WING이 이미 "배송비+입출고비+보관비+부가세"를 fulfillment_amount
+  // 하나로 합쳐서 주므로(별도 필드 없음), 총액÷11 = 그 안에 포함된 부가세와 수학적으로 완전히
+  // 같다(총액=세전×1.1 이므로 세전=총액÷1.1, 부가세=총액−세전=총액÷11). 추정일(오늘 등)은
+  // 우리가 직접 세전 입출고비+보관비를 만들었으니 그 합의 10%로 계산 — 어느 쪽이든 "보관비"
+  // 컬럼(참고용, 이미 입출고비 안에 포함된 서브셋)과 별개로 하나 더 참고용 컬럼을 추가한다.
+  const vat = hasConfirmed ? Math.round(confirmed.fulfillment_amount / 11) : Math.round((estFulfillment + estStorage) * 0.1);
+  // 순이익 = 매출 − 수수료 − 입출고비 − 보관비 − 쿠폰비 − 광고비 − 부가세(사용자 확정,
+  // 2026-08-17) — 확정일은 WING의 profit_amount에 이미 다 반영돼 있어 그대로 쓰고,
+  // 추정일만 직접 이 여섯 항목을 다 뺀다(광고비는 추정 방법이 없어 0으로 고정).
+  const estNetProfit = estSettlement - estCoupon - estStorage - vat;
   const netProfit = hasConfirmed ? confirmed.profit_amount : estNetProfit;
   const hasCost = costedQty > 0;
 
@@ -1600,6 +1617,7 @@ function buildDailyRow(date, items, meta, confirmed, costSnapshots) {
     commission: hasConfirmed ? confirmed.commission_amount : estCommission,
     fulfillment: hasConfirmed ? confirmed.fulfillment_amount : estFulfillment,
     storage: hasConfirmed ? confirmed.storage_amount : estStorage,
+    vat,
     coupon: hasConfirmed ? confirmed.coupon_amount : estCoupon,
     ad: hasConfirmed ? confirmed.ad_amount : 0,
     milkrun: hasConfirmed ? confirmed.milkrun_amount : 0,
@@ -1723,6 +1741,7 @@ function dailyRowHtml(r, dateLabel, isTotal) {
   <td class="col-num" data-label="수수료">${won(r.commission)}</td>
   <td class="col-num" data-label="입출고비">${won(r.fulfillment)}</td>
   <td class="col-num" data-label="보관비">${won(r.storage)}</td>
+  <td class="col-num" data-label="부가세">${won(r.vat)}</td>
   <td class="col-num" data-label="쿠폰비">${won(r.coupon)}</td>
   <td class="col-num" data-label="광고비">${won(r.ad)}</td>
   <td class="col-num" data-label="밀크런">${won(r.milkrun)}</td>
@@ -1745,7 +1764,7 @@ function sumDailyFullRows(rows) {
   const costedRows = rows.filter((r) => r.cost != null);
   return {
     quantity: sum('quantity'), revenue: sum('revenue'), commission: sum('commission'),
-    fulfillment: sum('fulfillment'), storage: sum('storage'), coupon: sum('coupon'),
+    fulfillment: sum('fulfillment'), storage: sum('storage'), vat: sum('vat'), coupon: sum('coupon'),
     ad: sum('ad'), milkrun: sum('milkrun'), netProfit: sum('netProfit'),
     cost: costedRows.length ? costedRows.reduce((s, r) => s + r.cost, 0) : null,
     shipWork: costedRows.length ? costedRows.reduce((s, r) => s + r.shipWork, 0) : null,
@@ -1913,7 +1932,7 @@ async function fetchAndRenderSales(fromDate, toDate) {
       return;
     }
 
-    renderSales(rangeDates, byDate, meta, costSnapshots);
+    renderSales(rangeDates, byDate, meta, costSnapshots, profitByDate);
   } catch (e) {
     $('#salesMsg').textContent = '판매현황을 불러오지 못했습니다: ' + e.message;
     $('#salesMsg').classList.remove('hidden');
@@ -1938,16 +1957,23 @@ function coupangProductUrl(m, vid) {
   return `https://www.coupang.com/vp/products/${encodeURIComponent(m.productId)}?vendorItemId=${encodeURIComponent(vid)}`;
 }
 
-/* 상품/옵션별 상세표 — 2026-08-16 오후 재개편: 기존엔 상품 기준으로 조회 기간 전체를
-   합쳐서 한 줄로 보여줬는데("이 상품이 기간 동안 총 얼마 팔렸다"), 사용자가 "분류가
-   이상하다"고 지적해서 **날짜별로 그룹핑**하는 방식으로 바꿨다 — 날짜 섹션 헤더 아래에
-   그 날짜에 팔린 옵션들을 그 날짜의 값 그대로(기간 합산 없이) 보여준다. 같은 상품이
-   여러 날 팔렸으면 날짜마다 별도 행으로 나뉜다(기간 합계는 이미 일별 상세표가 담당).
-   날짜별로 원가 스냅샷을 다르게 적용하는 기존 취지(가격 변경 전/후 구분)는 자연히 유지됨
-   — 스냅샷 있는 날은 WING 실제값, 없는 날은 카테고리 요율 추정으로 폴백. 보관비는 이제
-   "그 하루치" 배분(`storageAllocationForItem(..., 1)`)이라 예전의 "조회 기간 전체 배분"과
-   숫자가 다르다 — 여러 날 조회해도 각 행은 그 날 하루의 배분값만 보여준다. */
-function renderSales(rangeDates, byDate, meta, costSnapshots) {
+/* 상품/옵션별 상세표 — 2026-08-16 오후 재개편(날짜별 그룹핑, docs/decisions.md 참조)에
+   이어 2026-08-17에 부가세·보관비 처리를 다시 손봤다.
+   **수수료/입출고비는 다시 별도 컬럼이다**(2026-08-16엔 "수수료 및 입출고비" 하나로
+   합쳤었는데, 사용자가 다시 나눠달라고 요청 — 개별 상품 행까지 전부 적용).
+   **보관비는 더 이상 옵션 단위로 안 나온다** — WING 자신도 "고정 보관비"는 그날 팔린
+   특정 주문에 묶이지 않은, 재고 전체 기준 하루치 총액이라(사용자 확인) 개별 옵션에
+   배분하는 게 억지 정밀도였다. 그래서 옵션 행은 보관비를 "—"로 두고, **날짜 그룹
+   헤더(합계 행)에서만** 그 날짜의 확정 정산(`rocket_growth_profit_daily.storage_amount`)을
+   그대로 가져와 보여준다(`profitByDate` 필요) — 확정 정산이 없는 날(예: 오늘)은 "—".
+   **부가세도 새로 추가됨** — WING "수익 현황" 화면(사용자 스크린샷, 2026-08-17)에서
+   "부가가치세 = 조회 기간 요금의 10%"임을 확인했다. 옵션 행은 그 옵션의 입출고비만
+   기준으로 10%(보관비를 옵션 단위로 안 다루니 여기엔 보관비 몫이 없음), 날짜 합계
+   행은 옵션별 부가세 합 + 그 날짜 고정 보관비의 10%까지 더해서 완전하게 계산한다.
+   **순이익 = 매출 − 수수료 − 입출고비 − 보관비 − 쿠폰비 − 광고비 − 부가세**
+   (사용자 확정 공식, 2026-08-17) — 옵션 행은 보관비 항이 없어 6개 항만 빼고, 날짜
+   합계 행에서 그 날짜의 고정 보관비와 그 부가세를 추가로 뺀다. */
+function renderSales(rangeDates, byDate, meta, costSnapshots, profitByDate) {
   let costedCount = 0, noCommissionCount = 0, estimatedCount = 0, approxCount = 0, rowCount = 0;
 
   const sections = rangeDates.slice().reverse().map((date) => {
@@ -1961,7 +1987,7 @@ function renderSales(rangeDates, byDate, meta, costSnapshots) {
       if (snapResult) {
         if (!snapResult.exact) hasApprox = true; // 그 날짜 이전 스냅샷이 없어 이후 스냅샷을 대신 씀
         commissionRate = avgPrice > 0 ? (withSnapshotVat(snapResult.snap.commission_amount) / avgPrice * 100) : 0;
-        fulfillmentAmt = withSnapshotVat(snapResult.snap.fulfillment_amount);
+        fulfillmentAmt = snapResult.snap.fulfillment_amount; // 세전 원값 — 부가세는 아래서 따로 계산
         couponAmt = snapResult.snap.coupon_amount || 0;
       } else {
         hasEstimate = true;
@@ -1990,18 +2016,19 @@ function renderSales(rangeDates, byDate, meta, costSnapshots) {
       const fulfillment = (c && fulfillmentAmt != null) ? fulfillmentAmt * r.quantity : 0;
       const coupon = couponAmt * r.quantity;
       const settlement = c ? c.settlement * r.quantity : 0;
-      const storageInfo = storageAllocationForItem(costSnapshots[vid], 1); // 이 날 하루치
-      const storageAllocated = storageInfo ? storageInfo.allocated : 0;
-      const netProfit = settlement - coupon - storageAllocated;
+      const vat = Math.round(fulfillment * 0.1); // 보관비 몫은 옵션 단위가 아니라 날짜 합계에서 더함
+      // storageAllocationForItem은 이제 순이익에 안 쓰지만, "이번달 누적보관비" 참고용
+      // 표시(상세 펼치기)엔 여전히 씀 — 그 상품 자체의 보관비 규모를 가늠하는 용도.
+      const storageInfo = storageAllocationForItem(costSnapshots[vid], 1);
+      const netProfit = settlement - coupon - vat;
       const hasCost = !!(c && c.margin != null);
       if (hasCost) costedCount++;
 
       return {
         vid, name: r.product_name, url, productId: m.productId, sellerProductId: m.sellerProductId,
         quantity: r.quantity, revenue: r.revenue,
-        commission, fulfillment, coupon,
+        commission, fulfillment, vat, coupon,
         storageMonthly: storageInfo ? storageInfo.monthly : null,
-        storageAllocated: storageInfo ? storageInfo.allocated : null,
         netProfit,
         cost: hasCost ? c.cost * r.quantity : null,
         shipWork: hasCost ? c.shipWork * r.quantity : null,
@@ -2011,7 +2038,8 @@ function renderSales(rangeDates, byDate, meta, costSnapshots) {
         label: hasEstimate ? '(추정)' : (hasApprox ? '(참고용)' : '')
       };
     });
-    return { date, rows };
+    const confirmedStorage = profitByDate[date] ? profitByDate[date].storage_amount : null;
+    return { date, rows, confirmedStorage };
   }).filter((sec) => sec.rows.length);
 
   const uncosted = rowCount - costedCount - noCommissionCount;
@@ -2023,7 +2051,7 @@ function renderSales(rangeDates, byDate, meta, costSnapshots) {
   $('#salesTableNote').textContent = notes.length ? `${notes.join(' · ')}` : '';
 
   $('#salesBody').innerHTML = sections.map((sec) => {
-    const headHtml = dateGroupHeadHtml(sec.date, sec.rows);
+    const headHtml = dateGroupHeadHtml(sec.date, sec.rows, sec.confirmedStorage);
     const rowsHtml = sec.rows.map((r) => salesRowHtml(r)).join('');
     return headHtml + rowsHtml;
   }).join('');
@@ -2050,30 +2078,40 @@ function optionSubtitle(r) {
    API에서 나온 값이라(일별 상세표는 계정 전체 합계인 확정 정산 or 옵션별 추정, 이 표는
    상품마다 실제 스냅샷/카테고리 추정을 항목별로 더한 것) 100% 일치를 보장 못 한다 —
    `renderReconcileNote()`가 이미 매출 기준으로 이 구조적 차이를 안내하고 있음, 여기서는
-   나머지 항목(수수료+입출고비·순이익 등)도 한눈에 비교할 수 있게 보여주기만 한다. */
-function sumSalesRows(rows) {
+   나머지 항목도 한눈에 비교할 수 있게 보여주기만 한다.
+
+   보관비·부가세는 옵션별 합이 아니다 — confirmedStorage(그 날짜의 확정 고정 보관비,
+   없으면 null)를 여기서 한 번만 반영한다: 옵션별 부가세 합에 "고정 보관비의 10%"를
+   더하고, 순이익에서도 옵션별 순이익 합에서 고정 보관비와 그 부가세를 추가로 뺀다
+   (옵션 행 각각은 보관비 항이 아예 없어서 이렇게 날짜 합계 단계에서만 반영 가능). */
+function sumSalesRows(rows, confirmedStorage) {
   const sum = (key) => rows.reduce((s, r) => s + (r[key] || 0), 0);
-  const feeCombined = rows.reduce((s, r) => s + (r.noCommission ? 0 : Math.round(r.commission || 0) + Math.round(r.fulfillment || 0)), 0);
   const costedRows = rows.filter((r) => r.cost != null);
+  const storage = confirmedStorage != null ? confirmedStorage : null;
+  const storageVat = storage != null ? Math.round(storage * 0.1) : 0;
   return {
-    quantity: sum('quantity'), revenue: sum('revenue'), feeCombined,
-    coupon: sum('coupon'), storageAllocated: sum('storageAllocated'), netProfit: sum('netProfit'),
+    quantity: sum('quantity'), revenue: sum('revenue'),
+    commission: sum('commission'), fulfillment: sum('fulfillment'),
+    storage, vat: sum('vat') + storageVat, coupon: sum('coupon'),
+    netProfit: sum('netProfit') - (storage || 0) - storageVat,
     operatingProfit: costedRows.length ? costedRows.reduce((s, r) => s + r.operatingProfit, 0) : null
   };
 }
 
-function dateGroupHeadHtml(date, rows) {
-  const s = sumSalesRows(rows);
+function dateGroupHeadHtml(date, rows, confirmedStorage) {
+  const s = sumSalesRows(rows, confirmedStorage);
   return `
 <tr class="date-group-head">
   <td>${date} (${mdFmt(date)}) <span class="muted xs">${rows.length}건</span></td>
   <td class="col-num" data-label="판매수량">${cnt(s.quantity)}</td>
   <td class="col-num" data-label="매출">${won(s.revenue)}</td>
-  <td class="col-num" data-label="수수료 및 입출고비">${won(s.feeCombined)}</td>
+  <td class="col-num" data-label="수수료">${won(Math.round(s.commission))}</td>
+  <td class="col-num" data-label="입출고비">${won(Math.round(s.fulfillment))}</td>
+  <td class="col-num" data-label="보관비">${s.storage != null ? won(s.storage) : '<span class="dim">—</span>'}</td>
+  <td class="col-num" data-label="부가세">${won(s.vat)}</td>
   <td class="col-num" data-label="광고비"><span class="dim">—</span></td>
-  <td class="col-num" data-label="쿠폰비">${won(s.coupon)}</td>
-  <td class="col-num" data-label="보관비">${won(s.storageAllocated)}</td>
-  <td class="col-num" data-label="순이익"><span class="${s.netProfit >= 0 ? 'pos' : 'neg'}">${s.netProfit.toLocaleString()}원</span></td>
+  <td class="col-num" data-label="쿠폰비">${won(Math.round(s.coupon))}</td>
+  <td class="col-num" data-label="순이익"><span class="${s.netProfit >= 0 ? 'pos' : 'neg'}">${Math.round(s.netProfit).toLocaleString()}원</span></td>
   <td class="col-num" data-label="영업이익">${
     s.operatingProfit != null
       ? `<span class="${s.operatingProfit >= 0 ? 'pos' : 'neg'}">${Math.round(s.operatingProfit).toLocaleString()}원</span>`
@@ -2096,16 +2134,17 @@ function salesRowHtml(r) {
   </td>
   <td class="col-num" data-label="판매수량">${cnt(r.quantity)}</td>
   <td class="col-num" data-label="매출">${won(r.revenue)}</td>
-  <td class="col-num" data-label="수수료 및 입출고비"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num" data-label="수수료"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num" data-label="입출고비"><span class="dim">수수료 정보 없음</span></td>
+  <td class="col-num" data-label="보관비"><span class="dim">—</span></td>
+  <td class="col-num" data-label="부가세"><span class="dim">—</span></td>
   <td class="col-num" data-label="광고비">${adCell}</td>
   <td class="col-num" data-label="쿠폰비"><span class="dim">—</span></td>
-  <td class="col-num" data-label="보관비"><span class="dim">—</span></td>
   <td class="col-num" data-label="순이익"><span class="dim">수수료 정보 없음</span></td>
   <td class="col-num" data-label="영업이익"><span class="dim">수수료 정보 없음</span></td>
 </tr>`;
   }
   const est = r.label ? ` <span class="dim xs">${r.label}</span>` : '';
-  const feeCombined = Math.round(r.commission) + Math.round(r.fulfillment);
   return `
 <tr class="prow">
   <td>
@@ -2114,10 +2153,12 @@ function salesRowHtml(r) {
   </td>
   <td class="col-num" data-label="판매수량">${cnt(r.quantity)}</td>
   <td class="col-num" data-label="매출">${won(r.revenue)}</td>
-  <td class="col-num" data-label="수수료 및 입출고비">${won(feeCombined)}${est}</td>
+  <td class="col-num" data-label="수수료">${won(Math.round(r.commission))}${est}</td>
+  <td class="col-num" data-label="입출고비">${won(Math.round(r.fulfillment))}${est}</td>
+  <td class="col-num" data-label="보관비"><span class="dim" title="이 옵션 하나에만 귀속되지 않는 재고 전체 기준 비용이라 날짜 합계 행에서만 보여줍니다">—</span></td>
+  <td class="col-num" data-label="부가세">${won(r.vat)}</td>
   <td class="col-num" data-label="광고비">${adCell}</td>
   <td class="col-num" data-label="쿠폰비">${won(Math.round(r.coupon))}${est}</td>
-  <td class="col-num" data-label="보관비">${r.storageAllocated != null ? won(r.storageAllocated) : '<span class="dim">—</span>'}</td>
   <td class="col-num" data-label="순이익"><span class="${r.netProfit >= 0 ? 'pos' : 'neg'}">${Math.round(r.netProfit).toLocaleString()}원</span></td>
   <td class="col-num" data-label="영업이익">${
     r.operatingProfit != null
@@ -2125,10 +2166,8 @@ function salesRowHtml(r) {
       : '<span class="dim">원가 입력 필요</span>'
   }</td>
 </tr>
-<tr class="detail hidden"><td colspan="9"><div class="detail-inner">
+<tr class="detail hidden"><td colspan="11"><div class="detail-inner">
   <div class="kv-grid">
-    <div class="kv"><span class="kv-k">수수료</span><span class="kv-v">${won(Math.round(r.commission))}</span></div>
-    <div class="kv"><span class="kv-k">입출고비</span><span class="kv-v">${won(Math.round(r.fulfillment))}</span></div>
     <div class="kv"><span class="kv-k">이번달 누적보관비</span><span class="kv-v">${r.storageMonthly != null ? won(r.storageMonthly) : '<span class="dim">—</span>'}</span></div>
     <div class="kv"><span class="kv-k">원가</span><span class="kv-v">${r.cost != null ? won(Math.round(r.cost)) : '<span class="dim">원가 입력 필요</span>'}</span></div>
     <div class="kv"><span class="kv-k">배송·작업비</span><span class="kv-v">${r.shipWork != null ? won(Math.round(r.shipWork)) : '<span class="dim">—</span>'}</span></div>
