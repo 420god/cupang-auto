@@ -2534,6 +2534,7 @@ async function loadPOs() {
     PO.skuByBarcode = new Map(
       skus.filter((s) => s.barcode).map((s) => [String(s.barcode), { sku: s }])
     );
+    PO.allSkus = skus;   // 수동 연결(발주 상세)에서 고를 후보
     const byPo = new Map();
     lines.forEach((l) => {
       const a = byPo.get(l.po_id) || { n: 0, qty: 0, cny: 0, krw: 0, unmatched: 0 };
@@ -2568,7 +2569,7 @@ function renderPOs() {
   $('#poRows').innerHTML = rows.map((r) => {
     const o = r.o;
     const unmatched = r.agg.unmatched;
-    return `<tr>
+    return `<tr class="prow" data-po="${esc(o.id)}">
       <td>${esc((o.requested_at || '').slice(0, 10))}</td>
       <td>${esc(PO_STATUS_LABEL[o.status] || o.status)}</td>
       <td class="col-num">${r.agg.n}${unmatched ? ` <span class="muted">(미매칭 ${unmatched})</span>` : ''}</td>
@@ -2580,6 +2581,210 @@ function renderPOs() {
     </tr>`;
   }).join('');
 }
+
+/* ── 발주 상세 : 청구서 줄에 SKU 붙이기 ─────────────────────────
+   왜 필요한가: 청구서의 바코드로 SKU를 자동 매칭하지만, 바코드를 안 넣고 발주한
+   건(과거 청구서는 전부 NOBARCODE)은 매칭이 안 된다. 그러면 원가가 어느 상품
+   것인지 이어지지 않아 그 줄은 죽은 데이터가 된다 — 여기서 손으로 붙인다.
+
+   **로트는 SKU가 붙는 순간 만들어진다.** 청구서 저장 시점엔 매칭된 줄만 로트를
+   만들었으므로, 여기서 뒤늦게 붙인 줄도 같은 규칙으로 로트를 만들어줘야
+   선입선출 대기열에 들어간다. 이미 로트가 있는 줄은 건드리지 않는다(중복 방지). */
+const POD = { poId: null, po: null, lines: [], lotByLine: new Map(), picks: new Map() };
+
+/* 한글 상품명 비교는 단어 단위로는 잘 안 맞는다("도시락 말랑이" vs
+   "덴넬 버터 스틱 말랑이 슬라임 스퀴시, 노랑 100g 2개"). 글자 2개씩 겹치는
+   비율(Dice 계수)로 보면 표기가 달라도 같은 상품을 꽤 잘 찾아낸다. */
+function bigramSet(s) {
+  const t = String(s || '').replace(/[\s,·\-_()]/g, '');
+  const out = new Set();
+  for (let i = 0; i < t.length - 1; i++) out.add(t.slice(i, i + 2));
+  return out;
+}
+function diceScore(a, b) {
+  if (!a.size || !b.size) return 0;
+  let hit = 0;
+  a.forEach((g) => { if (b.has(g)) hit++; });
+  return (2 * hit) / (a.size + b.size);
+}
+function suggestSkus(name, skus, limit) {
+  const q = bigramSet(name);
+  return skus
+    .map((s) => ({ s, score: diceScore(q, bigramSet(s.sku_name)) }))
+    .filter((x) => x.score > 0.15)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit || 3);
+}
+
+async function openPoDetail(poId) {
+  const entry = PO.list.find((r) => r.o.id === poId);
+  if (!entry) return;
+  POD.poId = poId;
+  POD.po = entry.o;
+  POD.picks = new Map();
+
+  $('#poDetailMsg').className = 'msg hidden';
+  $('#poDetailTitle').textContent = `발주 상세 — ${(entry.o.requested_at || '').slice(0, 10)}`;
+  $('#poDetailRows').innerHTML = '<tr><td colspan="5" class="muted">불러오는 중…</td></tr>';
+  $('#poDetailModal').classList.remove('hidden');
+
+  try {
+    const [lines, lots] = await Promise.all([
+      apiAll(`purchase_order_lines?select=*&po_id=eq.${encodeURIComponent(poId)}&order=line_no.asc`),
+      apiAll(`inventory_lots?select=id,po_line_id&po_line_id=not.is.null`)
+    ]);
+    POD.lines = lines;
+    POD.lotByLine = new Map(lots.map((l) => [l.po_line_id, l]));
+
+    /* 후보 목록은 datalist로 준다 — SKU가 수천 개가 돼도 브라우저가 알아서 걸러준다.
+       select 태그였다면 수천 개 option을 그리느라 느려진다. */
+    $('#skuPickList').innerHTML = (PO.allSkus || [])
+      .map((s) => `<option value="${esc(skuPickLabel(s))}"></option>`).join('');
+
+    renderPoDetail();
+  } catch (e) {
+    $('#poDetailRows').innerHTML = `<tr><td colspan="5" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+const skuPickLabel = (s) => `${s.sku_name} [${s.barcode || '바코드없음'}]`;
+
+function renderPoDetail() {
+  const po = POD.po;
+  const rate = Number(po.rate_purchase) || 0;
+  const skus = PO.allSkus || [];
+  const byId = new Map(skus.map((s) => [s.id, s]));
+
+  /* 아직 저장 안 한 선택(picks)도 반영해서 센다 — 안 그러면 화면에서 고르는데도
+     "미연결 2/3"이 안 줄어들어서 반영이 안 된 것처럼 보인다. */
+  const pickedOf = (l) => (POD.picks.has(String(l.id)) ? POD.picks.get(String(l.id)) : l.sku_id);
+  const unmatched = POD.lines.filter((l) => !pickedOf(l)).length;
+  $('#poDetailRo').innerHTML = [
+    ['상태', PO_STATUS_LABEL[po.status] || po.status],
+    ['환율', rate ? rate.toFixed(2) : '—'],
+    ['합계(CNY)', po.total_cny != null ? Number(po.total_cny).toFixed(2) : '—'],
+    ['미연결 줄', `${unmatched} / ${POD.lines.length}`]
+  ].map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join('');
+
+  $('#poDetailHint').textContent = unmatched
+    ? '연결할 SKU를 고르면 저장할 때 그 줄의 재고 로트가 만들어집니다. 상품명이 비슷한 후보를 아래에 추천해뒀습니다.'
+    : '모든 줄이 SKU에 연결돼 있습니다.';
+
+  $('#poDetailRows').innerHTML = POD.lines.map((l) => {
+    /* picks의 키는 DOM dataset에서 와서 항상 문자열이고 l.id는 숫자다 —
+       String()으로 맞추지 않으면 고른 값이 조용히 무시된다(2026-08-18에 실제로 겪음). */
+    const picked = pickedOf(l);
+    const cur = picked ? byId.get(picked) : null;
+    const hasLot = POD.lotByLine.has(l.id);
+    const unit = l.qty ? Math.round((l.line_cost_krw || 0) / l.qty) : 0;
+
+    let cell;
+    if (cur) {
+      cell = `<div class="pick-on">
+          <span>${esc(cur.sku_name)}</span>
+          ${hasLot ? '<span class="muted sm">로트 생성됨</span>'
+                   : '<button class="btn btn-sm btn-ghost pick-clear" data-line="' + esc(l.id) + '">해제</button>'}
+        </div>`;
+    } else {
+      const sugg = suggestSkus(l.product_name_text, skus, 3);
+      cell = `<div class="pick-off">
+          <input class="pick-input" list="skuPickList" data-line="${esc(l.id)}" placeholder="SKU 검색…" />
+          ${sugg.length ? '<div class="pick-sugg">' + sugg.map((x) =>
+            `<button class="chip-btn pick-sugg-btn" data-line="${esc(l.id)}" data-sku="${esc(x.s.id)}"
+               title="유사도 ${(x.score * 100).toFixed(0)}%">${esc(x.s.sku_name)}</button>`).join('') + '</div>' : ''}
+        </div>`;
+    }
+
+    return `<tr>
+      <td class="sku-bc">${l.barcode_text ? esc(l.barcode_text) : '<span class="muted">없음</span>'}</td>
+      <td>${esc(l.product_name_text)}</td>
+      <td class="col-num">${cnt(l.qty)}</td>
+      <td class="col-num">${unit ? unit.toLocaleString() + '원' : '—'}</td>
+      <td>${cell}</td>
+    </tr>`;
+  }).join('');
+}
+
+$('#poDetailRows').addEventListener('click', (ev) => {
+  const sug = ev.target.closest('.pick-sugg-btn');
+  if (sug) { POD.picks.set(sug.dataset.line, sug.dataset.sku); renderPoDetail(); return; }
+  const clr = ev.target.closest('.pick-clear');
+  if (clr) { POD.picks.set(clr.dataset.line, null); renderPoDetail(); }
+});
+$('#poDetailRows').addEventListener('change', (ev) => {
+  const inp = ev.target.closest('.pick-input');
+  if (!inp) return;
+  const hit = (PO.allSkus || []).find((s) => skuPickLabel(s) === inp.value);
+  if (hit) { POD.picks.set(inp.dataset.line, hit.id); renderPoDetail(); }
+});
+
+$$('#poDetailModal [data-close]').forEach((b) => {
+  b.onclick = () => $('#poDetailModal').classList.add('hidden');
+});
+
+$('#poDetailSave').onclick = async () => {
+  const btn = $('#poDetailSave');
+  const msg = $('#poDetailMsg');
+  const changes = Array.from(POD.picks.entries())
+    .filter(([lineId, skuId]) => {
+      const line = POD.lines.find((l) => String(l.id) === String(lineId));
+      return line && (line.sku_id || null) !== (skuId || null);
+    });
+  if (!changes.length) { msg.className = 'msg'; msg.textContent = '바뀐 연결이 없습니다.'; return; }
+
+  btn.disabled = true;
+  try {
+    const rate = Number(POD.po.rate_purchase) || 0;
+    let lotsMade = 0;
+    for (const [lineId, skuId] of changes) {
+      const line = POD.lines.find((l) => String(l.id) === String(lineId));
+      await api(`purchase_order_lines?id=eq.${encodeURIComponent(lineId)}`, {
+        method: 'PATCH', headers: { prefer: 'return=minimal' }, body: { sku_id: skuId }
+      });
+      line.sku_id = skuId;
+
+      /* 청구서 저장 때와 같은 규칙으로 로트를 만든다. 이미 있으면 건너뛴다 —
+         같은 줄에 로트가 두 개 생기면 재고와 원가가 이중 계상된다. */
+      if (skuId && !POD.lotByLine.has(line.id)) {
+        await api('inventory_lots', {
+          method: 'POST', headers: { prefer: 'return=minimal' },
+          body: [{
+            sku_id: skuId,
+            po_line_id: line.id,
+            qty_ordered: line.qty,
+            qty_china: line.qty,
+            unit_cost_krw: line.qty ? Math.round((line.line_cost_krw / line.qty) * 100) / 100 : 0,
+            cost_status: 'estimated',
+            cost_breakdown: {
+              cny_line: line.line_cost_cny,
+              cny_unit: line.unit_price_cny,
+              cny_shipping_alloc: line.allocated_shipping_cny,
+              rate_purchase: rate,
+              linked_manually: true      // 바코드가 아니라 사람이 붙인 연결임을 남긴다
+            },
+            ordered_at: POD.po.requested_at
+          }]
+        });
+        POD.lotByLine.set(line.id, { po_line_id: line.id });
+        lotsMade++;
+      }
+    }
+    POD.picks = new Map();
+    renderPoDetail();
+    toast(`연결 ${changes.length}건 저장 · 로트 ${lotsMade}개 생성`);
+    loadPOs();
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = '저장 실패: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+$('#poRows').addEventListener('click', (ev) => {
+  const tr = ev.target.closest('tr[data-po]');
+  if (tr) openPoDetail(tr.dataset.po);
+});
 
 function poOpenModal() {
   PO.parsed = null;

@@ -557,3 +557,15 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 .po-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0 12px; }
 .po-lines-wrap { margin-top: 12px; max-height: 46vh; overflow: auto; }
 .warn-txt { color: var(--neg); }
+
+/* ---------- 발주 상세 : SKU 수동 연결 ---------- */
+.pick-on { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pick-input { min-width: 190px; }
+.pick-sugg { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+.chip-btn {
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  background: var(--surface-2); color: var(--text-2);
+  padding: 3px 10px; font-size: 11.5px; cursor: pointer;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chip-btn:hover { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
