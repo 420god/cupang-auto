@@ -378,13 +378,15 @@ VPS 스크립트가 Supabase에 쓸 때 `service_role` 키를 쓰지 않는다 �
   productId,         ← 상품ID (쿠팡 소비자 페이지 /vp/products/{productId} URL에 씀)
   sellerProductName, categoryId, displayCategoryCode, vendorId, brand, statusName, ...
   items: [{
-    itemName, sellerProductItemId,
-    marketPlaceItem: { vendorInventoryItemId, vendorItemId },
-    rocketGrowthItem: { vendorInventoryItemId, vendorItemId }  ← 옵션ID는 이 안에 있음
+    itemName,                                                     ← 옵션명 (018부터 저장)
+    marketPlaceItemData:  { sellerProductItemId, vendorItemId },
+    rocketGrowthItemData: { sellerProductItemId, vendorItemId }   ← 옵션ID는 이 안에 있음
   }]
 }], nextToken }
 ```
-하이브리드(로켓그로스+마켓플레이스 동시운영) 상품은 `marketPlaceItem`/`rocketGrowthItem`이 둘 다 있을 수 있다 — 판매현황은 로켓그로스 vendorItemId 기준이라 `rocketGrowthItem`을 우선 쓴다(`scripts/rocket-growth-sync.js`의 `flattenProductRegistry()`).
+하이브리드(로켓그로스+마켓플레이스 동시운영) 상품은 `marketPlaceItemData`/`rocketGrowthItemData`가 둘 다 있을 수 있다 — 판매현황은 로켓그로스 vendorItemId 기준이라 `rocketGrowthItemData`를 우선 쓴다(`scripts/rocket-growth-sync.js`의 `flattenProductRegistry()`).
+
+> **2026-08-18 정정 — 이 절은 2026-08-17에 필드명을 틀리게 적어뒀었다.** 실제 이름은 `rocketGrowthItem`/`marketPlaceItem`이 아니라 **`rocketGrowthItemData`/`marketPlaceItemData`**(뒤에 `Data`가 붙는다)이고, `sellerProductItemId`도 `items[]` 바로 아래가 아니라 그 **안쪽**에 있다. 그리고 **`vendorInventoryItemId`는 이 응답에 아예 없다**(있다고 적어뒀었음). 코드가 문서를 그대로 따라 짜여 있어서 `--products` 크론이 매일 돌면서 **모든 옵션을 조용히 버리고 있었다** — 레지스트리는 만든 뒤로 계속 0행이었다(`docs/troubleshooting.md` 참조). 이후 이 절을 고칠 때는 반드시 `scripts/_sample_seller_product.json`(실행하면 자동으로 떨어지는 실제 응답 덤프)을 보고 대조할 것.
 
 **② 상품 조회**(`query-product`, path param `sellerProductId`) — 단건 상세용. 여기서 `itemId`(10자리, `rocketGrowthItemData` 안)와 `externalVendorSku`(문자열, 판매자상품코드)도 확인했지만 **WING 화면의 8자리 SKU ID와 자릿수가 안 맞는다**(`itemId` 예시값 `4300564093`=10자리, `sellerProductItemId` 예시값 `30100598574`=11자리, 스크린샷 SKU ID `76795171`=8자리). `externalVendorSku`는 판매자가 직접 입력하는 코드라 자동 발급 ID와 성격이 다름.
 

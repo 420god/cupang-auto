@@ -20,11 +20,12 @@ migrations/014_rocket_growth_product_registry.sql  등록상품ID·상품ID·옵
 migrations/015_sku_ledger.sql        상품원장 — my_products/my_skus/sku_channel_listings/sku_suppliers/sku_bom. 시스템 전체의 축. SKU 식별은 쿠팡 발급 바코드(unique 자연키), PK는 내부 uuid(채널 독립)
 migrations/016_supply_and_cogs.sql   공급 — 환율이력/구매요청/청구서줄/한국입고/재고로트(FIFO)/재고이동/매출원가배분/예치금. 원가가 태어나는 곳
 migrations/017_sourcing_predictions_costs.sql  소싱 판단 박제(sourcing_candidates/decisions) + 예측 원장(predictions) + 월 고정비 + 알림. '복리로 개선되는 시스템'의 근간
+migrations/018_registry_item_name.sql  rocket_growth_product_registry에 item_name(옵션명) 추가 — 새 API 호출 없이 이미 받던 상품목록 응답의 items[].itemName을 버리지 않고 저장(011/013과 같은 패턴). 상품원장 sku_name 조립에 필요
 ```
 
 **이미 실행된 파일은 절대 수정하지 않는다.** 스키마를 바꿔야 하면 `004_설명.sql`처럼 새 번호로 추가한다. 모든 마이그레이션은 `if not exists`/`drop ... if exists`를 써서 **여러 번 실행해도 안전**하게 만든다 — 이 관례를 유지할 것.
 
-새 세션에서 가장 먼저 확인할 것: **001~017 전부 실행 확인됨(2026-08-18에 아래 방법으로 실측 검증 — 014 존재 확인 + 015~017이 만드는 19개 테이블 전부 REST 조회로 확인).** 018부터 추가할 것.
+새 세션에서 가장 먼저 확인할 것: **001~017 전부 실행 확인됨(2026-08-18에 아래 방법으로 실측 검증 — 014 존재 확인 + 015~017이 만드는 19개 테이블 전부 REST 조회로 확인).** **018은 2026-08-18 신규 — 아직 실행 안 됨.** 019부터 추가할 것.
 
 **마이그레이션 실행 여부를 기억이 안 날 때 확인하는 법** — Supabase REST에 그 테이블을 물어보면 된다. RLS 때문에 내용은 안 보이지만 **존재 여부는 응답 코드로 구분된다**: 테이블이 없으면 `PGRST205` 404, 있으면 200에 빈 배열(`[]`). publishable key만 있으면 되고 로그인도 필요 없다.
 ```bash

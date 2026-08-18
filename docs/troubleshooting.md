@@ -106,3 +106,25 @@
 **해결**: `require('dotenv').config({ path: path.join(__dirname, '.env') })`로 바꿔서 실행 위치와
 무관하게 항상 `scripts/.env`를 읽게 했다. 같은 이유로 `--skus`가 남기는 응답 샘플 파일도
 `__dirname` 기준으로 쓴다(루트에서 실행했다면 `scripts/scripts/...`에 쓰려다 실패했을 것).
+
+### --products가 "상품 32건 조회됨 / upsert 대상 0행" — 레지스트리가 계속 비어 있었다 (2026-08-18)
+
+**증상**: `rocket_growth_product_registry`가 비어 있어서 `--skus`가 "레지스트리 0행"으로 아무것도 안 했다.
+`--products`를 직접 돌려보니 상품 조회는 32건 되는데 upsert 대상이 0행. 크론은 정상이었다
+(두 줄 다 `cd .../scripts` 후 실행이라 `.env`도 잘 읽힘). 즉 **매일 새벽 3시에 돌면서 매번 0행을 넣고
+조용히 성공한 척** 하고 있었다 — `upsertProductRegistry()`가 `if (!rows.length) return;`이라 에러도 안 난다.
+
+**원인**: `flattenProductRegistry()`가 `it.rocketGrowthItem` / `it.marketPlaceItem`을 찾는데,
+실제 응답 필드명은 **`rocketGrowthItemData` / `marketPlaceItemData`**였다. `docs/api-notes.md` 4-7 ①에
+2026-08-17에 이름을 틀리게 적어뒀고 코드가 그걸 그대로 따랐다. 실제 응답을 저장해본 적이 없어서
+1년 가까이(만든 뒤 계속) 아무도 몰랐다.
+
+**해결**: 필드명 수정(옛 이름도 폴백으로 남김) + `sellerProductItemId`를 `rg` 안쪽에서 읽도록 수정.
+
+**재발 방지 — 여기서 배운 것**:
+1. `--products` 실행 시 **첫 페이지 첫 상품을 `scripts/_sample_seller_product.json`에 항상 덤프**한다.
+   응답 구조를 눈으로 볼 수 있으면 이 종류의 버그는 1분이면 잡힌다.
+2. **"조회 N건 → 저장 0행"을 조용히 넘기지 말 것.** 버려진 개수를 경고로 출력하게 했다
+   ("API가 안 준 것"인지 "우리가 못 읽은 것"인지 구분이 안 되는 게 이 버그의 본질이었다).
+3. **문서에 적힌 API 필드명을 믿고 코드를 짜지 말 것** — 실제 응답을 한 번은 저장해서 대조할 것.
+   이 프로젝트의 카테고리 매칭에서 배운 "외부 자료를 그대로 믿지 말 것"과 같은 교훈이다.

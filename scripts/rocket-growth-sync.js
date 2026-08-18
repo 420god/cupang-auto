@@ -192,15 +192,25 @@ function flattenProductRegistry(products) {
   products.forEach((p) => {
     if (!Array.isArray(p.items) || !p.items.length) skippedNoItems++;
     (p.items || []).forEach((it) => {
-      const rg = it.rocketGrowthItem || it.marketPlaceItem;
+      /* 실제 응답 필드명은 rocketGrowthItemData / marketPlaceItemData 다.
+         2026-08-17에 docs/api-notes.md에 rocketGrowthItem(Data 없이)으로 잘못 적었고
+         코드도 그대로 짜서, 크론이 매일 돌면서 모든 옵션을 조용히 버리고 있었다
+         ("상품 32건 조회됨 / upsert 대상 0행"). 2026-08-18 실제 응답 덤프로 확인해 수정.
+         옛 이름도 폴백으로 남겨둔다 — 쿠팡이 이름을 되돌릴 가능성은 낮지만 비용이 0이다. */
+      const rg = it.rocketGrowthItemData || it.rocketGrowthItem
+              || it.marketPlaceItemData || it.marketPlaceItem;
       if (!rg || rg.vendorItemId == null) { skippedNoVendorItem++; return; }
+      /* sellerProductItemId도 it 바로 아래가 아니라 rg 안에 있다 */
+      const spii = rg.sellerProductItemId != null ? rg.sellerProductItemId : it.sellerProductItemId;
       rows.push({
         vendor_item_id: String(rg.vendorItemId),
         seller_product_id: p.sellerProductId != null ? String(p.sellerProductId) : null,
-        seller_product_item_id: it.sellerProductItemId != null ? String(it.sellerProductItemId) : null,
+        seller_product_item_id: spii != null ? String(spii) : null,
         product_id: p.productId != null ? String(p.productId) : null,
+        /* 실제 응답엔 vendorInventoryItemId가 없다(문서 기록이 틀렸음). 있으면 담고 없으면 null */
         vendor_inventory_item_id: rg.vendorInventoryItemId != null ? String(rg.vendorInventoryItemId) : null,
         seller_product_name: p.sellerProductName || null,
+        item_name: it.itemName || null,   // migrations/018에서 추가한 컬럼
         updated_at: new Date().toISOString()
       });
     });
@@ -394,7 +404,7 @@ async function syncSkuLedger(accessToken, opts) {
   const { limit, dryRun } = opts;
 
   const registry = await sbSelectAll(accessToken, 'rocket_growth_product_registry',
-    'select=vendor_item_id,seller_product_id,product_id,seller_product_name');
+    'select=vendor_item_id,seller_product_id,product_id,seller_product_name,item_name');
   console.log(`레지스트리 ${registry.length}행`);
 
   const listings = await sbSelectAll(accessToken, 'sku_channel_listings',
@@ -488,7 +498,9 @@ async function syncSkuLedger(accessToken, opts) {
       const vid = String(r.vendor_item_id);
       const it = detailByVid.get(vid) || {};
       const barcode = pickBarcode(it);
-      const optName = pickItemName(it);
+      /* 옵션명은 단건조회에 있으면 그걸 쓰고, 없으면 레지스트리에 저장해둔 값을 쓴다
+         (018로 item_name을 넣은 이유 — 목록 API에 이미 오던 값이다) */
+      const optName = pickItemName(it) || r.item_name;
       const skuName = optName ? `${productName}, ${optName}` : productName;
 
       if (dryRun) {
