@@ -2300,6 +2300,401 @@ $('#settingsSave').onclick = async () => {
   }
 };
 
+/* ===================== 구매대행 청구서 파서 =====================
+   쿠플러스(㈜쿠패스) 구매대행 청구서 PDF의 텍스트를 줄 단위 구조로 되돌린다.
+   구조와 함정은 docs/decisions.md 2026-08-18 "구매대행 청구서 PDF 구조" 참조.
+   여기 다시 요약하는 이유는 이 함수가 그 함정들 위에 통째로 서 있기 때문이다:
+
+   1) **한 줄 = SKU 1개**(옵션 단위). 같은 상품 다른 옵션도 각각 한 줄.
+   2) **줄이 "1688 주문 묶음"으로 그룹지어져 있다.** 배송비·총금액은 묶음의 첫 줄에만
+      찍히고 나머지 줄은 빈칸이다. → 숫자 개수로 그룹 머리/구성원을 판별한다:
+        숫자 7개 = [수량, 협상전단가, 협상전배송비, 협상전총액, 협상후단가, 협상후배송비, 협상후총액]  → 그룹 머리
+        숫자 3개 = [수량, 협상전단가, 협상후단가]                                                    → 그룹 구성원
+   3) **줄별 KRW가 없다.** ₩ 붙은 3개 값(결제금액/부가세/최종합계)은 문서 전체 합계이고
+      첫 줄에 한 번만 나온다. → 환율은 (전체 KRW ÷ 전체 CNY)로 역산한다.
+   4) **협상후 단가는 총액에서 역산된 소수점 5자리**(1.04545 등)라 믿으면 안 된다.
+      계산 기준은 언제나 그룹 총금액이고, 단가는 표시용이다.
+
+   PDF→텍스트 변환기(pdf-parse 등)마다 줄바꿈 위치가 달라지므로 **줄 구조에 의존하지 않는다** —
+   날짜 패턴으로 레코드를 자르고, 각 레코드에서 뒤쪽의 연속된 숫자 토큰만 뽑는다.
+   상품명에 "3p" 같은 숫자+문자 토큰이 섞여도 순수 숫자만 세므로 안전하다. */
+
+const PO_DATE_RE = /\d{4}-\d{2}-\d{2}/g;
+const PO_PURE_NUM = /^\d+(\.\d+)?$/;
+
+function parseCouplusInvoice(text) {
+  const src = String(text || '').replace(/ /g, ' ');
+  const marks = [];
+  let m;
+  PO_DATE_RE.lastIndex = 0;
+  while ((m = PO_DATE_RE.exec(src))) marks.push({ i: m.index, date: m[0] });
+  if (!marks.length) return { rows: [], groups: [], totals: null, error: '청구서에서 날짜를 찾지 못했습니다.' };
+
+  const rows = [];
+  let totalKrw = null, vatKrw = null, grandKrw = null;
+
+  marks.forEach((mk, idx) => {
+    const chunk = src.slice(mk.i, idx + 1 < marks.length ? marks[idx + 1].i : src.length);
+    const toks = chunk.split(/\s+/).filter(Boolean);
+    toks.shift();                                   // 날짜
+    if (toks.length && !PO_PURE_NUM.test(toks[0])) toks.shift();  // 업체명(growth)
+
+    /* 원화 토큰(₩12,345)은 문서 전체 합계 — 첫 레코드에만 나온다 */
+    const krw = [];
+    const rest = [];
+    toks.forEach((t) => {
+      if (/[₩₩]/.test(t)) krw.push(Number(t.replace(/[^\d.]/g, '')));
+      else rest.push(t);
+    });
+    if (krw.length >= 3 && totalKrw === null) {
+      totalKrw = krw[0]; vatKrw = krw[1]; grandKrw = krw[2];
+    }
+
+    /* 바코드는 맨 끝 토큰. NOBARCODE면 없는 것으로 본다(샘플 화주수령 등 예외 케이스) */
+    let barcode = null;
+    if (rest.length && !PO_PURE_NUM.test(rest[rest.length - 1])) {
+      const last = rest.pop();
+      barcode = /^NOBARCODE$/i.test(last) ? null : last;
+    }
+
+    /* 뒤에서부터 순수 숫자가 이어지는 구간이 수치 영역, 그 앞이 상품명 */
+    let k = rest.length;
+    while (k > 0 && PO_PURE_NUM.test(rest[k - 1])) k--;
+    const nums = rest.slice(k).map(Number);
+    const name = rest.slice(0, k).join(' ').trim();
+    if (!name && !nums.length) return;
+
+    rows.push({ date: mk.date, name, barcode, nums });
+  });
+
+  /* 숫자 개수로 그룹을 복원한다 — 7개면 새 묶음의 머리, 3개(또는 그 이하)면 직전 묶음에 붙는다 */
+  const groups = [];
+  const out = [];
+  rows.forEach((r) => {
+    const n = r.nums;
+    const line = {
+      date: r.date, name: r.name, barcode: r.barcode,
+      qty: n.length ? n[0] : 0,
+      unitCny: null, groupIndex: -1, raw: n.slice()
+    };
+    if (n.length >= 7) {
+      groups.push({ shippingCny: n[5], totalCny: n[6], lines: [] });
+      line.groupIndex = groups.length - 1;
+      line.unitCny = n[4];
+    } else if (groups.length) {
+      line.groupIndex = groups.length - 1;
+      line.unitCny = n.length >= 3 ? n[2] : (n.length >= 2 ? n[1] : null);
+    } else {
+      /* 첫 줄부터 그룹 머리가 아니면 구조를 잘못 읽은 것 — 확인 화면에서 사람이 본다 */
+      groups.push({ shippingCny: 0, totalCny: null, lines: [] });
+      line.groupIndex = 0;
+      line.unitCny = n.length >= 2 ? n[n.length - 1] : null;
+    }
+    groups[line.groupIndex].lines.push(line);
+    out.push(line);
+  });
+
+  /* 묶음 배송비를 수량 비례로 배분 — 이 청구서 구조에서 유일하게 남은 배분 대상이다 */
+  groups.forEach((g) => {
+    const qtySum = g.lines.reduce((a, l) => a + (l.qty || 0), 0);
+    g.lines.forEach((l) => {
+      l.allocShipCny = qtySum > 0 ? (g.shippingCny || 0) * (l.qty / qtySum) : 0;
+      l.lineCny = (l.qty || 0) * (l.unitCny || 0) + l.allocShipCny;
+    });
+    /* 검산: 우리가 계산한 합이 청구서의 묶음 총금액과 맞는가 */
+    if (g.totalCny != null) {
+      const calc = g.lines.reduce((a, l) => a + l.lineCny, 0);
+      g.diffCny = Math.round((calc - g.totalCny) * 100) / 100;
+    }
+  });
+
+  const sumCny = groups.reduce((a, g) => a + (g.totalCny != null
+    ? g.totalCny
+    : g.lines.reduce((b, l) => b + l.lineCny, 0)), 0);
+
+  /* 환율은 문서에 안 적혀 있다 — 전체 KRW ÷ 전체 CNY로 역산한다.
+     실측(2026-06-26 청구서): 2055.28 CNY, ₩657,690 → 320.0 */
+  const rate = (totalKrw && sumCny) ? Math.round((totalKrw / sumCny) * 100) / 100 : null;
+
+  return {
+    rows: out, groups,
+    totals: { totalKrw, vatKrw, grandKrw, sumCny, rate },
+    date: out.length ? out[0].date : null,
+    error: null
+  };
+}
+
+/* ===================== 발주 =====================
+   원가가 태어나는 화면. 청구서를 인식해서 purchase_orders / purchase_order_lines /
+   inventory_lots 세 테이블을 한 번에 만든다(db/migrations/016).
+
+   저장 전 사람 확인 단계를 반드시 거친다 — 인식이 틀린 채로 저장되면 원가가 조용히
+   어긋나고, 원가는 이 시스템 전체 이익 계산의 바닥이라 뒤늦게 발견하기 가장 어렵다. */
+const PO = { list: [], parsed: null, skuByBarcode: new Map() };
+
+async function loadPOs() {
+  const el = $('#poRows');
+  el.innerHTML = '<tr><td colspan="8" class="muted">불러오는 중…</td></tr>';
+  try {
+    const [orders, lines, skus] = await Promise.all([
+      apiAll('purchase_orders?select=*&order=requested_at.desc'),
+      apiAll('purchase_order_lines?select=po_id,qty,line_cost_cny,line_cost_krw,sku_id'),
+      /* 청구서의 바코드로 SKU를 찾기 위한 색인. 상품원장 탭을 안 거쳐도 발주가
+         동작해야 하므로 여기서 따로 읽는다(두 탭이 서로를 전제하지 않게). */
+      apiAll('my_skus?select=id,sku_name,barcode')
+    ]);
+    PO.skuByBarcode = new Map(
+      skus.filter((s) => s.barcode).map((s) => [String(s.barcode), { sku: s }])
+    );
+    const byPo = new Map();
+    lines.forEach((l) => {
+      const a = byPo.get(l.po_id) || { n: 0, qty: 0, cny: 0, krw: 0, unmatched: 0 };
+      a.n++; a.qty += l.qty || 0;
+      a.cny += Number(l.line_cost_cny) || 0;
+      a.krw += Number(l.line_cost_krw) || 0;
+      if (!l.sku_id) a.unmatched++;
+      byPo.set(l.po_id, a);
+    });
+    PO.list = orders.map((o) => ({ o, agg: byPo.get(o.id) || { n: 0, qty: 0, cny: 0, krw: 0, unmatched: 0 } }));
+    renderPOs();
+  } catch (e) {
+    el.innerHTML = `<tr><td colspan="8" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+const PO_STATUS_LABEL = {
+  requested: '요청', invoiced: '청구서수령', paid: '입금', ordered: '발주',
+  arrived_china: '중국창고', inbound_requested: '입고요청', received: '입고완료',
+  cancelled: '취소'
+};
+
+function renderPOs() {
+  const rows = PO.list;
+  const totalKrw = rows.reduce((a, r) => a + r.agg.krw, 0);
+  $('#poSummary').textContent = rows.length
+    ? `발주 ${rows.length}건 · 누적 매입원가 ${Math.round(totalKrw).toLocaleString()}원`
+    : '아직 등록된 발주가 없습니다. "청구서 넣기"로 시작하세요.';
+
+  if (!rows.length) { $('#poRows').innerHTML = ''; return; }
+
+  $('#poRows').innerHTML = rows.map((r) => {
+    const o = r.o;
+    const unmatched = r.agg.unmatched;
+    return `<tr>
+      <td>${esc((o.requested_at || '').slice(0, 10))}</td>
+      <td>${esc(PO_STATUS_LABEL[o.status] || o.status)}</td>
+      <td class="col-num">${r.agg.n}${unmatched ? ` <span class="muted">(미매칭 ${unmatched})</span>` : ''}</td>
+      <td class="col-num">${cnt(r.agg.qty)}</td>
+      <td class="col-num">${r.agg.cny ? r.agg.cny.toFixed(2) : '—'}</td>
+      <td class="col-num">${o.rate_purchase == null ? '—' : Number(o.rate_purchase).toFixed(2)}</td>
+      <td class="col-num">${won(Math.round(r.agg.krw))}</td>
+      <td>${o.confirmed_by_user ? '확인됨' : '<span class="muted">미확인</span>'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function poOpenModal() {
+  PO.parsed = null;
+  $('#poStep1').classList.remove('hidden');
+  $('#poStep2').classList.add('hidden');
+  $('#poSave').classList.add('hidden');
+  $('#poBack').classList.add('hidden');
+  $('#poMsg').className = 'msg hidden';
+  $('#poText').value = '';
+  $('#poModal').classList.remove('hidden');
+}
+function poCloseModal() { $('#poModal').classList.add('hidden'); }
+
+$('#poNewBtn').onclick = poOpenModal;
+$$('#poModal [data-close]').forEach((b) => { b.onclick = poCloseModal; });
+$('#poBack').onclick = () => {
+  $('#poStep1').classList.remove('hidden');
+  $('#poStep2').classList.add('hidden');
+  $('#poSave').classList.add('hidden');
+  $('#poBack').classList.add('hidden');
+};
+
+$('#poDrop').onclick = () => $('#poFile').click();
+$('#poDrop').addEventListener('dragover', (e) => { e.preventDefault(); $('#poDrop').classList.add('over'); });
+$('#poDrop').addEventListener('dragleave', () => $('#poDrop').classList.remove('over'));
+$('#poDrop').addEventListener('drop', (e) => {
+  e.preventDefault();
+  $('#poDrop').classList.remove('over');
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) poHandleFile(f);
+});
+$('#poFile').onchange = (e) => { const f = e.target.files[0]; if (f) poHandleFile(f); };
+$('#poParseText').onclick = () => poShowParsed(parseCouplusInvoice($('#poText').value), null);
+
+/* PDF에서 텍스트를 뽑는 일만 서버리스 함수에 맡긴다(브라우저에 PDF 라이브러리를
+   넣지 않기 위함 — 프론트엔드 무의존 원칙, web/CLAUDE.md).
+   텍스트→줄 구조 변환은 브라우저에서 한다: 로직이 한 곳에 있고 테스트가 쉽다. */
+async function poHandleFile(file) {
+  const msg = $('#poMsg');
+  msg.className = 'msg';
+  msg.textContent = 'PDF 읽는 중…';
+  try {
+    const buf = await file.arrayBuffer();
+    const res = await fetch('/api/parse-invoice', {
+      method: 'POST',
+      headers: { 'content-type': 'application/pdf' },
+      body: buf
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+    msg.className = 'msg hidden';
+    poShowParsed(parseCouplusInvoice(d.text), d.text);
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = 'PDF 인식 실패: ' + e.message +
+      ' — 아래 "텍스트로 직접 붙여넣기"를 쓰시면 됩니다.';
+  }
+}
+
+function poShowParsed(parsed, rawText) {
+  if (parsed.error || !parsed.rows.length) {
+    const msg = $('#poMsg');
+    msg.className = 'msg err';
+    msg.textContent = parsed.error || '인식된 줄이 없습니다.';
+    return;
+  }
+  PO.parsed = parsed;
+  PO.rawText = rawText || $('#poText').value || null;
+
+  $('#poDate').value = parsed.date || '';
+  $('#poRate').value = parsed.totals.rate || '';
+  $('#poTotalCny').value = parsed.totals.sumCny ? parsed.totals.sumCny.toFixed(2) : '';
+  $('#poTotalKrw').value = parsed.totals.totalKrw || '';
+  $('#poRateNote').textContent = parsed.totals.rate
+    ? `환율은 청구서에 안 적혀 있어 합계로 역산했습니다 (${parsed.totals.totalKrw.toLocaleString()}원 ÷ ${parsed.totals.sumCny.toFixed(2)} CNY). 다르면 직접 고치세요.`
+    : '환율을 역산할 수 없었습니다 — 직접 입력하세요.';
+
+  poRenderLines();
+  $('#poStep1').classList.add('hidden');
+  $('#poStep2').classList.remove('hidden');
+  $('#poSave').classList.remove('hidden');
+  $('#poBack').classList.remove('hidden');
+}
+
+function poRenderLines() {
+  const rate = Number($('#poRate').value) || 0;
+  const bc = PO.skuByBarcode;
+  let unmatched = 0;
+
+  $('#poLineRows').innerHTML = PO.parsed.rows.map((l, i) => {
+    const hit = l.barcode ? bc.get(String(l.barcode)) : null;
+    if (!hit) unmatched++;
+    const unitKrw = l.qty ? (l.lineCny / l.qty) * rate : 0;
+    return `<tr data-i="${i}">
+      <td class="sku-bc">${l.barcode ? esc(l.barcode) : '<span class="muted">없음</span>'}</td>
+      <td>${esc(l.name)}</td>
+      <td>${hit ? esc(hit.sku.sku_name) : '<span class="warn-txt">매칭 안 됨</span>'}</td>
+      <td class="col-num">${cnt(l.qty)}</td>
+      <td class="col-num">${l.unitCny == null ? '—' : l.unitCny}</td>
+      <td class="col-num">${l.allocShipCny ? l.allocShipCny.toFixed(2) : '0'}</td>
+      <td class="col-num">${rate ? Math.round(unitKrw).toLocaleString() + '원' : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  const notes = [];
+  if (unmatched) notes.push(`바코드로 SKU를 못 찾은 줄 ${unmatched}개 — 그대로 저장하면 원가가 어느 상품 것인지 이어지지 않습니다.`);
+  PO.parsed.groups.forEach((g, i) => {
+    if (g.diffCny != null && Math.abs(g.diffCny) > 0.05) {
+      notes.push(`${i + 1}번 묶음 합계가 청구서와 ${g.diffCny > 0 ? '+' : ''}${g.diffCny} CNY 차이납니다.`);
+    }
+  });
+  const w = $('#poWarn');
+  if (notes.length) { w.className = 'msg err'; w.innerHTML = notes.map(esc).join('<br>'); }
+  else { w.className = 'msg hidden'; }
+}
+$('#poRate').oninput = () => { if (PO.parsed) poRenderLines(); };
+
+$('#poSave').onclick = async () => {
+  if (!PO.parsed) return;
+  const btn = $('#poSave');
+  const msg = $('#poMsg');
+  const rate = Number($('#poRate').value) || null;
+  if (!rate) {
+    msg.className = 'msg err';
+    msg.textContent = '환율이 없으면 원가를 원화로 못 만듭니다. 환율을 입력하세요.';
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const t = PO.parsed.totals;
+    const po = (await api('purchase_orders', {
+      method: 'POST', headers: { prefer: 'return=representation' },
+      body: [{
+        requested_at: ($('#poDate').value || new Date().toISOString().slice(0, 10)) + 'T00:00:00Z',
+        status: 'invoiced',
+        rate_purchase: rate,
+        rate_source: t.rate && Math.abs(t.rate - rate) < 0.01 ? 'derived_from_invoice' : 'manual',
+        invoice_raw_text: PO.rawText,
+        parsed_at: new Date().toISOString(),
+        parse_method: 'regex',
+        confirmed_by_user: true,
+        total_cny: t.sumCny || null,
+        total_krw: t.totalKrw || null,
+        vat_krw: t.vatKrw || null,
+        grand_total_krw: t.grandKrw || null
+      }]
+    }))[0];
+
+    const lineBody = PO.parsed.rows.map((l, i) => {
+      const hit = l.barcode ? PO.skuByBarcode.get(String(l.barcode)) : null;
+      return {
+        po_id: po.id,
+        line_no: i + 1,
+        sku_id: hit ? hit.sku.id : null,
+        barcode_text: l.barcode,
+        product_name_text: l.name,
+        qty: l.qty,
+        group_key: 'G' + (l.groupIndex + 1),
+        unit_price_cny: l.unitCny,
+        group_shipping_cny: PO.parsed.groups[l.groupIndex].shippingCny,
+        group_total_cny: PO.parsed.groups[l.groupIndex].totalCny,
+        allocated_shipping_cny: l.allocShipCny,
+        line_cost_cny: l.lineCny,
+        line_cost_krw: Math.round(l.lineCny * rate),
+        raw_line: { nums: l.raw, date: l.date }
+      };
+    });
+    const savedLines = await api('purchase_order_lines', {
+      method: 'POST', headers: { prefer: 'return=representation' }, body: lineBody
+    });
+
+    /* 매칭된 줄만 로트를 만든다 — SKU를 모르는 원가는 어차피 어디에도 못 붙는다.
+       나중에 바코드를 채워 매칭하면 그때 로트를 만들 수 있게 줄은 그대로 남겨둔다. */
+    const lots = savedLines.filter((l) => l.sku_id).map((l) => ({
+      sku_id: l.sku_id,
+      po_line_id: l.id,
+      qty_ordered: l.qty,
+      qty_china: l.qty,
+      unit_cost_krw: l.qty ? Math.round((l.line_cost_krw / l.qty) * 100) / 100 : 0,
+      cost_status: 'estimated',   // 배대지 작업비(개당 300원 수준)가 아직 안 붙었다
+      cost_breakdown: {
+        cny_line: l.line_cost_cny,
+        cny_unit: l.unit_price_cny,
+        cny_shipping_alloc: l.allocated_shipping_cny,
+        rate_purchase: rate
+      },
+      ordered_at: po.requested_at
+    }));
+    if (lots.length) {
+      await api('inventory_lots', { method: 'POST', headers: { prefer: 'return=minimal' }, body: lots });
+    }
+
+    poCloseModal();
+    toast(`청구서 저장 완료 — ${savedLines.length}줄, 로트 ${lots.length}개`);
+    loadPOs();
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = '저장 실패: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
 /* ===================== 상품원장 =====================
    my_skus가 이 시스템의 축이다(db/migrations/015). 목록 자체는 사람이 안 만든다 —
    scripts/rocket-growth-sync.js --skus 가 쿠팡 Open API에서 바코드까지 자동 적재한다.
@@ -2550,6 +2945,7 @@ $$('.nav-item').forEach((btn) => {
     state.page = page;
     closeSidebar();
 
+    if (page === 'po')         loadPOs();
     if (page === 'skus')       loadSkus();
     if (page === 'sales')      loadSales();
     if (page === 'favorites')  loadFavorites();
