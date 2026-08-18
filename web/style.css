@@ -569,3 +569,4 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
   max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .chip-btn:hover { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+.bc-input { font-variant-numeric: tabular-nums; font-size: 12.5px; padding: 6px 8px; min-width: 140px; }

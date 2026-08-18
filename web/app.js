@@ -2590,7 +2590,7 @@ function renderPOs() {
    **로트는 SKU가 붙는 순간 만들어진다.** 청구서 저장 시점엔 매칭된 줄만 로트를
    만들었으므로, 여기서 뒤늦게 붙인 줄도 같은 규칙으로 로트를 만들어줘야
    선입선출 대기열에 들어간다. 이미 로트가 있는 줄은 건드리지 않는다(중복 방지). */
-const POD = { poId: null, po: null, lines: [], lotByLine: new Map(), picks: new Map() };
+const POD = { poId: null, po: null, lines: [], lotByLine: new Map(), picks: new Map(), bcEdits: new Map() };
 
 /* 한글 상품명 비교는 단어 단위로는 잘 안 맞는다("도시락 말랑이" vs
    "덴넬 버터 스틱 말랑이 슬라임 스퀴시, 노랑 100g 2개"). 글자 2개씩 겹치는
@@ -2622,6 +2622,7 @@ async function openPoDetail(poId) {
   POD.poId = poId;
   POD.po = entry.o;
   POD.picks = new Map();
+  POD.bcEdits = new Map();
 
   $('#poDetailMsg').className = 'msg hidden';
   $('#poDetailTitle').textContent = `발주 상세 — ${(entry.o.requested_at || '').slice(0, 10)}`;
@@ -2658,6 +2659,7 @@ function renderPoDetail() {
   /* 아직 저장 안 한 선택(picks)도 반영해서 센다 — 안 그러면 화면에서 고르는데도
      "미연결 2/3"이 안 줄어들어서 반영이 안 된 것처럼 보인다. */
   const pickedOf = (l) => (POD.picks.has(String(l.id)) ? POD.picks.get(String(l.id)) : l.sku_id);
+  const bcOf = (l) => (POD.bcEdits.has(String(l.id)) ? POD.bcEdits.get(String(l.id)) : l.barcode_text);
   const unmatched = POD.lines.filter((l) => !pickedOf(l)).length;
   $('#poDetailRo').innerHTML = [
     ['상태', PO_STATUS_LABEL[po.status] || po.status],
@@ -2695,8 +2697,15 @@ function renderPoDetail() {
         </div>`;
     }
 
+    /* 바코드를 고칠 수 있게 한다 — 쿠플러스에 바코드를 안 넣고 발주한 건은 여기서
+       나중에 채워 넣는 게 가장 자연스럽다. 고치면 그 바코드로 SKU를 찾아보고,
+       있으면 자동 연결하고 없으면 원래처럼 검색·추천이 뜬다.
+       청구서 원문은 purchase_order_lines.raw_line(jsonb)에 그대로 남아 있으므로
+       이 칸을 고쳐도 원본을 잃지 않는다. */
+    const bc = bcOf(l);
     return `<tr>
-      <td class="sku-bc">${l.barcode_text ? esc(l.barcode_text) : '<span class="muted">없음</span>'}</td>
+      <td><input class="bc-input" data-line="${esc(l.id)}" value="${esc(bc || '')}"
+                 placeholder="바코드 없음" /></td>
       <td>${esc(l.product_name_text)}</td>
       <td class="col-num">${cnt(l.qty)}</td>
       <td class="col-num">${unit ? unit.toLocaleString() + '원' : '—'}</td>
@@ -2713,9 +2722,28 @@ $('#poDetailRows').addEventListener('click', (ev) => {
 });
 $('#poDetailRows').addEventListener('change', (ev) => {
   const inp = ev.target.closest('.pick-input');
-  if (!inp) return;
-  const hit = (PO.allSkus || []).find((s) => skuPickLabel(s) === inp.value);
-  if (hit) { POD.picks.set(inp.dataset.line, hit.id); renderPoDetail(); }
+  if (inp) {
+    const hit = (PO.allSkus || []).find((s) => skuPickLabel(s) === inp.value);
+    if (hit) { POD.picks.set(inp.dataset.line, hit.id); renderPoDetail(); }
+    return;
+  }
+
+  const bcInp = ev.target.closest('.bc-input');
+  if (!bcInp) return;
+  const lineId = bcInp.dataset.line;
+  const line = POD.lines.find((l) => String(l.id) === String(lineId));
+  const val = bcInp.value.trim() || null;
+  POD.bcEdits.set(lineId, val);
+
+  /* 바코드를 고치면 **먼저 그 바코드의 SKU가 있는지 본다.**
+     있으면 자동으로 연결하고, 없으면 연결을 비워서 원래처럼 검색·추천이 뜨게 한다.
+     단 이미 로트가 만들어진 줄은 연결을 건드리지 않는다 — 바꾸면 로트가 붕 뜬다.
+     (바코드 글자 자체는 고쳐도 로트에 영향이 없으므로 수정은 허용한다) */
+  if (line && !POD.lotByLine.has(line.id)) {
+    const hit = val ? PO.skuByBarcode.get(String(val)) : null;
+    POD.picks.set(lineId, hit ? hit.sku.id : null);
+  }
+  renderPoDetail();
 });
 
 $$('#poDetailModal [data-close]').forEach((b) => {
@@ -2725,23 +2753,30 @@ $$('#poDetailModal [data-close]').forEach((b) => {
 $('#poDetailSave').onclick = async () => {
   const btn = $('#poDetailSave');
   const msg = $('#poDetailMsg');
-  const changes = Array.from(POD.picks.entries())
-    .filter(([lineId, skuId]) => {
-      const line = POD.lines.find((l) => String(l.id) === String(lineId));
-      return line && (line.sku_id || null) !== (skuId || null);
-    });
-  if (!changes.length) { msg.className = 'msg'; msg.textContent = '바뀐 연결이 없습니다.'; return; }
+  /* 연결과 바코드를 따로 저장하지 않는다 — 한 줄에 둘 다 바뀌었으면 PATCH 한 번으로 끝낸다 */
+  const touched = new Set([...POD.picks.keys(), ...POD.bcEdits.keys()]);
+  const changes = Array.from(touched).map((lineId) => {
+    const line = POD.lines.find((l) => String(l.id) === String(lineId));
+    if (!line) return null;
+    const skuId = POD.picks.has(lineId) ? POD.picks.get(lineId) : line.sku_id;
+    const bc = POD.bcEdits.has(lineId) ? POD.bcEdits.get(lineId) : line.barcode_text;
+    const patch = {};
+    if ((line.sku_id || null) !== (skuId || null)) patch.sku_id = skuId;
+    if ((line.barcode_text || null) !== (bc || null)) patch.barcode_text = bc;
+    return Object.keys(patch).length ? { line, skuId, patch } : null;
+  }).filter(Boolean);
+
+  if (!changes.length) { msg.className = 'msg'; msg.textContent = '바뀐 내용이 없습니다.'; return; }
 
   btn.disabled = true;
   try {
     const rate = Number(POD.po.rate_purchase) || 0;
     let lotsMade = 0;
-    for (const [lineId, skuId] of changes) {
-      const line = POD.lines.find((l) => String(l.id) === String(lineId));
-      await api(`purchase_order_lines?id=eq.${encodeURIComponent(lineId)}`, {
-        method: 'PATCH', headers: { prefer: 'return=minimal' }, body: { sku_id: skuId }
+    for (const { line, skuId, patch } of changes) {
+      await api(`purchase_order_lines?id=eq.${encodeURIComponent(line.id)}`, {
+        method: 'PATCH', headers: { prefer: 'return=minimal' }, body: patch
       });
-      line.sku_id = skuId;
+      Object.assign(line, patch);
 
       /* 청구서 저장 때와 같은 규칙으로 로트를 만든다. 이미 있으면 건너뛴다 —
          같은 줄에 로트가 두 개 생기면 재고와 원가가 이중 계상된다. */
@@ -2770,8 +2805,9 @@ $('#poDetailSave').onclick = async () => {
       }
     }
     POD.picks = new Map();
+    POD.bcEdits = new Map();
     renderPoDetail();
-    toast(`연결 ${changes.length}건 저장 · 로트 ${lotsMade}개 생성`);
+    toast(`${changes.length}줄 저장 · 로트 ${lotsMade}개 생성`);
     loadPOs();
   } catch (e) {
     msg.className = 'msg err';
