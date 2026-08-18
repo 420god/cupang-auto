@@ -2543,6 +2543,7 @@ async function poHandleFile(file) {
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
     msg.className = 'msg hidden';
+    PO.method = d.method || null;
     poShowParsed(parseCouplusInvoice(d.text), d.text);
   } catch (e) {
     msg.className = 'msg err';
@@ -2568,6 +2569,11 @@ function poShowParsed(parsed, rawText) {
   $('#poRateNote').textContent = parsed.totals.rate
     ? `환율은 청구서에 안 적혀 있어 합계로 역산했습니다 (${parsed.totals.totalKrw.toLocaleString()}원 ÷ ${parsed.totals.sumCny.toFixed(2)} CNY). 다르면 직접 고치세요.`
     : '환율을 역산할 수 없었습니다 — 직접 입력하세요.';
+
+  $('#poRaw').value = PO.rawText || '';
+  $('#poMethod').textContent = PO.method
+    ? (PO.method === 'position' ? '(좌표 기반 추출)' : '(기본 추출 — 공백이 뭉개졌을 수 있음)')
+    : '';
 
   poRenderLines();
   $('#poStep1').classList.add('hidden');
@@ -2597,6 +2603,20 @@ function poRenderLines() {
   }).join('');
 
   const notes = [];
+  /* 숫자 개수가 7(그룹 머리)·3(구성원)·1(수량만) 중 어느 것도 아니면 텍스트 추출이
+     깨졌을 가능성이 크다 — 2026-08-18에 pdf-parse 기본 추출기가 칸 사이 공백을
+     버려서 "세알2069.8129.868128" 같은 토큰이 만들어진 적이 있다. 그때 화면엔
+     아무 경고도 안 떠서 사용자가 눈으로 보고서야 알았다. 다시는 조용히 넘어가지 않게 한다. */
+  const odd = PO.parsed.rows.filter((l) =>
+    ![1, 3, 7].includes(l.raw.length) ||
+    /* 수량은 반드시 양의 정수다. 소수가 나왔다면 두 칸이 붙어버린 것
+       (실제 사례: "16 5.7"이 "165.7"로 붙어 수량 14196.4가 만들어졌다). */
+    !Number.isInteger(l.qty) || l.qty <= 0
+  ).length;
+  if (odd) {
+    notes.push(`숫자 구조가 예상과 다른 줄 ${odd}개 — PDF 텍스트 추출이 깨졌을 수 있습니다. ` +
+      '아래 "인식된 원문 보기"에서 칸이 공백으로 제대로 나뉘었는지 확인하세요.');
+  }
   if (unmatched) notes.push(`바코드로 SKU를 못 찾은 줄 ${unmatched}개 — 그대로 저장하면 원가가 어느 상품 것인지 이어지지 않습니다.`);
   PO.parsed.groups.forEach((g, i) => {
     if (g.diffCny != null && Math.abs(g.diffCny) > 0.05) {
