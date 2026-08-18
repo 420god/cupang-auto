@@ -570,3 +570,23 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 }
 .chip-btn:hover { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
 .bc-input { font-variant-numeric: tabular-nums; font-size: 12.5px; padding: 6px 8px; min-width: 140px; }
+
+/* ---------- 발주 진행 단계 ---------- */
+.po-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 6px; }
+.po-step {
+  display: flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  background: var(--surface); color: var(--text-3);
+  padding: 5px 12px 5px 6px; font-size: 12px; cursor: pointer; transition: .13s;
+}
+.po-step b {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--surface-2); color: var(--text-3); font-size: 10.5px; font-weight: 600;
+}
+.po-step:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.po-step:disabled { opacity: .6; cursor: wait; }
+.po-step.done { color: var(--text-2); border-color: var(--border-strong); }
+.po-step.done b { background: var(--accent-soft); color: var(--accent); }
+.po-step.now { border-color: var(--accent); color: var(--text); font-weight: 600; }
+.po-step.now b { background: var(--accent); color: #fff; }

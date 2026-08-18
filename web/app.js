@@ -2557,11 +2557,31 @@ async function loadPOs() {
   }
 }
 
-const PO_STATUS_LABEL = {
-  requested: '요청', invoiced: '청구서수령', paid: '입금', ordered: '발주',
-  arrived_china: '중국창고', inbound_requested: '입고요청', received: '입고완료',
-  cancelled: '취소'
-};
+/* 발주 진행 단계 — 사용자가 실제 업무 순서대로 정해준 것(2026-08-18).
+   순서 자체가 의미를 갖는다: 아래 배열의 인덱스로 "어디까지 왔나"를 판단하고,
+   재고 위치(중국창고/운송중/쿠팡)도 이 단계에서 파생시킨다. 순서를 바꾸지 말 것.
+
+   재고 위치를 단계에서 "파생"시키는 이유: 단계를 바꿀 때마다 수량을 옮기면
+   앞뒤로 왔다갔다할 때 수량이 어긋난다(멱등하지 않다). 단계만 진실로 두고
+   수량은 항상 거기서 다시 계산하면 몇 번을 눌러도 같은 결과가 나온다. */
+const PO_STEPS = [
+  { code: 'invoiced',        label: '청구서 수령',      loc: 'china' },
+  { code: 'paid',            label: '결제완료',         loc: 'china' },
+  { code: 'shipping_cn',     label: '중국배대지 배송중', loc: 'china' },
+  { code: 'arrived_cn',      label: '중국배대지 도착',   loc: 'china' },
+  { code: 'work_invoiced',   label: '작업비 청구',      loc: 'china' },
+  { code: 'shipping_kr',     label: '쿠팡 출고중',      loc: 'transit' },
+  { code: 'arrived_coupang', label: '쿠팡센터 도착',    loc: 'coupang' }
+];
+const PO_STEP_INDEX = new Map(PO_STEPS.map((s, i) => [s.code, i]));
+
+/* 016 주석에 적어둔 옛 코드들 — 실제로 쓰인 적은 'invoiced'뿐이지만,
+   과거 행이 남아 있어도 화면이 안 깨지도록 라벨만 남겨둔다. */
+const PO_STATUS_LABEL = Object.assign(
+  { requested: '요청', ordered: '발주', arrived_china: '중국배대지 도착',
+    inbound_requested: '쿠팡 출고중', received: '쿠팡센터 도착', cancelled: '취소' },
+  Object.fromEntries(PO_STEPS.map((s) => [s.code, s.label]))
+);
 
 function renderPOs() {
   const rows = PO.list;
@@ -2677,6 +2697,15 @@ function renderPoDetail() {
     ['미연결 줄', `${unmatched} / ${POD.lines.length}`]
   ].map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join('');
 
+  /* 진행 단계 — 누르면 그 단계로 바꾼다. 되돌리기도 되게 했다(잘못 눌렀을 때
+     방법이 없으면 안 되고, 수량은 단계에서 파생되므로 되돌려도 어긋나지 않는다). */
+  const curIdx = PO_STEP_INDEX.has(po.status) ? PO_STEP_INDEX.get(po.status) : -1;
+  $('#poSteps').innerHTML = PO_STEPS.map((s, i) => {
+    const cls = i < curIdx ? 'done' : (i === curIdx ? 'now' : '');
+    return `<button class="po-step ${cls}" data-step="${s.code}">
+      <b>${i + 1}</b><span>${esc(s.label)}</span></button>`;
+  }).join('');
+
   $('#poDetailHint').textContent = unmatched
     ? '연결할 SKU를 고르면 저장할 때 그 줄의 재고 로트가 만들어집니다. 상품명이 비슷한 후보를 아래에 추천해뒀습니다.'
     : '모든 줄이 SKU에 연결돼 있습니다.';
@@ -2767,6 +2796,55 @@ $('#poDetailRows').addEventListener('change', (ev) => {
 
 $$('#poDetailModal [data-close]').forEach((b) => {
   b.onclick = () => $('#poDetailModal').classList.add('hidden');
+});
+
+/* 단계를 바꾸면 그 발주의 로트 재고 위치도 같이 맞춘다.
+   **수량을 옮기는 게 아니라 단계에서 다시 계산해서 덮어쓴다** — 그래야 앞뒤로
+   여러 번 눌러도 수량이 어긋나지 않는다(멱등). 지금은 발주 전량이 함께 움직인다고
+   보고 계산한다 — 한 발주를 나눠서 한국에 보내는 경우는 아직 다루지 않는다. */
+$('#poSteps').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('.po-step');
+  if (!btn || !POD.po) return;
+  const code = btn.dataset.step;
+  if (code === POD.po.status) return;
+
+  const msg = $('#poDetailMsg');
+  $$('#poSteps .po-step').forEach((b) => { b.disabled = true; });
+  try {
+    await api(`purchase_orders?id=eq.${encodeURIComponent(POD.po.id)}`, {
+      method: 'PATCH', headers: { prefer: 'return=minimal' }, body: { status: code }
+    });
+    POD.po.status = code;
+
+    const step = PO_STEPS[PO_STEP_INDEX.get(code)];
+    const loc = step ? step.loc : 'china';
+    const lineIds = POD.lines.filter((l) => POD.lotByLine.has(l.id)).map((l) => l.id);
+    if (lineIds.length) {
+      const lots = await apiAll(
+        `inventory_lots?select=id,po_line_id,qty_ordered&po_line_id=in.(${lineIds.join(',')})`);
+      for (const lot of lots) {
+        const q = lot.qty_ordered || 0;
+        const body = {
+          qty_china: loc === 'china' ? q : 0,
+          qty_transit: loc === 'transit' ? q : 0,
+          qty_coupang: loc === 'coupang' ? q : 0
+        };
+        if (loc === 'coupang') body.arrived_coupang_at = new Date().toISOString();
+        if (code === 'arrived_cn') body.arrived_china_at = new Date().toISOString();
+        await api(`inventory_lots?id=eq.${lot.id}`, {
+          method: 'PATCH', headers: { prefer: 'return=minimal' }, body
+        });
+      }
+    }
+    renderPoDetail();
+    toast(`단계 변경 — ${PO_STATUS_LABEL[code] || code}`);
+    loadPOs();
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = '단계 변경 실패: ' + e.message;
+  } finally {
+    $$('#poSteps .po-step').forEach((b) => { b.disabled = false; });
+  }
 });
 
 $('#poDetailSave').onclick = async () => {
