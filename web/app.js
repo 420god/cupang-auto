@@ -2350,11 +2350,20 @@ function parseCouplusInvoice(text) {
       totalKrw = krw[0]; vatKrw = krw[1]; grandKrw = krw[2];
     }
 
-    /* 바코드는 맨 끝 토큰. NOBARCODE면 없는 것으로 본다(샘플 화주수령 등 예외 케이스) */
+    /* 바코드 칸은 맨 끝이지만 **공백이 든 여러 토큰일 수 있다** — 실제로 바코드 대신
+       "핑크 호빵 스퀴지" 같은 상품명이 적혀 온 청구서가 있었다(2026-07-02).
+       그래서 토큰 하나가 아니라 뒤쪽의 "숫자가 아닌 토큰이 이어지는 구간" 전체를 뗀다.
+       NOBARCODE면 없는 것으로 본다(샘플 화주수령 등 예외 케이스). */
     let barcode = null;
-    if (rest.length && !PO_PURE_NUM.test(rest[rest.length - 1])) {
-      const last = rest.pop();
-      barcode = /^NOBARCODE$/i.test(last) ? null : last;
+    let b = rest.length;
+    while (b > 0 && !PO_PURE_NUM.test(rest[b - 1])) b--;
+    if (b < rest.length) {
+      const tail = rest.splice(b).join(' ');
+      barcode = /^NOBARCODE$/i.test(tail) ? null : tail;
+    } else if (rest.length && /^\d{8,}$/.test(rest[rest.length - 1])) {
+      /* 숫자로만 된 바코드는 위 방법으로 안 잡힌다 — 8자리 이상 정수면 바코드로 본다
+         (청구서의 수치 칸은 이만큼 커지지 않는다) */
+      barcode = rest.pop();
     }
 
     /* 뒤에서부터 순수 숫자가 이어지는 구간이 수치 영역, 그 앞이 상품명 */
@@ -2367,32 +2376,61 @@ function parseCouplusInvoice(text) {
     rows.push({ date: mk.date, name, barcode, nums });
   });
 
-  /* 숫자 개수로 그룹을 복원한다 — 7개면 새 묶음의 머리, 3개(또는 그 이하)면 직전 묶음에 붙는다 */
-  const groups = [];
-  const out = [];
-  rows.forEach((r) => {
+  /* ── 묶음 복원 ──────────────────────────────────────────────────
+     처음엔 "총금액이 찍힌 줄이 묶음의 첫 줄"이라고 봤는데 **틀렸다**(2026-08-18).
+     2026-07-02 청구서에서 총금액이 묶음 한가운데 줄에 찍혀 있었다:
+
+       빨간구슬 21x7.5=157.5   <- 총금액 166.5 (=157.5+9)
+       꿀빵     21x9  =189
+       망고스틴 16x13 =208     <- 총금액 676.8 (묶음 한가운데!)
+       딸기     16x15 =240
+                        637 + 39.8 = 676.8
+
+     PDF에서 세로로 병합된 칸이라 값이 어느 줄에 그려지는지가 일정하지 않다.
+     위치에 의존하면 못 푼다. 그래서 **산수로 푼다**:
+
+       묶음들은 줄 순서를 끊지 않고 이어지는 덩어리이고,
+       각 묶음은  총금액 - 배송비 = 그 묶음 줄들의 (수량 x 단가) 합  을 만족한다.
+
+     그래서 위에서부터 (수량 x 단가)를 누적하다가 다음 총금액과 맞아떨어지는 순간
+     거기서 묶음을 끊는다. 위치와 무관하고, 맞으면 그 자체가 검산이 된다. */
+  const markers = [];
+  const out = rows.map((r) => {
     const n = r.nums;
-    const line = {
+    return {
       date: r.date, name: r.name, barcode: r.barcode,
       qty: n.length ? n[0] : 0,
-      unitCny: null, groupIndex: -1, raw: n.slice()
+      /* 협상후 단가: 7개면 5번째, 3개면 3번째. 협상전 값은 쓰지 않는다 */
+      unitCny: n.length >= 7 ? n[4] : (n.length >= 3 ? n[2] : (n.length >= 2 ? n[1] : null)),
+      groupIndex: -1, raw: n.slice()
     };
-    if (n.length >= 7) {
-      groups.push({ shippingCny: n[5], totalCny: n[6], lines: [] });
-      line.groupIndex = groups.length - 1;
-      line.unitCny = n[4];
-    } else if (groups.length) {
-      line.groupIndex = groups.length - 1;
-      line.unitCny = n.length >= 3 ? n[2] : (n.length >= 2 ? n[1] : null);
-    } else {
-      /* 첫 줄부터 그룹 머리가 아니면 구조를 잘못 읽은 것 — 확인 화면에서 사람이 본다 */
-      groups.push({ shippingCny: 0, totalCny: null, lines: [] });
-      line.groupIndex = 0;
-      line.unitCny = n.length >= 2 ? n[n.length - 1] : null;
-    }
-    groups[line.groupIndex].lines.push(line);
-    out.push(line);
   });
+  rows.forEach((r) => {
+    if (r.nums.length >= 7) markers.push({ shippingCny: r.nums[5], totalCny: r.nums[6] });
+  });
+
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const groups = [];
+  let mi = 0, acc = 0, start = 0;
+  out.forEach((l, i) => {
+    acc = r2(acc + (l.qty || 0) * (l.unitCny || 0));
+    if (mi < markers.length) {
+      const target = r2(markers[mi].totalCny - markers[mi].shippingCny);
+      if (Math.abs(acc - target) < 0.02) {
+        groups.push({ shippingCny: markers[mi].shippingCny, totalCny: markers[mi].totalCny, lines: [] });
+        for (let k = start; k <= i; k++) out[k].groupIndex = groups.length - 1;
+        mi++; acc = 0; start = i + 1;
+      }
+    }
+  });
+  /* 어느 총금액과도 안 맞고 남은 줄들 — 인식이 깨졌거나 청구서 구조가 또 다른 경우다.
+     조용히 버리지 않고 별도 묶음으로 남겨서 확인 화면의 검산 경고에 걸리게 한다. */
+  if (start < out.length) {
+    groups.push({ shippingCny: 0, totalCny: null, lines: [], leftover: true });
+    for (let k = start; k < out.length; k++) out[k].groupIndex = groups.length - 1;
+  }
+  const unusedMarkers = markers.length - mi;
+  out.forEach((l) => { if (groups[l.groupIndex]) groups[l.groupIndex].lines.push(l); });
 
   /* 묶음 배송비를 수량 비례로 배분 — 이 청구서 구조에서 유일하게 남은 배분 대상이다 */
   groups.forEach((g) => {
@@ -2417,7 +2455,7 @@ function parseCouplusInvoice(text) {
   const rate = (totalKrw && sumCny) ? Math.round((totalKrw / sumCny) * 100) / 100 : null;
 
   return {
-    rows: out, groups,
+    rows: out, groups, unusedMarkers,
     totals: { totalKrw, vatKrw, grandKrw, sumCny, rate },
     date: out.length ? out[0].date : null,
     error: null
@@ -2619,10 +2657,15 @@ function poRenderLines() {
   }
   if (unmatched) notes.push(`바코드로 SKU를 못 찾은 줄 ${unmatched}개 — 그대로 저장하면 원가가 어느 상품 것인지 이어지지 않습니다.`);
   PO.parsed.groups.forEach((g, i) => {
-    if (g.diffCny != null && Math.abs(g.diffCny) > 0.05) {
+    if (g.leftover) {
+      notes.push(`${i + 1}번 묶음: 어느 총금액과도 맞아떨어지지 않은 줄이 ${g.lines.length}개 남았습니다 — 배송비 배분이 안 된 상태입니다.`);
+    } else if (g.diffCny != null && Math.abs(g.diffCny) > 0.05) {
       notes.push(`${i + 1}번 묶음 합계가 청구서와 ${g.diffCny > 0 ? '+' : ''}${g.diffCny} CNY 차이납니다.`);
     }
   });
+  if (PO.parsed.unusedMarkers > 0) {
+    notes.push(`쓰이지 못한 묶음 총금액이 ${PO.parsed.unusedMarkers}개 있습니다 — 줄을 일부 못 읽었을 수 있습니다.`);
+  }
   const w = $('#poWarn');
   if (notes.length) { w.className = 'msg err'; w.innerHTML = notes.map(esc).join('<br>'); }
   else { w.className = 'msg hidden'; }
