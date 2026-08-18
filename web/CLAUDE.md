@@ -2,7 +2,7 @@
 
 ## 구조
 ```
-index.html   로그인 + 5개 페이지(소싱/판매현황/즐겨찾기/카테고리/대기열) + 설정 모달
+index.html   로그인 + 6개 페이지(소싱/판매현황/상품원장/즐겨찾기/카테고리/대기열) + 설정·SKU 모달
 style.css    CSS 변수 기반 라이트/다크 테마. --bg, --surface 등
 app.js       전체 로직. 빌드 도구 없음, 그대로 배포
 api/         Vercel 서버리스 함수 자리(현재 sales-today.js 하나, 안 씀 — 아래 참조)
@@ -163,3 +163,28 @@ calcMargin({price, commission, fulfillment, costCny, rate, outbound, work})
 
 - 표시 항목 우선순위, UI 선호: `../docs/decisions.md` 하단 "사용자 요구사항"
 - 겪은 에러(#VALUE! 등): `../docs/troubleshooting.md`
+
+## 상품원장 탭 (2026-08-18 신설)
+
+**이 화면은 목록을 만들지 않는다.** `my_skus`는 `scripts/rocket-growth-sync.js --skus`가
+쿠팡 Open API에서 바코드까지 자동 적재한다(GCP VPS). 화면이 하는 일은
+**쿠팡이 줄 수 없는 것만 사람이 채우는 것**이다 — 1688 링크·옵션(중국어)·MOQ·리드타임·한글표시사항.
+그래서 "SKU 추가" 버튼이 없다. 이건 빠뜨린 게 아니라 의도다(손으로 만든 SKU는
+바코드가 없어서 발주·청구서와 이어지지 않는다).
+
+**쿠팡에서 온 값은 모달에서 읽기전용**(`#skuRo`) — 바코드·옵션ID·등록상품ID·등록상품명.
+고쳐봐야 다음 동기화에 덮이거나 조인이 깨진다.
+
+**조인을 클라이언트에서 하는 이유**: `my_skus` + `my_products` + `sku_channel_listings` +
+`sku_suppliers` 네 테이블을 각각 통째로 받아 JS에서 합친다. SKU 수천 개까지 가도 몇백 KB라
+PostgREST 중첩 조인보다 단순하고 빠르다 — 소싱 탭이 8000행을 같은 방식으로 다루고 있어 관례도 일치.
+
+**`sku_channel_listings`를 거치는 이유**: `my_skus`에 쿠팡 옵션ID를 직접 안 박았다(채널 독립 구조,
+`db/migrations/015` 주석). 지금은 `channel === 'coupang_rg'`만 쓰지만, 나중에 스마트스토어가
+붙어도 이 화면은 안 고쳐도 된다.
+
+**MOQ를 사람이 고치면 `moq_source`가 `'manual'`로 바뀐다** — 나중에 쿠플러스에서 1688 MOQ를
+자동으로 긁어올 때 사람이 정한 값을 덮어쓰지 않기 위한 표시다. 이 갱신을 지우지 말 것.
+
+**공급처는 SKU당 여러 개 가능**(`sku_suppliers`, 같은 상품을 여러 1688 판매자에게서 살 수 있음).
+이 화면은 `is_primary` 하나만 편집한다 — 복수 공급처 비교는 나중에 공급처 관리 화면에서.

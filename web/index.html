@@ -90,6 +90,10 @@
         <svg viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-5 3 3 5-7"/></svg>
         <span>판매현황</span>
       </button>
+      <button class="nav-item" data-page="skus">
+        <svg viewBox="0 0 24 24"><path d="M4 7l8-4 8 4-8 4zM4 7v10l8 4 8-4V7M12 11v10"/></svg>
+        <span>상품원장</span>
+      </button>
       <button class="nav-item" data-page="favorites">
         <svg viewBox="0 0 24 24"><path d="M12 3l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.8 6.2 20.9l1.1-6.5L2.6 9.8l6.5-.9z"/></svg>
         <span>즐겨찾기</span>
@@ -362,6 +366,41 @@
       </section>
 
       <!-- ── 카테고리 ── -->
+      <!-- ── 상품원장 ── -->
+      <section id="page-skus" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>상품원장</h2>
+            <p class="muted sm" id="skuSummary">—</p>
+          </div>
+          <div class="page-actions">
+            <input id="skuSearch" class="sku-search" type="search"
+                   placeholder="상품명 · 바코드 · 옵션ID 검색" />
+            <label class="chk">
+              <input type="checkbox" id="skuNeedSupplier" />
+              <span>1688 미연결만</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>바코드</th>
+                <th>상품 · 옵션</th>
+                <th>옵션ID</th>
+                <th>1688</th>
+                <th class="col-num">MOQ</th>
+                <th class="col-num">리드타임</th>
+                <th>상태</th>
+              </tr>
+            </thead>
+            <tbody id="skuRows"></tbody>
+          </table>
+        </div>
+      </section>
+
       <section id="page-categories" class="page hidden">
         <div class="page-head">
           <div>
@@ -460,6 +499,75 @@
     <div class="modal-foot">
       <button class="btn btn-ghost" data-close>취소</button>
       <button id="settingsSave" class="btn btn-primary">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- SKU 상세/편집 — 쿠팡에서 온 값은 읽기전용, 사람이 채우는 값만 입력 -->
+<div id="skuModal" class="modal hidden">
+  <div class="modal-backdrop" data-close></div>
+  <div class="modal-card modal-wide">
+    <div class="modal-head">
+      <h3 id="skuModalTitle">SKU</h3>
+      <button class="icon-btn" data-close aria-label="닫기">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="sku-ro" id="skuRo"></div>
+
+      <h4 class="sku-sec">공급처 (1688)</h4>
+      <label class="field"><span>상품 링크</span>
+        <input id="skuOfferUrl" type="url" placeholder="https://detail.1688.com/offer/..." /></label>
+      <div class="two">
+        <label class="field"><span>옵션1 (중국어)</span><input id="skuOpt1" type="text" /></label>
+        <label class="field"><span>옵션2 (중국어)</span><input id="skuOpt2" type="text" /></label>
+      </div>
+      <div class="two">
+        <label class="field"><span>최근 단가 (CNY)</span><input id="skuPriceCny" type="number" step="0.01" /></label>
+        <label class="field"><span>판매자 ID</span><input id="skuSellerId" type="text" /></label>
+      </div>
+
+      <h4 class="sku-sec">발주 파라미터</h4>
+      <div class="two">
+        <label class="field"><span>MOQ (최소주문수량)</span><input id="skuMoq" type="number" min="1" /></label>
+        <label class="field"><span>리드타임 (일)</span><input id="skuLeadTime" type="number" step="0.5" placeholder="예: 14" /></label>
+      </div>
+      <label class="field"><span>안전재고 (일)</span><input id="skuSafetyDays" type="number" step="0.5" /></label>
+
+      <h4 class="sku-sec">한글표시사항 <span class="muted sm">— 쿠플러스 구매요청에 자동으로 채워집니다</span></h4>
+      <div class="two">
+        <label class="field"><span>수입원/판매원</span><input id="skuLabImporter" type="text" /></label>
+        <label class="field"><span>제조원</span><input id="skuLabManufacturer" type="text" /></label>
+      </div>
+      <div class="two">
+        <label class="field"><span>제조국</span><input id="skuLabOrigin" type="text" placeholder="예) 중국" /></label>
+        <label class="field"><span>내용량</span><input id="skuLabVolume" type="text" placeholder="예) 300ml" /></label>
+      </div>
+      <div class="two">
+        <label class="field"><span>재질 (원료명·성분)</span><input id="skuLabMaterial" type="text" /></label>
+        <label class="field"><span>상품유형</span><input id="skuLabType" type="text" /></label>
+      </div>
+      <div class="two">
+        <label class="field"><span>사용시 주의사항</span><input id="skuLabCaution" type="text" /></label>
+        <label class="field"><span>사용기준</span><input id="skuLabUsage" type="text" placeholder="예) 14세 이상" /></label>
+      </div>
+
+      <h4 class="sku-sec">기타</h4>
+      <label class="field"><span>상태</span>
+        <select id="skuStatus">
+          <option value="active">판매중</option>
+          <option value="paused">판매중지</option>
+          <option value="liquidating">청산중</option>
+          <option value="discontinued">단종</option>
+        </select></label>
+      <label class="field"><span>메모</span><textarea id="skuMemo" rows="2"></textarea></label>
+
+      <div id="skuMsg" class="msg hidden"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close>취소</button>
+      <button id="skuSave" class="btn btn-primary">저장</button>
     </div>
   </div>
 </div>
