@@ -2524,27 +2524,33 @@ async function loadPOs() {
   const el = $('#poRows');
   el.innerHTML = '<tr><td colspan="8" class="muted">불러오는 중…</td></tr>';
   try {
-    const [orders, lines, skus] = await Promise.all([
+    const [orders, lines, skus, lots] = await Promise.all([
       apiAll('purchase_orders?select=*&order=requested_at.desc'),
-      apiAll('purchase_order_lines?select=po_id,qty,line_cost_cny,line_cost_krw,sku_id'),
+      apiAll('purchase_order_lines?select=id,po_id,qty,line_cost_cny,line_cost_krw,sku_id'),
       /* 청구서의 바코드로 SKU를 찾기 위한 색인. 상품원장 탭을 안 거쳐도 발주가
          동작해야 하므로 여기서 따로 읽는다(두 탭이 서로를 전제하지 않게). */
-      apiAll('my_skus?select=id,sku_name,barcode')
+      apiAll('my_skus?select=id,sku_name,barcode'),
+      /* 로트 수를 목록에 같이 보여준다 — 청구서를 저장했는데 원가가 실제로 상품에
+         붙었는지를 화면에서 바로 확인할 수 있어야 한다(로트가 0이면 원가가 떠 있는 상태). */
+      apiAll('inventory_lots?select=po_line_id&po_line_id=not.is.null')
     ]);
+    const lotLineIds = new Set(lots.map((l) => l.po_line_id));
     PO.skuByBarcode = new Map(
       skus.filter((s) => s.barcode).map((s) => [String(s.barcode), { sku: s }])
     );
     PO.allSkus = skus;   // 수동 연결(발주 상세)에서 고를 후보
+    const empty = () => ({ n: 0, qty: 0, cny: 0, krw: 0, unmatched: 0, lots: 0 });
     const byPo = new Map();
     lines.forEach((l) => {
-      const a = byPo.get(l.po_id) || { n: 0, qty: 0, cny: 0, krw: 0, unmatched: 0 };
+      const a = byPo.get(l.po_id) || empty();
       a.n++; a.qty += l.qty || 0;
       a.cny += Number(l.line_cost_cny) || 0;
       a.krw += Number(l.line_cost_krw) || 0;
       if (!l.sku_id) a.unmatched++;
+      if (lotLineIds.has(l.id)) a.lots++;
       byPo.set(l.po_id, a);
     });
-    PO.list = orders.map((o) => ({ o, agg: byPo.get(o.id) || { n: 0, qty: 0, cny: 0, krw: 0, unmatched: 0 } }));
+    PO.list = orders.map((o) => ({ o, agg: byPo.get(o.id) || empty() }));
     renderPOs();
   } catch (e) {
     el.innerHTML = `<tr><td colspan="8" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
@@ -2573,6 +2579,9 @@ function renderPOs() {
       <td>${esc((o.requested_at || '').slice(0, 10))}</td>
       <td>${esc(PO_STATUS_LABEL[o.status] || o.status)}</td>
       <td class="col-num">${r.agg.n}${unmatched ? ` <span class="muted">(미매칭 ${unmatched})</span>` : ''}</td>
+      <td class="col-num">${r.agg.lots === r.agg.n && r.agg.n
+          ? r.agg.lots
+          : `<span class="warn-txt">${r.agg.lots}</span>`}</td>
       <td class="col-num">${cnt(r.agg.qty)}</td>
       <td class="col-num">${r.agg.cny ? r.agg.cny.toFixed(2) : '—'}</td>
       <td class="col-num">${o.rate_purchase == null ? '—' : Number(o.rate_purchase).toFixed(2)}</td>
@@ -2714,9 +2723,19 @@ function renderPoDetail() {
   }).join('');
 }
 
+/* SKU를 고르면 왼쪽 바코드 칸도 그 SKU의 바코드로 맞춰준다(사용자 요청 2026-08-18) —
+   둘이 다른 채로 저장되면 나중에 "이 줄이 왜 이 상품에 붙었지"를 추적할 수 없다.
+   SKU에 바코드가 없으면(드묾) 기존 값을 지우지 않는다 — 있는 정보를 없애는 쪽이 더 나쁘다. */
+function podPick(lineId, skuId) {
+  POD.picks.set(lineId, skuId);
+  const sku = (PO.allSkus || []).find((s) => s.id === skuId);
+  if (sku && sku.barcode) POD.bcEdits.set(lineId, String(sku.barcode));
+  renderPoDetail();
+}
+
 $('#poDetailRows').addEventListener('click', (ev) => {
   const sug = ev.target.closest('.pick-sugg-btn');
-  if (sug) { POD.picks.set(sug.dataset.line, sug.dataset.sku); renderPoDetail(); return; }
+  if (sug) { podPick(sug.dataset.line, sug.dataset.sku); return; }
   const clr = ev.target.closest('.pick-clear');
   if (clr) { POD.picks.set(clr.dataset.line, null); renderPoDetail(); }
 });
@@ -2724,7 +2743,7 @@ $('#poDetailRows').addEventListener('change', (ev) => {
   const inp = ev.target.closest('.pick-input');
   if (inp) {
     const hit = (PO.allSkus || []).find((s) => skuPickLabel(s) === inp.value);
-    if (hit) { POD.picks.set(inp.dataset.line, hit.id); renderPoDetail(); }
+    if (hit) podPick(inp.dataset.line, hit.id);
     return;
   }
 
