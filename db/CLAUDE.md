@@ -17,11 +17,22 @@ migrations/011_rocket_growth_profit_storage.sql  rocket_growth_profit_daily에 s
 migrations/012_rocket_growth_item_cost_snapshots.sql  상품별 실제 개당 수수료·입출고비·보관비 이력 테이블(덮어쓰지 않고 스냅샷으로 쌓음) — 확장프로그램의 "상품 원가정보 갱신"이 insert
 migrations/013_rocket_growth_item_cost_coupon.sql  rocket_growth_item_cost_snapshots에 coupon_amount(개당 쿠폰비) 컬럼 추가 — 새 API 호출 없이 이미 받던 재고현황 응답 필드를 추가 저장
 migrations/014_rocket_growth_product_registry.sql  등록상품ID·상품ID·옵션ID 매핑 테이블(공식 Open API "상품 목록 페이징 조회"로 채움, 이력 아니고 최신값 upsert) — product_items(소싱 DB)와 무관한 실제 판매 상품 등록정보, scripts/rocket-growth-sync.js --products가 채움
+migrations/015_sku_ledger.sql        상품원장 — my_products/my_skus/sku_channel_listings/sku_suppliers/sku_bom. 시스템 전체의 축. SKU 식별은 쿠팡 발급 바코드(unique 자연키), PK는 내부 uuid(채널 독립)
+migrations/016_supply_and_cogs.sql   공급 — 환율이력/구매요청/청구서줄/한국입고/재고로트(FIFO)/재고이동/매출원가배분/예치금. 원가가 태어나는 곳
+migrations/017_sourcing_predictions_costs.sql  소싱 판단 박제(sourcing_candidates/decisions) + 예측 원장(predictions) + 월 고정비 + 알림. '복리로 개선되는 시스템'의 근간
 ```
 
 **이미 실행된 파일은 절대 수정하지 않는다.** 스키마를 바꿔야 하면 `004_설명.sql`처럼 새 번호로 추가한다. 모든 마이그레이션은 `if not exists`/`drop ... if exists`를 써서 **여러 번 실행해도 안전**하게 만든다 — 이 관례를 유지할 것.
 
-새 세션에서 가장 먼저 확인할 것: **001~013은 실행 확인됨(2026-08-16). 014 실행 여부만 미확인** — 안 됐으면 먼저 Supabase에서 실행할 것(테이블 새로 만드는 마이그레이션이라 실행 안 하면 `scripts/rocket-growth-sync.js --products`와 `web/app.js`의 `loadProductRegistry()`가 바로 에러남).
+새 세션에서 가장 먼저 확인할 것: **001~017 전부 실행 확인됨(2026-08-18에 아래 방법으로 실측 검증 — 014 존재 확인 + 015~017이 만드는 19개 테이블 전부 REST 조회로 확인).** 018부터 추가할 것.
+
+**마이그레이션 실행 여부를 기억이 안 날 때 확인하는 법** — Supabase REST에 그 테이블을 물어보면 된다. RLS 때문에 내용은 안 보이지만 **존재 여부는 응답 코드로 구분된다**: 테이블이 없으면 `PGRST205` 404, 있으면 200에 빈 배열(`[]`). publishable key만 있으면 되고 로그인도 필요 없다.
+```bash
+curl -s -w '
+HTTP %{http_code}
+' \n  'https://winpzjbisxxsstmynywp.supabase.co/rest/v1/<테이블명>?select=*&limit=1' \n  -H 'apikey: <publishable key>' -H 'Authorization: Bearer <publishable key>'
+```
+확실히 존재하는 테이블(`rocket_growth_sales_daily` 등)을 대조군으로 같이 조회하면 오탐을 막을 수 있다. — 안 됐으면 먼저 Supabase에서 실행할 것(테이블 새로 만드는 마이그레이션이라 실행 안 하면 `scripts/rocket-growth-sync.js --products`와 `web/app.js`의 `loadProductRegistry()`가 바로 에러남).
 
 ## 핵심 설계 (코드로는 안 보이는 이유)
 

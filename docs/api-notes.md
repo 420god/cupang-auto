@@ -405,7 +405,7 @@ VPS 스크립트가 Supabase에 쓸 때 `service_role` 키를 쓰지 않는다 �
 | 로켓그로스 주문 조회(RG Orders, `rg/orders`) | vendorItemId, 상품명, 판매수량, 단가(매출) | ✅ `rocket_growth_sales_daily` |
 | 로켓창고 재고 API(`rg-inventory-api`) | vendorItemId, `externalSkuId`(판매자가 직접 입력한 SKU 코드, WING 화면 8자리 SKU ID와 다름), 재고수량, 최근30일판매량 | ❌ 미연동 — 재고 페이지 만들 때 검토 |
 | 상품 목록 페이징 조회(`seller-products`, businessTypes=rocketGrowth) | sellerProductId(등록상품ID), productId(상품ID), vendorItemId(옵션ID), sellerProductItemId, vendorInventoryItemId | ✅ `rocket_growth_product_registry`(2026-08-17 신설) |
-| 상품 조회 단건(`query-product`, path param sellerProductId) | 위와 동일 + itemId(10자리), externalVendorSku, barcode, skuInfo, priceData, modelNo 등 | ❌ 미연동 — 페이징 API로 이미 필요한 걸 다 얻어서 안 씀. 재고 페이지에서 상품 단건 상세(바코드·모델번호 등)가 필요해지면 여기 씀 |
+| 상품 조회 단건(`query-product`, path param sellerProductId) | 위와 동일 + itemId(10자리), externalVendorSku, barcode, skuInfo, priceData, modelNo 등 | ✅ `scripts/rocket-growth-sync.js --skus`(2026-08-18 신설) — **바코드를 얻는 유일한 공식 API**. 상품원장(`my_skus`) 적재용. 아래 4-9 참조 |
 
 **WING 내부 API(로그인 세션 + `x-xsrf-token` 필요, 확장프로그램의 `background.js`가 브라우저 탭 안에서 실행 — 사용자가 WING에 로그인해 있어야 동작)**
 
@@ -424,3 +424,26 @@ VPS 스크립트가 Supabase에 쓸 때 `service_role` 키를 쓰지 않는다 �
 - 로켓그로스 개별 반품 조회 API — 위 표 참조, 구조적으로 없음.
 
 ---
+### 4-9. 상품 조회 단건(query-product)으로 상품원장 적재 (2026-08-18 신설)
+
+`GET /v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{sellerProductId}`
+(쿼리스트링 없음 — HMAC 서명 시 query는 빈 문자열)
+
+**왜 이 API를 쓰나**: 페이징 목록(`seller-products`, 4-7 ①)엔 바코드가 없다. 그런데 이 프로젝트에서
+쿠팡 발급 바코드는 단순한 상품 정보가 아니라 **발주·청구서·창고·쿠팡을 잇는 유일한 조인키**다
+(쿠플러스 구매요청에 입력 → 구매대행 청구서 PDF에 그대로 찍혀 나옴, `docs/decisions.md` 2026-08-18).
+그래서 바코드를 주는 이 단건 API가 상품원장의 필수 소스가 됐다.
+
+**동작**: `rocket_growth_product_registry`에 이미 있는 등록상품ID를 훑어서, "아직 `my_skus`에 없는
+옵션이 있거나 바코드가 빈 SKU가 있는" 등록상품만 골라 단건 조회한다. 전체를 매번 다시 긁지 않는다.
+
+**멱등성**: `my_skus`에는 쿠팡 옵션ID를 직접 안 박았다(채널 독립 구조, migrations/015 주석).
+대신 `sku_channel_listings (channel, external_option_id)`로 "이미 넣은 옵션인지"를 판정한다.
+이미 있는 SKU는 안 건드리고 바코드가 빈 경우에만 채운다 — 몇 번 다시 돌려도 안전.
+
+**아직 검증 안 된 것(중요)**: 이 응답을 실제로 저장해본 적이 없어서 `barcode`/`vendorItemId`가
+응답 어느 계층에 있는지 확정하지 못했다. 그래서 `pickBarcode()`/`pickVendorItemId()`가 여러 후보
+경로(`item.barcode`, `item.skuInfo.barcode`, `item.rocketGrowthItemData.barcode` 등)를 방어적으로 훑는다.
+**첫 실행은 반드시 `--limit=5 --dry-run`으로 돌려서 `scripts/_sample_query_product.json`(첫 응답 원본이
+여기 떨어진다)을 열어보고 실제 위치를 확인한 뒤, 그 함수들을 실제 경로 하나로 정리할 것.**
+바코드가 계속 `(없음)`으로 나오면 필드 위치를 못 찾은 것이지 바코드가 없는 게 아닐 가능성이 크다.
