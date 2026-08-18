@@ -166,6 +166,19 @@ async function fetchProductRegistry() {
     if (!res.ok) throw new Error(`쿠팡 상품목록 API 오류 (HTTP ${res.status}): ${text.slice(0, 300)}`);
 
     const body = JSON.parse(text);
+
+    /* 첫 페이지의 첫 상품을 통째로 파일로 남긴다 — 2026-08-18에 "상품 32건 조회됨 →
+       upsert 대상 0행"이 나와서(응답 구조가 코드 예상과 달라 전부 버려짐) 실제 모양을
+       눈으로 봐야 했다. 상시로 남겨두면 다음에 같은 일이 생겨도 바로 확인된다.
+       .gitignore에 등록돼 있어 커밋되지 않는다. */
+    if (page === 0 && (body.data || []).length) {
+      const samplePath = require('path').join(__dirname, '_sample_seller_product.json');
+      try {
+        require('fs').writeFileSync(samplePath, JSON.stringify(body.data[0], null, 2));
+        console.log(`상품목록 첫 항목을 ${samplePath} 에 저장함 (필드 위치 확인용)`);
+      } catch (e) { /* 쓰기 실패해도 동기화는 계속 */ }
+    }
+
     products = products.concat(body.data || []);
     nextToken = body.nextToken || '';
     if (!nextToken) break;
@@ -175,10 +188,12 @@ async function fetchProductRegistry() {
 
 function flattenProductRegistry(products) {
   const rows = [];
+  let skippedNoItems = 0, skippedNoVendorItem = 0;
   products.forEach((p) => {
+    if (!Array.isArray(p.items) || !p.items.length) skippedNoItems++;
     (p.items || []).forEach((it) => {
       const rg = it.rocketGrowthItem || it.marketPlaceItem;
-      if (!rg || rg.vendorItemId == null) return;
+      if (!rg || rg.vendorItemId == null) { skippedNoVendorItem++; return; }
       rows.push({
         vendor_item_id: String(rg.vendorItemId),
         seller_product_id: p.sellerProductId != null ? String(p.sellerProductId) : null,
@@ -190,6 +205,11 @@ function flattenProductRegistry(products) {
       });
     });
   });
+  /* 왜 남기나: 조회는 됐는데 결과가 0행이면 "API가 안 준 것"인지 "우리가 못 읽은 것"인지
+     구분이 안 된다. 실제로 2026-08-18에 이걸 몰라서 한참 헤맸다. */
+  if (skippedNoItems || skippedNoVendorItem) {
+    console.warn(`  버려진 항목: items 없음 ${skippedNoItems}개 상품 / vendorItemId 없음 ${skippedNoVendorItem}개 옵션`);
+  }
   return rows;
 }
 

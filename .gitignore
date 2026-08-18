@@ -17,3 +17,4 @@ secrets*
 
 # 단건조회 응답 샘플 (필드 위치 확인용, 커밋 불필요)
 scripts/_sample_query_product.json
+scripts/_sample_seller_product.json
