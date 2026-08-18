@@ -449,3 +449,37 @@ VPS 스크립트가 Supabase에 쓸 때 `service_role` 키를 쓰지 않는다 �
 **첫 실행은 반드시 `--limit=5 --dry-run`으로 돌려서 `scripts/_sample_query_product.json`(첫 응답 원본이
 여기 떨어진다)을 열어보고 실제 위치를 확인한 뒤, 그 함수들을 실제 경로 하나로 정리할 것.**
 바코드가 계속 `(없음)`으로 나오면 필드 위치를 못 찾은 것이지 바코드가 없는 게 아닐 가능성이 크다.
+
+### 4-10. 바코드 실측 확인 (2026-08-18) — 이 프로젝트의 조인키가 검증된 순간
+
+`query-product` 단건조회로 받은 바코드가 **WING 상품수정 화면의 바코드**, 그리고
+**사용자가 쿠플러스 구매요청에 실제로 입력하는 값**과 셋 다 일치하는 것을 사용자가 직접 대조해 확인했다.
+이걸 확인하기 전엔 상품원장을 채우면 안 됐다 — 바코드는 단순 상품정보가 아니라
+발주·청구서·창고·쿠팡을 잇는 **유일한 조인키**라서, 틀린 값을 넣으면 시스템 전체가 조용히 어긋난다.
+
+**형태: `S00` + `rocketGrowthItemData.sellerProductItemId`** (항상 `S`로 시작)
+```
+barcode                                   = S0038265161756
+rocketGrowthItemData.sellerProductItemId  =    38265161756
+```
+실측 예시 10건이 전부 이 규칙을 따랐다. 쿠팡이 자동 발급하는 형태로 보인다.
+**다만 이 규칙으로 바코드를 "계산해서" 쓰지는 말 것** — 판매자가 직접 바코드를 지정하는 경우가
+있을 수 있으니 어디까지나 API가 준 값을 쓰고, 이 규칙은 값이 비었을 때 의심해보는 용도로만 쓴다.
+
+**단건조회 응답에서 바코드가 있는 위치 (2026-08-18 실물 확인)**
+```
+items[].rocketGrowthItemData = { vendorItemId, sellerProductItemId, barcode: "S0038265161756", ... }
+items[].marketplaceItemData  = { ... , barcode: "" }
+```
+바코드가 **로켓그로스용과 마켓플레이스용으로 따로** 있고 **마켓플레이스 쪽은 빈 문자열**이다.
+반드시 `rocketGrowthItemData`를 먼저 보고, 빈 문자열은 "없음"으로 취급할 것 —
+순서가 뒤바뀌면 조용히 빈 값을 집는다.
+
+**대소문자 함정 (엔드포인트마다 철자가 다르다)**
+| 엔드포인트 | 마켓플레이스 필드명 |
+|---|---|
+| 목록 `seller-products` | `marketPlaceItemData` (대문자 P) |
+| 단건 `query-product` | `marketplaceItemData` (소문자 p) |
+
+같은 개념인데 철자가 다르다. `scripts/rocket-growth-sync.js`의 `pickBarcode()`/`pickVendorItemId()`는
+두 철자를 다 본다. 새 필드를 읽을 때도 이 점을 확인할 것 — 한쪽 철자만 보고 짜면 다른 API에서 조용히 실패한다.

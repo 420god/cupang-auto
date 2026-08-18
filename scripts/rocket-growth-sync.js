@@ -371,15 +371,23 @@ async function fetchProductDetail(sellerProductId) {
   return JSON.parse(text).data;
 }
 
-/* 값이 응답 어디에 박혀 있는지 확실치 않아 방어적으로 여러 자리를 훑는다.
-   2026-08-18 시점에 단건조회 응답을 실제로 저장해본 적이 없다 — 첫 실행에서
-   scripts/_sample_query_product.json 을 열어보고 위치가 확정되면 여기를 정리할 것. */
+/* 단건조회(query-product) 응답의 실제 구조 — 2026-08-18 실물 덤프로 확인.
+     items[].rocketGrowthItemData = { vendorItemId, sellerProductItemId, barcode, ... }
+     items[].marketplaceItemData  = { ... , barcode: "" }   ← 소문자 p, 그리고 바코드가 빈 문자열
+
+   반드시 rocketGrowthItemData를 먼저 본다. 마켓플레이스 쪽 바코드는 비어 있어서
+   순서가 뒤바뀌면 조용히 빈 값을 집는다.
+
+   **대소문자 함정**: 같은 개념인데 엔드포인트마다 철자가 다르다.
+     목록 API(seller-products) : marketPlaceItemData  (대문자 P)
+     단건 API(query-product)   : marketplaceItemData  (소문자 p)
+   그래서 두 철자를 다 본다. */
 function pickVendorItemId(item) {
   const cands = [
-    item.vendorItemId,
     item.rocketGrowthItemData && item.rocketGrowthItemData.vendorItemId,
-    item.rocketGrowthItem && item.rocketGrowthItem.vendorItemId,
-    item.marketPlaceItem && item.marketPlaceItem.vendorItemId
+    item.marketplaceItemData && item.marketplaceItemData.vendorItemId,
+    item.marketPlaceItemData && item.marketPlaceItemData.vendorItemId,
+    item.vendorItemId
   ];
   const v = cands.find((x) => x != null);
   return v == null ? null : String(v);
@@ -387,11 +395,12 @@ function pickVendorItemId(item) {
 
 function pickBarcode(item) {
   const cands = [
-    item.barcode,
-    item.skuInfo && item.skuInfo.barcode,
     item.rocketGrowthItemData && item.rocketGrowthItemData.barcode,
-    item.rocketGrowthItem && item.rocketGrowthItem.barcode
+    item.marketplaceItemData && item.marketplaceItemData.barcode,
+    item.marketPlaceItemData && item.marketPlaceItemData.barcode,
+    item.barcode
   ];
+  /* 빈 문자열을 "없음"으로 취급하는 게 핵심 — 마켓플레이스 쪽은 실제로 ""로 온다 */
   const v = cands.find((x) => x != null && String(x).trim() !== '');
   return v == null ? null : String(v).trim();
 }
