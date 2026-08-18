@@ -2324,20 +2324,61 @@ const PO_PURE_NUM = /^\d+(\.\d+)?$/;
 
 function parseCouplusInvoice(text) {
   const src = String(text || '').replace(/ /g, ' ');
-  const marks = [];
-  let m;
-  PO_DATE_RE.lastIndex = 0;
-  while ((m = PO_DATE_RE.exec(src))) marks.push({ i: m.index, date: m[0] });
-  if (!marks.length) return { rows: [], groups: [], totals: null, error: '청구서에서 날짜를 찾지 못했습니다.' };
+  /* ── 줄 단위로 읽는 이유 ────────────────────────────────────────
+     처음엔 날짜 위치로 텍스트를 잘랐는데, 병합된 칸(배송비·총금액)이 **자기만의 줄**로
+     떨어져 나오는 청구서가 있었다(2026-06-26Z, 2026-08-18 발견):
+
+       2026-06-26 growth 말차 샌드위치 슬랑이 6 13 13 NOBARCODE
+       9 321 9 321                 <- 이 줄이 직전 상품의 숫자로 붙어버렸다
+       2026-06-26 growth 청포도 샌드위치 슬랑이 6 13 13 NOBARCODE
+
+     그래서 줄 단위로 보고, 날짜로 시작하지 않는 줄을 둘로 나눈다:
+       (a) 직전 상품 줄이 아직 안 끝났으면 -> 줄바꿈으로 잘린 그 줄의 이어짐
+       (b) 이미 끝났으면 -> 묶음의 배송비·총금액만 따로 그려진 줄
+     "끝났는지"는 **바코드 칸(숫자가 아닌 토큰)이 나왔는지**로 판단한다.
+     추출기에 따라 (a)로도 (b)로도 나오는 걸 실제로 겪어서 둘 다 처리한다. */
+  const lines = src.split(/\r?\n/);
+  const recs = [];
+  const standalone = [];   // 묶음 값만 따로 그려진 줄. {afterRec, nums}
+  let cur = null;
+  let started = false;
+
+  lines.forEach((raw) => {
+    const line = raw.trim();
+    if (!line) return;
+    const dm = line.match(/^(\d{4}-\d{2}-\d{2})\b/);
+    if (dm) {
+      started = true;
+      cur = {
+        date: dm[1],
+        toks: line.slice(dm[0].length).trim().split(/\s+/).filter(Boolean),
+        closed: false
+      };
+      if (cur.toks.length && !PO_PURE_NUM.test(cur.toks[0])) cur.toks.shift();  // 업체명(growth)
+      recs.push(cur);
+    } else if (started && cur && !cur.closed) {
+      cur.toks = cur.toks.concat(line.split(/\s+/).filter(Boolean));
+    } else if (started) {
+      standalone.push({
+        afterRec: recs.length - 1,
+        nums: line.split(/\s+/).filter((t) => PO_PURE_NUM.test(t)).map(Number)
+      });
+      return;
+    } else {
+      return;   // 첫 날짜 이전(계좌번호·표 머리글)은 통째로 무시 — 숫자가 섞여 있어 오인 위험
+    }
+    /* 바코드 칸(숫자가 아닌 토큰)이 나오면 그 상품 줄은 끝난 것으로 본다 */
+    if (cur.toks.length && !PO_PURE_NUM.test(cur.toks[cur.toks.length - 1])) cur.closed = true;
+  });
+
+  if (!recs.length) return { rows: [], groups: [], totals: null, error: '청구서에서 날짜를 찾지 못했습니다.' };
 
   const rows = [];
   let totalKrw = null, vatKrw = null, grandKrw = null;
 
-  marks.forEach((mk, idx) => {
-    const chunk = src.slice(mk.i, idx + 1 < marks.length ? marks[idx + 1].i : src.length);
-    const toks = chunk.split(/\s+/).filter(Boolean);
-    toks.shift();                                   // 날짜
-    if (toks.length && !PO_PURE_NUM.test(toks[0])) toks.shift();  // 업체명(growth)
+  recs.forEach((rec, recIdx) => {
+    const mk = { date: rec.date, recIdx };
+    const toks = rec.toks;
 
     /* 원화 토큰(₩12,345)은 문서 전체 합계 — 첫 레코드에만 나온다 */
     const krw = [];
@@ -2373,7 +2414,7 @@ function parseCouplusInvoice(text) {
     const name = rest.slice(0, k).join(' ').trim();
     if (!name && !nums.length) return;
 
-    rows.push({ date: mk.date, name, barcode, nums });
+    rows.push({ date: mk.date, recIdx: mk.recIdx, name, barcode, nums });
   });
 
   /* ── 묶음 복원 ──────────────────────────────────────────────────
@@ -2405,8 +2446,17 @@ function parseCouplusInvoice(text) {
       groupIndex: -1, raw: n.slice()
     };
   });
+  /* 배송비·총금액은 두 가지 방식으로 나온다 — 상품 줄 안에 섞여 있거나(숫자 7개),
+     자기만의 줄로 떨어져 있거나. 둘을 **나온 순서 그대로** 한 줄로 세운다.
+     아래 산수 방식은 순서만 맞으면 되고 어느 줄에 붙어 있었는지는 안 본다. */
   rows.forEach((r) => {
     if (r.nums.length >= 7) markers.push({ shippingCny: r.nums[5], totalCny: r.nums[6] });
+    standalone.filter((s) => s.afterRec === r.recIdx).forEach((s) => {
+      const n = s.nums;
+      /* 협상전·협상후가 한 줄에 같이 오면(예: "12 174 8 170") 뒤쪽이 협상후다 */
+      if (n.length >= 4) markers.push({ shippingCny: n[n.length - 2], totalCny: n[n.length - 1] });
+      else if (n.length === 2) markers.push({ shippingCny: n[0], totalCny: n[1] });
+    });
   });
 
   const r2 = (v) => Math.round(v * 100) / 100;
