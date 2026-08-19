@@ -47,3 +47,54 @@
 - **마진율 필터·정렬이 안 먹는다** — `item_calc`가 비어 있어서다. `products.max_sales`처럼
   미리 계산해 저장해야 정렬이 가능한데, 지금은 옵션을 펼쳐야만 그때 계산된다
 - `fulfillment_fees`에 전용할인가(`is_low_asp=true`) 행이 없는 카테고리는 "요금표 강제 재수집"이 필요
+
+---
+
+## 수집 파이프라인 (확장프로그램)
+
+### ID/코드 헷갈리는 지점
+
+```
+productId       10자리   예: 9560229105
+itemId          11자리   예: 22409716955
+vendorItemId    11자리   예: 95555970302
+
+displayItemCategoryCode  ← 검색 필터에 쓰는 정답 코드
+displayItemCategoryId    ← 위와 정확히 1000 차이. 절대 이걸 쓰면 안 됨
+categoryId (상품 응답)   = kanCategoryId (요금 API)   ← 같은 값, 다른 이름
+```
+
+### 데이터 흐름
+
+```
+collectedRows[]  1단계 결과 (runCategoryCollection)
+detailsMap{}     2단계 결과 (runDetailCollection). key="{pid}_{iid}", 없으면 "{pid}" 폴백
+  ↓ buildSupabasePayload(collectedRows, detailsMap, catUnitMap)   in extension/supabase.js
+  ↓ 옵션을 상품 단위로 집계 (max_sales · sum_sales · rep_image_path 등)
+{categories, products, items, history}  →  sbUpsert() 500행 청크
+```
+
+**새 필드를 수집에 추가하려면 `buildSupabasePayload`와 마이그레이션을 함께 고쳐야 한다.**
+하나만 고치면 조용히 데이터가 빈다.
+
+### `finishCategoryPipeline()` — 카테고리 하나를 끝까지
+
+수동 실행과 대기열(`processJob`)이 **이 함수 하나를 공유한다.**
+예전엔 전체 카테고리를 다 모았다가 마지막에 한 번에 업로드해서, 도중에 실패하면
+그때까지 작업이 통째로 날아갔다.
+
+```
+1. 상세보강 (withDetail이면)
+2. 입출고비 요금표 확인 (상세보강 성공 시)
+3. buildSupabasePayload → sbUpsert
+```
+
+**카테고리 하나가 끝날 때마다 그 자리에서 끝까지 처리**하므로 중간에 중단돼도
+이미 처리된 카테고리는 안전하다.
+
+대기열은 30초 폴링이라 **팝업을 닫으면 안 된다** — "별도 창" 모드로만 쓴다.
+
+### Supabase 접속 유지
+
+`startKeepAlive`가 20분마다 리프레시 토큰을 미리 갱신한다.
+3번 연속 실패하면 크롬 알림으로 재로그인을 요청한다(`manifest.json`의 `notifications` 권한이 이것 때문).

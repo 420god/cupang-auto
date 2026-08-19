@@ -46,7 +46,7 @@ done < <(find docs -name '*.md' | sort)
 echo
 echo "── 3. docs/INDEX.md 등록 여부"
 while IFS= read -r f; do
-  case "$f" in docs/INDEX.md|docs/archive/*) continue;; esac
+  case "$f" in docs/INDEX.md|docs/archive/*|docs/sessions/2*) continue;; esac
   name="${f#docs/}"
   if ! grep -q "$name" docs/INDEX.md; then
     note "미등록  $f  → docs/INDEX.md에 한 줄 추가할 것"
@@ -72,9 +72,8 @@ done
 echo
 echo "── 5. 강등 후보 규칙 (발동 0 · 위반 0)"
 if [ -f docs/rules/INDEX.md ]; then
-  grep -n '발동 0 · 위반 0' docs/rules/INDEX.md | while IFS= read -r line; do
-    note "후보  $line"
-  done
+  awk '/^### [DR]-[0-9]+/ { id=$2 }
+       /발동 0 · 위반 0/ { print "  후보  " id }' docs/rules/INDEX.md
   note "(신설 직후면 정상. 오래 이 상태면 정말 필요한 규칙인지 회고할 것)"
 fi
 
