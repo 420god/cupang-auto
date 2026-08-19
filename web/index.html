@@ -82,42 +82,54 @@
   <div class="body">
     <!-- 사이드바 -->
     <nav id="sidebar" class="sidebar">
-      <button class="nav-item active" data-page="sourcing">
+      <div class="nav-group">
+        <div class="nav-group-label">소싱</div>
+        <button class="nav-item active" data-page="sourcing">
         <svg viewBox="0 0 24 24"><path d="M3 3h18v4H3zM3 10h18v11H3z"/></svg>
         <span>소싱</span>
-      </button>
-      <button class="nav-item" data-page="sales">
-        <svg viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-5 3 3 5-7"/></svg>
-        <span>판매현황</span>
-      </button>
-      <button class="nav-item" data-page="po">
-        <svg viewBox="0 0 24 24"><path d="M3 9h18M7 3v4M17 3v4M4 5h16v16H4zM8 13h8M8 17h5"/></svg>
-        <span>발주</span>
-      </button>
-      <button class="nav-item" data-page="stock">
-        <svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V8l7-5 7 5v13M9 21v-6h6v6"/></svg>
-        <span>재고</span>
-      </button>
-      <button class="nav-item" data-page="ship">
-        <svg viewBox="0 0 24 24"><path d="M3 17h2l2-9h10l2 9h2M8 21h8M5 8h14M12 3v5"/></svg>
-        <span>출고</span>
-      </button>
-      <button class="nav-item" data-page="skus">
-        <svg viewBox="0 0 24 24"><path d="M4 7l8-4 8 4-8 4zM4 7v10l8 4 8-4V7M12 11v10"/></svg>
-        <span>상품원장</span>
-      </button>
-      <button class="nav-item" data-page="favorites">
-        <svg viewBox="0 0 24 24"><path d="M12 3l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.8 6.2 20.9l1.1-6.5L2.6 9.8l6.5-.9z"/></svg>
-        <span>즐겨찾기</span>
-      </button>
-      <button class="nav-item" data-page="categories">
+        </button>
+        <button class="nav-item" data-page="categories">
         <svg viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>
         <span>카테고리</span>
-      </button>
-      <button class="nav-item" data-page="queue">
+        </button>
+        <button class="nav-item" data-page="queue">
         <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
         <span>수집 대기열</span>
-      </button>
+        </button>
+        <button class="nav-item" data-page="favorites">
+        <svg viewBox="0 0 24 24"><path d="M12 3l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.8 6.2 20.9l1.1-6.5L2.6 9.8l6.5-.9z"/></svg>
+        <span>즐겨찾기</span>
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-label">상품</div>
+        <button class="nav-item" data-page="skus">
+        <svg viewBox="0 0 24 24"><path d="M4 7l8-4 8 4-8 4zM4 7v10l8 4 8-4V7M12 11v10"/></svg>
+        <span>상품원장</span>
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-label">공급</div>
+        <button class="nav-item" data-page="po">
+        <svg viewBox="0 0 24 24"><path d="M3 9h18M7 3v4M17 3v4M4 5h16v16H4zM8 13h8M8 17h5"/></svg>
+        <span>발주</span>
+        </button>
+        <button class="nav-item" data-page="stock">
+        <svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V8l7-5 7 5v13M9 21v-6h6v6"/></svg>
+        <span>재고</span>
+        </button>
+        <button class="nav-item" data-page="ship">
+        <svg viewBox="0 0 24 24"><path d="M3 17h2l2-9h10l2 9h2M8 21h8M5 8h14M12 3v5"/></svg>
+        <span>출고</span>
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-label">판매</div>
+        <button class="nav-item" data-page="sales">
+        <svg viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-5 3 3 5-7"/></svg>
+        <span>판매현황</span>
+        </button>
+      </div>
       <div class="nav-spacer"></div>
       <button id="sidebarCollapseBtn" class="nav-item nav-collapse-btn" aria-label="사이드바 접기/펼치기" title="사이드바 접기/펼치기">
         <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
