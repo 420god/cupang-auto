@@ -2736,7 +2736,7 @@ function renderPOs() {
    만들었으므로, 여기서 뒤늦게 붙인 줄도 같은 규칙으로 로트를 만들어줘야
    선입선출 대기열에 들어간다. 이미 로트가 있는 줄은 건드리지 않는다(중복 방지). */
 const POD = { poId: null, po: null, lines: [], lots: [], lotByLine: new Map(),
-              picks: new Map(), bcEdits: new Map(), defectEdits: new Map() };
+              picks: new Map(), bcEdits: new Map() };
 
 /* 한글 상품명 비교는 단어 단위로는 잘 안 맞는다("도시락 말랑이" vs
    "덴넬 버터 스틱 말랑이 슬라임 스퀴시, 노랑 100g 2개"). 글자 2개씩 겹치는
@@ -2786,11 +2786,10 @@ async function openPoDetail(poId) {
   POD.po = entry.o;
   POD.picks = new Map();
   POD.bcEdits = new Map();
-  POD.defectEdits = new Map();
-
+  
   $('#poDetailMsg').className = 'msg hidden';
   $('#poDetailTitle').textContent = `발주 상세 — ${(entry.o.requested_at || '').slice(0, 10)}`;
-  $('#poDetailRows').innerHTML = '<tr><td colspan="7" class="muted">불러오는 중…</td></tr>';
+  $('#poDetailRows').innerHTML = '<tr><td colspan="6" class="muted">불러오는 중…</td></tr>';
   $('#poDetailModal').classList.remove('hidden');
 
   try {
@@ -2816,7 +2815,7 @@ async function openPoDetail(poId) {
 
     renderPoDetail();
   } catch (e) {
-    $('#poDetailRows').innerHTML = `<tr><td colspan="7" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
+    $('#poDetailRows').innerHTML = `<tr><td colspan="6" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
   }
 }
 
@@ -2861,8 +2860,6 @@ function renderPoDetail() {
     const lots = POD.lotByLine.get(l.id) || [];
     const hasLot = lots.length > 0;
     const sum = (k) => lots.reduce((a, x) => a + (Number(x[k]) || 0), 0);
-    const defect = POD.defectEdits.has(String(l.id))
-      ? POD.defectEdits.get(String(l.id)) : (l.defect_qty || 0);
     const prog = lineProgress(lots);
     const unit = l.qty ? Math.round((l.line_cost_krw || 0) / l.qty) : 0;
 
@@ -2894,8 +2891,6 @@ function renderPoDetail() {
                  placeholder="바코드 없음" /></td>
       <td>${esc(l.product_name_text)}</td>
       <td class="col-num">${cnt(l.qty)}</td>
-      <td class="col-num"><input class="defect-input" type="number" min="0"
-            data-line="${esc(l.id)}" value="${defect}" ${hasLot ? '' : 'disabled'} /></td>
       <td class="col-num">${hasLot
           ? `<span class="prog prog-${prog.cls}">${esc(prog.label)}</span>
              <span class="prog-qty">${sum('qty_china')} · ${sum('qty_transit')} · ${sum('qty_coupang')}</span>`
@@ -2927,16 +2922,6 @@ $('#poDetailRows').addEventListener('change', (ev) => {
   if (inp) {
     const hit = (PO.allSkus || []).find((s) => skuPickLabel(s) === inp.value);
     if (hit) podPick(inp.dataset.line, hit.id);
-    return;
-  }
-
-  /* 불량 수량 — 중국 배대지 검수에서 발견된다. 창고 재고에서 빼되 개당 원가는
-     그대로 둔다(불량분은 대행사가 예치금으로 환불해주므로 단가가 아니라 수량이 준다). */
-  const dfInp = ev.target.closest('.defect-input');
-  if (dfInp) {
-    const v = Math.max(0, parseInt(dfInp.value, 10) || 0);
-    POD.defectEdits.set(dfInp.dataset.line, v);
-    renderPoDetail();
     return;
   }
 
@@ -2999,28 +2984,20 @@ $('#poSteps').addEventListener('click', async (ev) => {
   }
 });
 
-/* 그 줄에 대해 이번에 바뀐 불량 증감분을 찾는다(여러 줄을 한 번에 저장하므로) */
-function changesDefectDelta(line, changes) {
-  const hit = changes.find((c) => c.line.id === line.id);
-  return hit ? (hit.defectDelta || 0) : 0;
-}
-
 $('#poDetailSave').onclick = async () => {
   const btn = $('#poDetailSave');
   const msg = $('#poDetailMsg');
   /* 연결과 바코드를 따로 저장하지 않는다 — 한 줄에 둘 다 바뀌었으면 PATCH 한 번으로 끝낸다 */
-  const touched = new Set([...POD.picks.keys(), ...POD.bcEdits.keys(), ...POD.defectEdits.keys()]);
+  const touched = new Set([...POD.picks.keys(), ...POD.bcEdits.keys()]);
   const changes = Array.from(touched).map((lineId) => {
     const line = POD.lines.find((l) => String(l.id) === String(lineId));
     if (!line) return null;
     const skuId = POD.picks.has(lineId) ? POD.picks.get(lineId) : line.sku_id;
     const bc = POD.bcEdits.has(lineId) ? POD.bcEdits.get(lineId) : line.barcode_text;
-    const df = POD.defectEdits.has(lineId) ? POD.defectEdits.get(lineId) : (line.defect_qty || 0);
     const patch = {};
     if ((line.sku_id || null) !== (skuId || null)) patch.sku_id = skuId;
     if ((line.barcode_text || null) !== (bc || null)) patch.barcode_text = bc;
-    if ((line.defect_qty || 0) !== df) patch.defect_qty = df;
-    return Object.keys(patch).length ? { line, skuId, patch, defectDelta: df - (line.defect_qty || 0) } : null;
+    return Object.keys(patch).length ? { line, skuId, patch } : null;
   }).filter(Boolean);
 
   if (!changes.length) { msg.className = 'msg'; msg.textContent = '바뀐 내용이 없습니다.'; return; }
@@ -3035,19 +3012,6 @@ $('#poDetailSave').onclick = async () => {
       });
       Object.assign(line, patch);
 
-      /* 불량이 늘거나 줄면 그만큼 창고 수량을 조정한다. 이미 한국으로 나간 수량은
-         건드릴 수 없으니 창고(qty_china)에서만 뺀다 — 0 밑으로는 안 내려간다. */
-      if (patch.defect_qty != null) {
-        for (const lot of (POD.lotByLine.get(line.id) || [])) {
-          if (!lot.id) continue;
-          const next = Math.max(0, (Number(lot.qty_china) || 0) - changesDefectDelta(line, changes));
-          await api(`inventory_lots?id=eq.${lot.id}`, {
-            method: 'PATCH', headers: { prefer: 'return=minimal' }, body: { qty_china: next }
-          });
-          lot.qty_china = next;
-        }
-      }
-
       /* 청구서 저장 때와 같은 규칙으로 로트를 만든다. 이미 있으면 건너뛴다 —
          같은 줄에 로트가 두 개 생기면 재고와 원가가 이중 계상된다. */
       if (skuId && !POD.lotByLine.has(line.id)) {
@@ -3057,7 +3021,8 @@ $('#poDetailSave').onclick = async () => {
             sku_id: skuId,
             po_line_id: line.id,
             qty_ordered: line.qty,
-            qty_china: line.qty,
+            qty_china: 0,      // 아직 중국 창고에 없다 (020 참조)
+            qty_arrived: 0,
             unit_cost_krw: line.qty ? Math.round((line.line_cost_krw / line.qty) * 100) / 100 : 0,
             unit_purchase_cost_krw: line.qty ? Math.round((line.line_cost_krw / line.qty) * 100) / 100 : 0,
             unit_work_fee_krw: 0,     // 배대지 작업비는 출고할 때 확정된다
@@ -3330,7 +3295,8 @@ $('#poSave').onclick = async () => {
       sku_id: l.sku_id,
       po_line_id: l.id,
       qty_ordered: l.qty,
-      qty_china: l.qty,
+      qty_china: 0,          // 아직 중국 창고에 없다 — 입고 페이지에서 도착 처리해야 생긴다
+      qty_arrived: 0,
       unit_cost_krw: l.qty ? Math.round((l.line_cost_krw / l.qty) * 100) / 100 : 0,
       unit_purchase_cost_krw: l.qty ? Math.round((l.line_cost_krw / l.qty) * 100) / 100 : 0,
       unit_work_fee_krw: 0,
@@ -3357,6 +3323,188 @@ $('#poSave').onclick = async () => {
     btn.disabled = false;
   }
 };
+
+/* ===================== 입고 (중국 배대지) =====================
+   물건의 **물리적 상태**를 관리하는 화면. 발주 상세가 "원가와 SKU 연결"을 맡는다면
+   여기는 "실제로 몇 개가 왔고 몇 개가 불량인가"를 맡는다.
+   같은 걸 두 군데서 고칠 수 있으면 반드시 헷갈리므로 불량 입력은 여기로 일원화했다
+   (발주 상세에서는 뺐음, 2026-08-18 사용자 동의).
+
+   **도착은 SKU(로트) 단위다** — 1688에서 일부만 먼저 오는 일이 실제로 있어서
+   발주 단위로는 표현이 안 된다. 한 발주 안에서도 상품마다 도착 시점이 다르다.
+   그 발주의 모든 줄이 다 도착하면 발주 단계를 자동으로 '중국배대지 도착'으로 올린다. */
+const INB = { lots: [], skuById: new Map(), lineById: new Map(), poById: new Map() };
+
+async function loadInbound() {
+  $('#inboundWaitRows').innerHTML = '<tr><td colspan="8" class="muted">불러오는 중…</td></tr>';
+  try {
+    const [lots, skus, lines, orders] = await Promise.all([
+      apiAll('inventory_lots?select=*'),
+      apiAll('my_skus?select=id,sku_name,barcode'),
+      apiAll('purchase_order_lines?select=id,po_id,sku_id'),
+      apiAll('purchase_orders?select=id,status,requested_at')
+    ]);
+    INB.lots = lots;
+    INB.skuById = new Map(skus.map((s) => [s.id, s]));
+    INB.lineById = new Map(lines.map((l) => [l.id, l]));
+    INB.poById = new Map(orders.map((o) => [o.id, o]));
+    renderInbound();
+  } catch (e) {
+    $('#inboundWaitRows').innerHTML = `<tr><td colspan="8" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+const inbPoDate = (lot) => {
+  const line = INB.lineById.get(lot.po_line_id);
+  const po = line && INB.poById.get(line.po_id);
+  return po ? String(po.requested_at || '').slice(0, 10) : '—';
+};
+const inbSkuName = (lot) => {
+  const s = INB.skuById.get(lot.sku_id);
+  return s ? s.sku_name : '(알 수 없는 SKU)';
+};
+const inbSkuBarcode = (lot) => {
+  const s = INB.skuById.get(lot.sku_id);
+  return (s && s.barcode) || '바코드 없음';
+};
+
+function renderInbound() {
+  const waiting = INB.lots
+    .filter((l) => lotIncoming(l) > 0)
+    .sort((a, b) => String(inbPoDate(a)).localeCompare(String(inbPoDate(b))));
+  const inStock = INB.lots
+    .filter((l) => (Number(l.qty_china) || 0) > 0)
+    .sort((a, b) => String(inbPoDate(a)).localeCompare(String(inbPoDate(b))));
+
+  const waitQty = waiting.reduce((a, l) => a + lotIncoming(l), 0);
+  const stockQty = inStock.reduce((a, l) => a + (Number(l.qty_china) || 0), 0);
+  const defectQty = INB.lots.reduce((a, l) => a + (Number(l.qty_defect) || 0), 0);
+  $('#inboundSummary').textContent =
+    `도착 대기 ${waitQty}개 · 중국창고 ${stockQty}개 · 누적 불량 ${defectQty}개`;
+
+  $('#inboundWaitRows').innerHTML = waiting.length ? waiting.map((l) => {
+    const left = lotIncoming(l);
+    return `<tr>
+      <td>${esc(inbPoDate(l))}</td>
+      <td>${esc(inbSkuName(l))}<span class="sku-name-sub">${esc(inbSkuBarcode(l))}</span></td>
+      <td class="col-num">${l.qty_ordered || 0}</td>
+      <td class="col-num">${l.qty_arrived || 0}</td>
+      <td class="col-num"><b>${left}</b></td>
+      <td class="col-num"><input type="number" class="inb-arrive defect-input" min="0" max="${left}"
+            data-lot="${esc(l.id)}" value="${left}" /></td>
+      <td class="col-num"><input type="number" class="inb-defect defect-input" min="0"
+            data-lot="${esc(l.id)}" value="0" /></td>
+      <td><button class="btn btn-sm btn-primary inb-receive" data-lot="${esc(l.id)}">도착 처리</button></td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="8" class="muted">도착 대기 중인 물량이 없습니다.</td></tr>';
+
+  $('#inboundStockRows').innerHTML = inStock.length ? inStock.map((l) => `<tr>
+      <td>${esc(inbPoDate(l))}</td>
+      <td>${esc(inbSkuName(l))}<span class="sku-name-sub">${esc(inbSkuBarcode(l))}</span></td>
+      <td class="col-num"><b>${l.qty_china}</b></td>
+      <td class="col-num">${l.qty_defect || 0}${l.defect_disposition
+          ? `<span class="sku-name-sub">${l.defect_disposition === 'refund' ? '환불' : '손실'}</span>` : ''}</td>
+      <td class="col-num"><input type="number" class="inb-adddefect defect-input" min="0" max="${l.qty_china}"
+            data-lot="${esc(l.id)}" value="0" /></td>
+      <td><select class="inb-disp ship-filter" data-lot="${esc(l.id)}">
+            <option value="refund">예치금 환불</option>
+            <option value="loss">손실 처리</option>
+          </select></td>
+      <td><button class="btn btn-sm inb-defect-apply" data-lot="${esc(l.id)}">불량 반영</button></td>
+    </tr>`).join('') : '<tr><td colspan="7" class="muted">중국창고에 있는 물량이 없습니다.</td></tr>';
+}
+
+/* 그 발주의 모든 줄이 다 도착했으면 발주 단계를 '중국배대지 도착'으로 올린다.
+   줄마다 따로 도착하므로 발주 단계는 "전부 왔는가"의 요약일 뿐이다. */
+async function inbMaybeAdvancePo(lot) {
+  const line = INB.lineById.get(lot.po_line_id);
+  const po = line && INB.poById.get(line.po_id);
+  if (!po || po.status === 'arrived_cn') return;
+  const lineIds = new Set(
+    Array.from(INB.lineById.values()).filter((l) => l.po_id === po.id).map((l) => l.id)
+  );
+  const siblings = INB.lots.filter((l) => lineIds.has(l.po_line_id));
+  if (siblings.some((l) => lotIncoming(l) > 0)) return;   // 아직 안 온 게 남았다
+  await api(`purchase_orders?id=eq.${encodeURIComponent(po.id)}`, {
+    method: 'PATCH', headers: { prefer: 'return=minimal' }, body: { status: 'arrived_cn' }
+  });
+  po.status = 'arrived_cn';
+}
+
+$('#inboundWaitRows').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('.inb-receive');
+  if (!btn) return;
+  const lotId = btn.dataset.lot;
+  const lot = INB.lots.find((l) => String(l.id) === String(lotId));
+  if (!lot) return;
+  const val = (sel) => {
+    const el = document.querySelector(`.${sel}[data-lot="${CSS.escape(lotId)}"]`);
+    return Math.max(0, parseInt(el && el.value, 10) || 0);
+  };
+  const arrive = Math.min(lotIncoming(lot), val('inb-arrive'));
+  const defect = Math.min(arrive, val('inb-defect'));
+  const msg = $('#inboundMsg');
+  if (arrive <= 0) { msg.className = 'msg err'; msg.textContent = '도착 수량을 입력하세요.'; return; }
+
+  btn.disabled = true;
+  try {
+    /* 증분으로 더한다 — 나중에 나머지가 또 도착해도 그때 다시 눌러 쌓을 수 있다.
+       창고 수량은 (도착 − 불량)만큼 늘린다. 이미 나간 수량은 건드리지 않는다. */
+    const body = {
+      qty_arrived: (Number(lot.qty_arrived) || 0) + arrive,
+      qty_defect: (Number(lot.qty_defect) || 0) + defect,
+      qty_china: (Number(lot.qty_china) || 0) + (arrive - defect)
+    };
+    if (!lot.arrived_china_at) body.arrived_china_at = new Date().toISOString();
+    await api(`inventory_lots?id=eq.${encodeURIComponent(lotId)}`, {
+      method: 'PATCH', headers: { prefer: 'return=minimal' }, body
+    });
+    Object.assign(lot, body);
+    await inbMaybeAdvancePo(lot);
+    msg.className = 'msg hidden';
+    toast(`도착 ${arrive}개 처리${defect ? ` (불량 ${defect}개 제외)` : ''}`);
+    renderInbound();
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = '도착 처리 실패: ' + e.message;
+    btn.disabled = false;
+  }
+});
+
+$('#inboundStockRows').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('.inb-defect-apply');
+  if (!btn) return;
+  const lotId = btn.dataset.lot;
+  const lot = INB.lots.find((l) => String(l.id) === String(lotId));
+  if (!lot) return;
+  const addEl = document.querySelector(`.inb-adddefect[data-lot="${CSS.escape(lotId)}"]`);
+  const dispEl = document.querySelector(`.inb-disp[data-lot="${CSS.escape(lotId)}"]`);
+  const add = Math.min(Number(lot.qty_china) || 0, Math.max(0, parseInt(addEl && addEl.value, 10) || 0));
+  const msg = $('#inboundMsg');
+  if (add <= 0) { msg.className = 'msg err'; msg.textContent = '뺄 불량 수량을 입력하세요.'; return; }
+
+  btn.disabled = true;
+  try {
+    /* 창고에서 빼고 불량 누계에 더한다. **개당 원가는 건드리지 않는다** —
+       불량분은 환불받거나 손실로 털지, 남은 정상품 원가를 올리지 않는다. */
+    const body = {
+      qty_defect: (Number(lot.qty_defect) || 0) + add,
+      qty_china: (Number(lot.qty_china) || 0) - add,
+      defect_disposition: dispEl ? dispEl.value : 'refund'
+    };
+    await api(`inventory_lots?id=eq.${encodeURIComponent(lotId)}`, {
+      method: 'PATCH', headers: { prefer: 'return=minimal' }, body
+    });
+    Object.assign(lot, body);
+    msg.className = 'msg hidden';
+    toast(`불량 ${add}개 반영 — ${body.defect_disposition === 'refund' ? '예치금 환불 대상' : '손실 처리'}`);
+    renderInbound();
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = '불량 반영 실패: ' + e.message;
+    btn.disabled = false;
+  }
+});
 
 /* ===================== 재고 · 재발주 제안 =====================
    다품종 소량에서 가장 큰 손실은 적자가 아니라 **품절**이다(팔릴 물건이 없는 것).
@@ -3392,7 +3540,7 @@ async function loadStock() {
     const [skus, listings, lots, wing, gross, poLines, orders] = await Promise.all([
       apiAll('my_skus?select=id,sku_name,barcode,moq,lead_time_days,safety_days,status'),
       apiAll('sku_channel_listings?select=sku_id,external_option_id&channel=eq.coupang_rg'),
-      apiAll('inventory_lots?select=id,sku_id,po_line_id,qty_china,qty_transit,qty_coupang,arrived_coupang_at'),
+      apiAll('inventory_lots?select=id,sku_id,po_line_id,qty_ordered,qty_arrived,qty_china,qty_transit,qty_coupang,arrived_coupang_at'),
       apiAll(`rocket_growth_sales_wing_daily?select=sale_date,vendor_item_id,quantity&sale_date=gte.${from}`),
       apiAll(`rocket_growth_sales_daily?select=sale_date,vendor_item_id,quantity&sale_date=gte.${from}`),
       apiAll('purchase_order_lines?select=id,po_id,sku_id'),
@@ -3440,7 +3588,10 @@ async function loadStock() {
     const qtyBySku = new Map();
     lots.forEach((lot) => {
       if (!lot.sku_id) return;
-      const q = qtyBySku.get(lot.sku_id) || { china: 0, transit: 0, coupang: 0 };
+      const q = qtyBySku.get(lot.sku_id) || { china: 0, transit: 0, coupang: 0, incoming: 0 };
+      /* 아직 중국에도 안 온 물량(발주수량 − 도착수량)도 파이프라인이다 —
+         이걸 빼먹으면 이미 주문한 걸 또 발주하게 된다(020). */
+      q.incoming += Math.max(0, (Number(lot.qty_ordered) || 0) - (Number(lot.qty_arrived) || 0));
       q.china += Number(lot.qty_china) || 0;
       q.transit += Number(lot.qty_transit) || 0;
       q.coupang += Number(lot.qty_coupang) || 0;
@@ -3465,7 +3616,7 @@ async function loadStock() {
       const avg28 = sum28 / STOCK.defaults.historyDays;
       const daily = Math.round((avg7 * 0.6 + avg28 * 0.4) * 100) / 100;
 
-      const q = qtyBySku.get(sku.id) || { china: 0, transit: 0, coupang: 0 };
+      const q = qtyBySku.get(sku.id) || { china: 0, transit: 0, coupang: 0, incoming: 0 };
       const measured = leadBySku.get(sku.id);
       const measuredLead = measured && measured.length
         ? Math.round((measured.reduce((a, x) => a + x, 0) / measured.length) * 10) / 10 : null;
@@ -3473,7 +3624,7 @@ async function loadStock() {
       const safety = num(sku.safety_days) ?? STOCK.defaults.safetyDays;
 
       const coverDays = daily > 0 ? q.coupang / daily : null;
-      const pipeline = q.coupang + q.transit + q.china;
+      const pipeline = q.coupang + q.transit + q.china + q.incoming;
       const target = daily * (lead + safety + STOCK.defaults.reviewCycle);
       const moq = num(sku.moq) ?? 1;
       let need = Math.max(0, Math.ceil(target - pipeline));
@@ -3629,15 +3780,12 @@ function parseZetInvoice(rows) {
    실제 창고 운영과 같고, 선입선출 원가 계산과도 맞는다. */
 const SHIP = { skus: [], lots: [], byPoLine: new Map(), poById: new Map(), hist: [], picks: new Map() };
 
-/* 로트가 "도착 예정"인지 "창고에 있는지"는 그 발주의 단계로 갈린다 —
-   중국배대지 도착(arrived_cn) 전이면 아직 창고에 실물이 없다. */
-const ARRIVED_IDX = PO_STEP_INDEX.get('arrived_cn');
-function lotArrived(lot) {
-  const line = SHIP.byPoLine.get(lot.po_line_id);
-  const po = line ? SHIP.poById.get(line.po_id) : null;
-  if (!po) return true;                       // 발주를 못 찾으면 보수적으로 창고에 있다고 본다
-  const idx = PO_STEP_INDEX.has(po.status) ? PO_STEP_INDEX.get(po.status) : ARRIVED_IDX;
-  return idx >= ARRIVED_IDX;
+/* 예전엔 "도착 예정 vs 창고에 있음"을 발주 단계로 갈랐는데, 020부터 **로트가 직접
+   실제 도착 수량을 갖는다**(qty_arrived). 1688에서 일부만 먼저 오는 일이 실제로 있어서
+   발주 단위 상태로는 표현이 안 됐다. 이제 미도착 = 발주수량 − 도착수량이고,
+   창고에 실제로 있는 건 qty_china 하나뿐이라 우회 판정이 필요 없다. */
+function lotIncoming(lot) {
+  return Math.max(0, (Number(lot.qty_ordered) || 0) - (Number(lot.qty_arrived) || 0));
 }
 
 function skuWorkFee(sku) {
@@ -3684,8 +3832,8 @@ function shipBuckets() {
   SHIP.lots.forEach((lot) => {
     if (!lot.sku_id) return;
     const b = bySku.get(lot.sku_id) || { incoming: 0, china: 0, transit: 0, coupang: 0, lots: [], cost: null };
-    const cn = Number(lot.qty_china) || 0;
-    if (lotArrived(lot)) b.china += cn; else b.incoming += cn;
+    b.china += Number(lot.qty_china) || 0;
+    b.incoming += lotIncoming(lot);
     b.transit += Number(lot.qty_transit) || 0;
     b.coupang += Number(lot.qty_coupang) || 0;
     b.lots.push(lot);
@@ -3947,7 +4095,7 @@ $('#shipSave').onclick = async () => {
       /* 오래된 로트부터 뺀다(사용자 확인) — 창고 운영 순서이자 선입선출 원가와도 맞는다.
          도착 시각이 없으면(아직 안 찍힘) 발주 시각으로 정렬한다. */
       const lots = SHIP.lots
-        .filter((l) => l.sku_id === p.sku.id && (Number(l.qty_china) || 0) > 0 && lotArrived(l))
+        .filter((l) => l.sku_id === p.sku.id && (Number(l.qty_china) || 0) > 0)
         .sort((a, b) => new Date(a.arrived_china_at || a.ordered_at || 0) - new Date(b.arrived_china_at || b.ordered_at || 0));
 
       let left = p.qty;
@@ -4029,7 +4177,7 @@ const SKUS = { rows: [], byId: new Map(), editing: null };
 
 async function loadSkus() {
   const el = $('#skuRows');
-  el.innerHTML = '<tr><td colspan="7" class="muted">불러오는 중…</td></tr>';
+  el.innerHTML = '<tr><td colspan="6" class="muted">불러오는 중…</td></tr>';
   try {
     const [skus, products, listings, suppliers] = await Promise.all([
       apiAll('my_skus?select=*&order=sku_name.asc'),
@@ -4061,7 +4209,7 @@ async function loadSkus() {
     SKUS.byId = new Map(SKUS.rows.map((r) => [r.sku.id, r]));
     renderSkus();
   } catch (e) {
-    el.innerHTML = `<tr><td colspan="7" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
+    el.innerHTML = `<tr><td colspan="6" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
   }
 }
 
@@ -4267,6 +4415,7 @@ $$('.nav-item').forEach((btn) => {
     closeSidebar();
 
     if (page === 'po')         loadPOs();
+    if (page === 'inbound')    loadInbound();
     if (page === 'stock')      loadStock();
     if (page === 'ship')       loadShip();
     if (page === 'skus')       loadSkus();

@@ -22,6 +22,7 @@ migrations/016_supply_and_cogs.sql   공급 — 환율이력/구매요청/청구
 migrations/017_sourcing_predictions_costs.sql  소싱 판단 박제(sourcing_candidates/decisions) + 예측 원장(predictions) + 월 고정비 + 알림. '복리로 개선되는 시스템'의 근간
 migrations/018_registry_item_name.sql  rocket_growth_product_registry에 item_name(옵션명) 추가 — 새 API 호출 없이 이미 받던 상품목록 응답의 items[].itemName을 버리지 않고 저장(011/013과 같은 패턴). 상품원장 sku_name 조립에 필요
 migrations/019_work_fee_and_lot_split.sql  배대지 작업비(my_skus.work_fee_items) + 불량 수량(purchase_order_lines.defect_qty) + 로트 분할(inventory_lots.split_from_lot_id) + 원가를 구매대행분/작업비로 나눠 컬럼화
+migrations/020_lot_arrival.sql  로트 도착 수량(qty_arrived)·불량(qty_defect)·불량처리(refund/loss) 추가. 예전엔 로트 생성 시 qty_china에 발주수량을 그대로 넣어 '아직 안 온 물건이 창고에 있는' 상태였다 — 그걸 바로잡는 마이그레이션
 ```
 
 **이미 실행된 파일은 절대 수정하지 않는다.** 스키마를 바꿔야 하면 `004_설명.sql`처럼 새 번호로 추가한다. 모든 마이그레이션은 `if not exists`/`drop ... if exists`를 써서 **여러 번 실행해도 안전**하게 만든다 — 이 관례를 유지할 것.

@@ -114,6 +114,10 @@
         <svg viewBox="0 0 24 24"><path d="M3 9h18M7 3v4M17 3v4M4 5h16v16H4zM8 13h8M8 17h5"/></svg>
         <span>발주</span>
         </button>
+        <button class="nav-item" data-page="inbound">
+        <svg viewBox="0 0 24 24"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>
+        <span>입고</span>
+        </button>
         <button class="nav-item" data-page="stock">
         <svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V8l7-5 7 5v13M9 21v-6h6v6"/></svg>
         <span>재고</span>
@@ -421,6 +425,64 @@
             <tbody id="poRows"></tbody>
           </table>
         </div>
+      </section>
+
+      <!-- ── 입고 (중국 배대지 도착·불량 관리) ── -->
+      <section id="page-inbound" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>입고</h2>
+            <p class="muted sm" id="inboundSummary">—</p>
+          </div>
+        </div>
+
+        <div class="page-head sales-detail-head">
+          <div>
+            <h3>도착 대기</h3>
+            <p class="muted sm">발주했지만 아직 중국 배대지 창고에 안 온 물량입니다. 도착한 만큼 입력하세요.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>발주일</th>
+                <th>상품 · 옵션</th>
+                <th class="col-num">발주</th>
+                <th class="col-num">기도착</th>
+                <th class="col-num">미도착</th>
+                <th class="col-num">도착 수량</th>
+                <th class="col-num">불량</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="inboundWaitRows"></tbody>
+          </table>
+        </div>
+
+        <div class="page-head sales-detail-head">
+          <div>
+            <h3>중국창고 재고</h3>
+            <p class="muted sm">도착 후 창고에 있는 물량입니다. 나중에 발견한 불량은 여기서 빼세요.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>발주일</th>
+                <th>상품 · 옵션</th>
+                <th class="col-num">창고</th>
+                <th class="col-num">누적 불량</th>
+                <th class="col-num">불량 추가</th>
+                <th>처리</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="inboundStockRows"></tbody>
+          </table>
+        </div>
+        <div id="inboundMsg" class="msg hidden"></div>
       </section>
 
       <!-- ── 재고 · 재발주 제안 ── -->
@@ -733,7 +795,6 @@
               <th>바코드</th>
               <th>청구서 상품명</th>
               <th class="col-num">수량</th>
-              <th class="col-num">불량</th>
               <th class="col-num">진행 (창고·운송·쿠팡)</th>
               <th class="col-num">개당원가</th>
               <th>연결할 SKU</th>
