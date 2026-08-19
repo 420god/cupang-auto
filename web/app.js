@@ -2636,7 +2636,7 @@ const PO = { list: [], parsed: null, skuByBarcode: new Map() };
 
 async function loadPOs() {
   const el = $('#poRows');
-  el.innerHTML = '<tr><td colspan="8" class="muted">불러오는 중…</td></tr>';
+  el.innerHTML = '<tr><td colspan="10" class="muted">불러오는 중…</td></tr>';
   try {
     const [orders, lines, skus, lots] = await Promise.all([
       apiAll('purchase_orders?select=*&order=requested_at.desc'),
@@ -2667,7 +2667,7 @@ async function loadPOs() {
     PO.list = orders.map((o) => ({ o, agg: byPo.get(o.id) || empty() }));
     renderPOs();
   } catch (e) {
-    el.innerHTML = `<tr><td colspan="8" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
+    el.innerHTML = `<tr><td colspan="10" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
   }
 }
 
@@ -2722,6 +2722,7 @@ function renderPOs() {
       <td class="col-num">${o.rate_purchase == null ? '—' : Number(o.rate_purchase).toFixed(2)}</td>
       <td class="col-num">${won(Math.round(r.agg.krw))}</td>
       <td>${o.confirmed_by_user ? '확인됨' : '<span class="muted">미확인</span>'}</td>
+      <td>${poPayCellHtml(o)}</td>
     </tr>`;
   }).join('');
 }
@@ -3091,6 +3092,41 @@ $('#poDetailSave').onclick = async () => {
 $('#poRows').addEventListener('click', (ev) => {
   const tr = ev.target.closest('tr[data-po]');
   if (tr) openPoDetail(tr.dataset.po);
+});
+
+/* 결제완료 버튼 — 누르면 결제 시각을 남기고 **바로 "중국배대지 배송중"으로 넘긴다**
+   (사용자 요청 2026-08-18). 결제하면 쿠플러스가 1688에 주문을 넣고 물건이 움직이기
+   시작하므로, "결제완료"에 머무는 시간이 실무에 사실상 없다. 그래서 단계를 하나
+   건너뛰는 게 아니라, 결제라는 사건이 곧 배송 시작이라는 뜻이다.
+   paid_at은 따로 남기므로 "언제 결제했나"는 잃지 않는다. */
+function poPayCellHtml(o) {
+  const idx = PO_STEP_INDEX.has(o.status) ? PO_STEP_INDEX.get(o.status) : -1;
+  if (o.status === 'cancelled') return '';
+  if (idx <= PO_STEP_INDEX.get('invoiced')) {
+    return `<button class="btn btn-sm btn-primary po-pay" data-po="${esc(o.id)}">결제완료</button>`;
+  }
+  return o.paid_at
+    ? `<span class="muted sm">결제 ${esc(String(o.paid_at).slice(0, 10))}</span>`
+    : '';
+}
+
+$('#poRows').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('.po-pay');
+  if (!btn) return;
+  ev.stopPropagation();          // 행 클릭(상세 열기)과 겹치지 않게
+  btn.disabled = true;
+  try {
+    const now = new Date().toISOString();
+    await api(`purchase_orders?id=eq.${encodeURIComponent(btn.dataset.po)}`, {
+      method: 'PATCH', headers: { prefer: 'return=minimal' },
+      body: { status: 'shipping_cn', paid_at: now }
+    });
+    toast('결제완료 — 중국배대지 배송중으로 넘겼습니다');
+    loadPOs();
+  } catch (e) {
+    toast('실패: ' + e.message, 4000);
+    btn.disabled = false;
+  }
 });
 
 function poOpenModal() {
