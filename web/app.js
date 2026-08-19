@@ -3337,6 +3337,165 @@ $('#poSave').onclick = async () => {
   }
 };
 
+/* ===================== 예치금 =====================
+   구매대행사(쿠플러스)에 맡겨둔 돈. 발주 결제로 빠지고, 취소·불량 환불로 들어온다.
+
+   **가장 정확한 값은 결국 사용자가 넣는 것이다**(사용자 확인 2026-08-18) —
+   대행사가 잔액을 사진으로 알려주고, 예치금은 그때그때 들어온다. 그래서 시스템은
+   "돌려받을 예정"까지만 자동으로 만들고, 실제 입금 확인은 사람이 한다:
+
+     expected   시스템이 만든 환불 예정 (취소·불량)
+     confirmed  실제로 들어온 걸 확인함
+     void       취소를 되돌려서 무효
+
+   추정액(estimated_amount_krw)과 인정 금액(amount_krw)을 나란히 남겨서,
+   나중에 "우리 추정이 실제와 얼마나 달랐나"를 볼 수 있게 했다. */
+const DEP = { rows: [] };
+
+const DEP_TYPE_LABEL = { charge: '입금', spend: '차감', refund: '환불', balance: '잔액 확인' };
+const DEP_REASON_LABEL = { cancel: '발주 취소', defect: '불량' };
+const DEP_STATUS = {
+  expected: { label: '확인 대기', cls: 'mid' },
+  confirmed: { label: '확정', cls: 'ok' },
+  void: { label: '무효', cls: 'dim' }
+};
+
+async function loadDeposits() {
+  $('#depRows').innerHTML = '<tr><td colspan="8" class="muted">불러오는 중…</td></tr>';
+  try {
+    DEP.rows = await apiAll('supplier_deposits?select=*&order=occurred_at.desc');
+    renderDeposits();
+  } catch (e) {
+    $('#depRows').innerHTML = `<tr><td colspan="8" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+function renderDeposits() {
+  const f = $('#depFilter').value;
+  const rows = DEP.rows.filter((r) => {
+    if (f === 'open') return r.status === 'expected';
+    if (f === 'confirmed') return r.status === 'confirmed';
+    if (f === 'void') return r.status === 'void';
+    return true;
+  });
+
+  const sum = (pred) => DEP.rows.filter(pred).reduce((a, r) => a + (Number(r.amount_krw) || 0), 0);
+  const expected = sum((r) => r.status === 'expected' && r.type === 'refund');
+  const confirmedIn = sum((r) => r.status === 'confirmed' && (r.type === 'refund' || r.type === 'charge'));
+  const spent = sum((r) => r.status !== 'void' && r.type === 'spend');
+  /* 시스템 계산 잔액 = 확정 입금·환불 − 차감. 대행사가 알려준 실제 잔액과 나란히 보여준다. */
+  const lastBalance = DEP.rows.find((r) => r.balance_manual_krw != null);
+
+  $('#depSummary').textContent =
+    `환불 예정 ${Math.round(expected).toLocaleString()}원 · ` +
+    `확정 입금 ${Math.round(confirmedIn).toLocaleString()}원 · ` +
+    `차감 ${Math.round(spent).toLocaleString()}원 · ` +
+    `계산 잔액 ${Math.round(confirmedIn - spent).toLocaleString()}원` +
+    (lastBalance ? ` · 대행사 통보 잔액 ${Math.round(lastBalance.balance_manual_krw).toLocaleString()}원 (${String(lastBalance.occurred_at).slice(0, 10)})` : '');
+
+  $('#depNote').textContent =
+    '"확인 대기"는 아직 실제로 들어온 게 아닙니다 — 대행사가 알려준 금액과 맞으면 [확정]을 누르세요. ' +
+    '금액이 다르면 인정 금액을 고친 뒤 확정하면 됩니다. 추정과 인정 금액을 둘 다 남겨두니 나중에 비교할 수 있습니다.';
+
+  $('#depRows').innerHTML = rows.length ? rows.map((r) => {
+    const st = DEP_STATUS[r.status] || DEP_STATUS.expected;
+    const what = [DEP_REASON_LABEL[r.reason] || '', r.memo || ''].filter(Boolean).join(' · ');
+    return `<tr>
+      <td>${esc(String(r.occurred_at || '').slice(0, 10))}</td>
+      <td>${esc(DEP_TYPE_LABEL[r.type] || r.type)}</td>
+      <td>${esc(what || '—')}${r.balance_manual_krw != null
+          ? `<span class="sku-name-sub">통보 잔액 ${Math.round(r.balance_manual_krw).toLocaleString()}원</span>` : ''}</td>
+      <td class="col-num">${r.qty == null ? '—' : r.qty}</td>
+      <td class="col-num">${r.estimated_amount_krw == null ? '—' : Math.round(r.estimated_amount_krw).toLocaleString()}</td>
+      <td class="col-num">${r.status === 'expected'
+          ? `<input type="number" class="dep-amt defect-input" data-id="${esc(r.id)}" value="${Math.round(Number(r.amount_krw) || 0)}" />`
+          : Math.round(Number(r.amount_krw) || 0).toLocaleString() + '원'}</td>
+      <td><span class="prog prog-${st.cls}">${esc(st.label)}</span></td>
+      <td>${r.status === 'expected'
+          ? `<button class="btn btn-sm btn-primary dep-confirm" data-id="${esc(r.id)}">확정</button>
+             <button class="btn btn-sm btn-ghost dep-void" data-id="${esc(r.id)}">무효</button>`
+          : ''}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="8" class="muted">기록이 없습니다.</td></tr>';
+}
+$('#depFilter').onchange = () => renderDeposits();
+
+$('#depRows').addEventListener('click', async (ev) => {
+  const conf = ev.target.closest('.dep-confirm');
+  const vd = ev.target.closest('.dep-void');
+  const btn = conf || vd;
+  if (!btn) return;
+  const id = btn.dataset.id;
+  const row = DEP.rows.find((r) => String(r.id) === String(id));
+  btn.disabled = true;
+  try {
+    const body = vd
+      ? { status: 'void' }
+      : {
+          status: 'confirmed',
+          confirmed_at: new Date().toISOString(),
+          /* 화면에서 고친 금액을 확정값으로 삼는다 — 추정은 estimated에 그대로 남는다 */
+          amount_krw: Math.round(Number(
+            (document.querySelector(`.dep-amt[data-id="${CSS.escape(id)}"]`) || {}).value
+          ) || (Number(row && row.amount_krw) || 0))
+        };
+    await api(`supplier_deposits?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', headers: { prefer: 'return=minimal' }, body
+    });
+    if (row) Object.assign(row, body);
+    toast(vd ? '무효 처리했습니다' : '확정했습니다');
+    renderDeposits();
+  } catch (e) {
+    toast('실패: ' + e.message, 4000);
+    btn.disabled = false;
+  }
+});
+
+$('#depAddBtn').onclick = () => {
+  $('#depDate').value = new Date().toISOString().slice(0, 10);
+  $('#depAmount').value = '';
+  $('#depBalance').value = '';
+  $('#depMemo').value = '';
+  $('#depModalMsg').className = 'msg hidden';
+  $('#depModal').classList.remove('hidden');
+};
+$$('#depModal [data-close]').forEach((b) => { b.onclick = () => $('#depModal').classList.add('hidden'); });
+
+$('#depSave').onclick = async () => {
+  const btn = $('#depSave');
+  const msg = $('#depModalMsg');
+  const type = $('#depType').value;
+  const amount = Math.round(Number($('#depAmount').value) || 0);
+  const balance = $('#depBalance').value === '' ? null : Math.round(Number($('#depBalance').value) || 0);
+  if (type !== 'balance' && amount <= 0) {
+    msg.className = 'msg err'; msg.textContent = '금액을 입력하세요.'; return;
+  }
+  btn.disabled = true;
+  try {
+    await api('supplier_deposits', {
+      method: 'POST', headers: { prefer: 'return=minimal' },
+      body: [{
+        occurred_at: ($('#depDate').value || new Date().toISOString().slice(0, 10)) + 'T00:00:00Z',
+        type,
+        /* 사람이 직접 넣은 기록은 곧 확정이다 — 확인 대기로 둘 이유가 없다 */
+        status: 'confirmed',
+        confirmed_at: new Date().toISOString(),
+        amount_krw: amount,
+        balance_manual_krw: balance,
+        memo: $('#depMemo').value.trim() || null
+      }]
+    });
+    $('#depModal').classList.add('hidden');
+    toast('기록했습니다');
+    loadDeposits();
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = '저장 실패: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
 /* ===================== 입고 (중국 배대지) =====================
    물건의 **물리적 상태**를 관리하는 화면. 발주 상세가 "원가와 SKU 연결"을 맡는다면
    여기는 "실제로 몇 개가 왔고 몇 개가 불량인가"를 맡는다.
@@ -3354,7 +3513,8 @@ async function loadInbound() {
     const [lots, skus, lines, orders] = await Promise.all([
       apiAll('inventory_lots?select=*'),
       apiAll('my_skus?select=id,sku_name,barcode'),
-      apiAll('purchase_order_lines?select=id,po_id,sku_id,qty,product_name_text,barcode_text'),
+      apiAll('purchase_order_lines?select=id,po_id,sku_id,qty,product_name_text,barcode_text,'
+             + 'group_key,group_shipping_cny,line_cost_cny,allocated_shipping_cny'),
       apiAll('purchase_orders?select=id,status,requested_at')
     ]);
     INB.lots = lots;
@@ -3578,9 +3738,12 @@ function cancelRefreshHint() {
   const a = CANCEL.goodsOnly * qty, b = CANCEL.full * qty;
   $('#cancelHint').innerHTML =
     `참고: 상품가만 <b>${a.toLocaleString()}원</b> · 배송비 포함 <b>${b.toLocaleString()}원</b><br>` +
-    '<span class="muted">배송 전 취소면 배송비까지 돌아오고, 배송 후면 판매자마다 다릅니다. ' +
-    '실제 금액을 아시면 직접 고치세요 — 나중에 실제 입금과 맞춰볼 때 이 값이 기준이 됩니다.</span>';
-  $('#cancelRefund').value = b;   // 기본은 전액 — 덜 받으면 줄이는 쪽이 자연스럽다
+    '<span class="muted">기본값은 <b>상품가만</b>입니다 — 같은 판매자의 다른 SKU가 남아 있으면 ' +
+    '배송비는 그쪽이 나눠 지도록 자동으로 다시 계산됩니다. 그 판매자 물건을 전부 취소해서 ' +
+    '배송비까지 돌려받으면 금액을 직접 올리세요.</span>';
+  /* 기본은 **상품가만** — 사용자 확인(2026-08-18): 한 SKU만 취소하면 배송비는
+     남은 SKU들이 나눠 지므로 환불 대상이 아니다. */
+  $('#cancelRefund').value = a;
 }
 $('#cancelQty').oninput = () => cancelRefreshHint();
 $$('#cancelModal [data-close]').forEach((b) => { b.onclick = () => $('#cancelModal').classList.add('hidden'); });
@@ -3610,6 +3773,84 @@ $('#inboundWaitRows').addEventListener('click', async (ev) => {
     btn.disabled = false;
   }
 });
+
+/* 같은 1688 주문 묶음의 배송비를 남은 SKU들이 다시 나눠 지게 한다(사용자 확인 2026-08-18).
+   같은 판매자에게서 여러 옵션을 사면 배송비가 하나로 붙는데, 그중 하나가 취소돼도
+   판매자는 나머지를 여전히 보내므로 **배송비는 그대로 나가고 남은 것들이 부담한다.**
+   그래서 환불은 상품가만 하고, 남은 줄들의 개당 원가는 올라간다.
+
+   취소는 물건이 오기 전에 일어나므로(아직 출고·판매 전) 원가를 다시 계산해도
+   과거 이익이 흔들리지 않는다 — 이 시점이 아니면 고칠 기회가 없다. */
+async function cancelRedistributeShipping(lot) {
+  const line = INB.lineById.get(lot.po_line_id);
+  if (!line || !line.group_key) return 0;
+  const groupShip = Number(line.group_shipping_cny) || 0;
+  if (!groupShip) return 0;
+
+  const rate = Number((lot.cost_breakdown || {}).rate_purchase) || 0;
+  if (!rate) return 0;
+
+  const lotByLine = new Map();
+  INB.lots.forEach((l) => { if (!lotByLine.has(l.po_line_id)) lotByLine.set(l.po_line_id, l); });
+
+  const members = INB.lines
+    .filter((l) => l.po_id === line.po_id && l.group_key === line.group_key)
+    .map((l) => {
+      const lt = lotByLine.get(l.id);
+      const eff = Math.max(0, (Number(l.qty) || 0) - (lt ? (Number(lt.qty_cancelled) || 0) : 0));
+      return { l, lt, eff };
+    });
+  const totalEff = members.reduce((a, m) => a + m.eff, 0);
+  if (!totalEff) return 0;
+
+  let changed = 0;
+  for (const m of members) {
+    if (!m.lt || m.eff <= 0) continue;
+    /* 상품가 개당(CNY)은 청구서 원값에서 되돌린다 — unit_price_cny는 총액에서 역산된
+       소수점 5자리라 믿지 않는다는 파서 원칙 그대로. */
+    const goodsCny = ((Number(m.l.line_cost_cny) || 0) - (Number(m.l.allocated_shipping_cny) || 0))
+      / Math.max(1, Number(m.l.qty) || 1);
+    const alloc = groupShip * m.eff / totalEff;
+    const unitPurchase = Math.round((goodsCny + alloc / m.eff) * rate * 100) / 100;
+    const work = Number(m.lt.unit_work_fee_krw) || 0;
+    if (Math.abs(unitPurchase - (Number(m.lt.unit_purchase_cost_krw) || 0)) < 0.01) continue;
+
+    await api(`inventory_lots?id=eq.${encodeURIComponent(m.lt.id)}`, {
+      method: 'PATCH', headers: { prefer: 'return=minimal' },
+      body: {
+        unit_purchase_cost_krw: unitPurchase,
+        unit_cost_krw: Math.round((unitPurchase + work) * 100) / 100,
+        cost_breakdown: Object.assign({}, m.lt.cost_breakdown || {}, {
+          cny_shipping_alloc: Math.round(alloc * 100) / 100,
+          shipping_recalculated_at: new Date().toISOString()
+        })
+      }
+    });
+    m.lt.unit_purchase_cost_krw = unitPurchase;
+    m.lt.unit_cost_krw = Math.round((unitPurchase + work) * 100) / 100;
+    changed++;
+  }
+  return changed;
+}
+
+/* 발주한 물량이 전부 취소되면 발주 자체를 취소로 바꾼다(사용자 요청 2026-08-18) */
+async function cancelMaybeCancelPo(lot) {
+  const line = INB.lineById.get(lot.po_line_id);
+  const po = line && INB.poById.get(line.po_id);
+  if (!po || po.status === 'cancelled') return false;
+  const lineIds = new Set(INB.lines.filter((l) => l.po_id === po.id).map((l) => l.id));
+  const lots = INB.lots.filter((l) => lineIds.has(l.po_line_id));
+  if (!lots.length) return false;
+  const allGone = lots.every((l) =>
+    (Number(l.qty_arrived) || 0) === 0 &&
+    (Number(l.qty_cancelled) || 0) >= (Number(l.qty_ordered) || 0));
+  if (!allGone) return false;
+  await api(`purchase_orders?id=eq.${encodeURIComponent(po.id)}`, {
+    method: 'PATCH', headers: { prefer: 'return=minimal' }, body: { status: 'cancelled' }
+  });
+  po.status = 'cancelled';
+  return true;
+}
 
 $('#cancelSave').onclick = async () => {
   const lot = CANCEL.lot;
@@ -3659,8 +3900,14 @@ $('#cancelSave').onclick = async () => {
       });
     }
 
+    const moved = await cancelRedistributeShipping(lot);
+    const poCancelled = await cancelMaybeCancelPo(lot);
+
     $('#cancelModal').classList.add('hidden');
-    toast(`취소 ${qty}개 처리${$('#cancelDeposit').value === 'yes' ? ' · 예치금 환불 예정으로 기록' : ''}`);
+    toast(`취소 ${qty}개 처리`
+      + ($('#cancelDeposit').value === 'yes' ? ' · 예치금 환불 예정' : '')
+      + (moved ? ` · 배송비 재배분 ${moved}건` : '')
+      + (poCancelled ? ' · 발주 전체 취소됨' : ''));
     renderInbound();
   } catch (e) {
     msg.className = 'msg err';
@@ -4647,6 +4894,7 @@ $$('.nav-item').forEach((btn) => {
 
     if (page === 'po')         loadPOs();
     if (page === 'inbound')    loadInbound();
+    if (page === 'deposit')    loadDeposits();
     if (page === 'stock')      loadStock();
     if (page === 'ship')       loadShip();
     if (page === 'skus')       loadSkus();

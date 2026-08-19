@@ -128,6 +128,13 @@
         </button>
       </div>
       <div class="nav-group">
+        <div class="nav-group-label">경영</div>
+        <button class="nav-item" data-page="deposit">
+        <svg viewBox="0 0 24 24"><path d="M3 7h18v12H3zM3 7l3-4h12l3 4M9 13h6"/></svg>
+        <span>예치금</span>
+        </button>
+      </div>
+      <div class="nav-group">
         <div class="nav-group-label">판매</div>
         <button class="nav-item" data-page="sales">
         <svg viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-5 3 3 5-7"/></svg>
@@ -427,6 +434,45 @@
         </div>
       </section>
 
+      <!-- ── 예치금 (구매대행사 선입금·환불) ── -->
+      <section id="page-deposit" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>예치금</h2>
+            <p class="muted sm" id="depSummary">—</p>
+          </div>
+          <div class="page-actions">
+            <select id="depFilter" class="ship-filter">
+              <option value="open">확인 대기만</option>
+              <option value="all">전체</option>
+              <option value="confirmed">확정</option>
+              <option value="void">무효</option>
+            </select>
+            <button id="depAddBtn" class="btn btn-sm">입금·잔액 기록</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>일자</th>
+                <th>구분</th>
+                <th>내용</th>
+                <th class="col-num">수량</th>
+                <th class="col-num">추정</th>
+                <th class="col-num">인정 금액</th>
+                <th>상태</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="depRows"></tbody>
+          </table>
+        </div>
+        <p class="muted xs" id="depNote"></p>
+        <div id="depMsg" class="msg hidden"></div>
+      </section>
+
       <!-- ── 입고 (중국 배대지 도착·불량 관리) ── -->
       <section id="page-inbound" class="page hidden">
         <div class="page-head">
@@ -716,6 +762,39 @@
     <div class="modal-foot">
       <button class="btn btn-ghost" data-close>취소</button>
       <button id="settingsSave" class="btn btn-primary">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 예치금 입금·잔액 기록 -->
+<div id="depModal" class="modal hidden">
+  <div class="modal-backdrop" data-close></div>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>입금 · 잔액 기록</h3>
+      <button class="icon-btn" data-close aria-label="닫기">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <label class="field"><span>구분</span>
+        <select id="depType">
+          <option value="charge">입금 (내가 대행사에 보냄)</option>
+          <option value="spend">차감 (발주 결제에 쓰임)</option>
+          <option value="balance">잔액 확인 (대행사가 알려준 실제 잔액)</option>
+        </select></label>
+      <div class="two">
+        <label class="field"><span>일자</span><input id="depDate" type="date" /></label>
+        <label class="field"><span>금액 (원)</span><input id="depAmount" type="number" /></label>
+      </div>
+      <label class="field" id="depBalanceWrap"><span>대행사가 알려준 잔액 (원)</span>
+        <input id="depBalance" type="number" placeholder="사진으로 받은 잔액" /></label>
+      <label class="field"><span>메모</span><input id="depMemo" type="text" /></label>
+      <div id="depModalMsg" class="msg hidden"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close>취소</button>
+      <button id="depSave" class="btn btn-primary">저장</button>
     </div>
   </div>
 </div>

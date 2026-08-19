@@ -617,3 +617,4 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 /* 접힌 상태에선 라벨을 숨기고 구분선만 남긴다 — 아이콘만으로도 묶음이 보인다 */
 .sidebar.collapsed .nav-group-label { display: none; }
 .sidebar.collapsed .nav-group + .nav-group { margin-top: 8px; padding-top: 8px; }
+.dep-amt { width: 96px; }
