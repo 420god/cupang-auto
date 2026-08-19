@@ -3012,9 +3012,19 @@ $('#poDetailSave').onclick = async () => {
       });
       Object.assign(line, patch);
 
-      /* 청구서 저장 때와 같은 규칙으로 로트를 만든다. 이미 있으면 건너뛴다 —
-         같은 줄에 로트가 두 개 생기면 재고와 원가가 이중 계상된다. */
-      if (skuId && !POD.lotByLine.has(line.id)) {
+      /* 021부터 로트는 SKU 없이도 만들어져 있다 — 그러면 **새로 만드는 게 아니라
+         기존 로트에 sku_id를 채운다.** 새로 만들면 같은 물건이 두 번 잡힌다.
+         (021 이전에 만들어진 발주엔 로트가 아예 없을 수 있어서 생성 경로도 남겨둔다) */
+      if (skuId && POD.lotByLine.has(line.id)) {
+        for (const lot of POD.lotByLine.get(line.id)) {
+          if (!lot.id || lot.sku_id) continue;
+          await api(`inventory_lots?id=eq.${lot.id}`, {
+            method: 'PATCH', headers: { prefer: 'return=minimal' },
+            body: { sku_id: skuId }
+          });
+          lot.sku_id = skuId;
+        }
+      } else if (skuId && !POD.lotByLine.has(line.id)) {
         await api('inventory_lots', {
           method: 'POST', headers: { prefer: 'return=minimal' },
           body: [{
@@ -3289,10 +3299,13 @@ $('#poSave').onclick = async () => {
       method: 'POST', headers: { prefer: 'return=representation' }, body: lineBody
     });
 
-    /* 매칭된 줄만 로트를 만든다 — SKU를 모르는 원가는 어차피 어디에도 못 붙는다.
-       나중에 바코드를 채워 매칭하면 그때 로트를 만들 수 있게 줄은 그대로 남겨둔다. */
-    const lots = savedLines.filter((l) => l.sku_id).map((l) => ({
-      sku_id: l.sku_id,
+    /* **모든 줄에 로트를 만든다 — SKU가 아직 없어도.** (021)
+       상품 등록 전에 먼저 발주하는 경우가 있어서다(사용자 확인 2026-08-18):
+       물건은 실제로 중국에 도착하는데 SKU가 없다고 로트를 안 만들면 그 물건은
+       시스템에 존재하지 않게 되고, 입고도 재고 확인도 못 한다.
+       SKU는 나중에(쿠팡 보내기 전 바코드 작업할 때) 발주 상세에서 붙인다. */
+    const lots = savedLines.map((l) => ({
+      sku_id: l.sku_id || null,
       po_line_id: l.id,
       qty_ordered: l.qty,
       qty_china: 0,          // 아직 중국 창고에 없다 — 입고 페이지에서 도착 처리해야 생긴다
@@ -3360,13 +3373,18 @@ const inbPoDate = (lot) => {
   const po = line && INB.poById.get(line.po_id);
   return po ? String(po.requested_at || '').slice(0, 10) : '—';
 };
+/* SKU가 아직 없는 로트(상품 등록 전 발주, 021)는 청구서에 적힌 상품명으로 보여준다 —
+   물건은 실재하므로 입고·불량 관리는 그대로 되어야 한다. */
 const inbSkuName = (lot) => {
   const s = INB.skuById.get(lot.sku_id);
-  return s ? s.sku_name : '(알 수 없는 SKU)';
+  if (s) return s.sku_name;
+  const line = INB.lineById.get(lot.po_line_id);
+  return (line && line.product_name_text) || '(이름 없음)';
 };
 const inbSkuBarcode = (lot) => {
   const s = INB.skuById.get(lot.sku_id);
-  return (s && s.barcode) || '바코드 없음';
+  if (s) return s.barcode || '바코드 없음';
+  return 'SKU 미정 — 출고 전에 연결 필요';
 };
 
 function renderInbound() {
@@ -3392,17 +3410,26 @@ function renderInbound() {
     const po = INB.poById.get(ln.po_id);
     return po && po.status !== 'cancelled';
   });
+  const noSku = INB.lots.filter((l) => !l.sku_id &&
+    ((Number(l.qty_china) || 0) > 0 || lotIncoming(l) > 0));
+
   const warn = $('#inboundOrphan');
+  const notes = [];
   if (orphans.length) {
     const names = orphans.slice(0, 5).map((o) => esc(o.product_name_text || '(이름없음)')).join(', ');
-    warn.className = 'msg err';
-    warn.innerHTML = `SKU가 연결되지 않은 청구서 줄이 <b>${orphans.length}개</b> 있습니다 — ` +
-      '이 줄들은 재고 로트가 없어서 입고·출고·원가 어디에도 잡히지 않습니다.<br>' +
-      `<span class="muted">${names}${orphans.length > 5 ? ' 외' : ''}</span><br>` +
-      '<b>발주</b> 탭에서 해당 발주를 열어 SKU를 연결한 뒤 다시 오세요.';
-  } else {
-    warn.className = 'msg hidden';
+    notes.push(`재고 로트가 아예 없는 청구서 줄이 <b>${orphans.length}개</b> 있습니다 — ` +
+      '입고·출고·원가 어디에도 잡히지 않습니다. <b>발주</b> 탭에서 그 발주를 열어 SKU를 연결하세요.<br>' +
+      `<span class="muted">${names}${orphans.length > 5 ? ' 외' : ''}</span>`);
   }
+  if (noSku.length) {
+    /* 상품 등록 전에 발주한 경우다 — 입고·불량 관리는 여기서 그대로 되지만,
+       쿠팡으로 출고하려면 상품을 등록하고 바코드를 받아 SKU를 연결해야 한다. */
+    notes.push(`SKU가 아직 안 정해진 물량이 <b>${noSku.length}건</b> 있습니다 — ` +
+      '입고·불량 관리는 여기서 그대로 하시면 되고, <b>쿠팡으로 출고하기 전에</b> ' +
+      '상품을 등록하고 바코드를 받아 <b>발주</b> 탭에서 SKU를 연결하세요.');
+  }
+  if (notes.length) { warn.className = 'msg'; warn.innerHTML = notes.join('<br><br>'); }
+  else { warn.className = 'msg hidden'; }
 
   $('#inboundWaitRows').innerHTML = waiting.length ? waiting.map((l) => {
     const left = lotIncoming(l);
@@ -3870,6 +3897,9 @@ function renderShip() {
   const bySku = shipBuckets();
   const skuById = new Map(SHIP.skus.map((s) => [s.id, s]));
 
+  const noSkuQty = SHIP.lots.filter((l) => !l.sku_id)
+    .reduce((a, l) => a + (Number(l.qty_china) || 0), 0);
+
   const rows = [];
   bySku.forEach((b, skuId) => {
     const sku = skuById.get(skuId);
@@ -3887,9 +3917,12 @@ function renderShip() {
     incoming: a.incoming + r.b.incoming, china: a.china + r.b.china,
     transit: a.transit + r.b.transit, coupang: a.coupang + r.b.coupang
   }), { incoming: 0, china: 0, transit: 0, coupang: 0 });
-  $('#shipSummary').textContent = rows.length
+  $('#shipSummary').textContent = (rows.length
     ? `도착예정 ${tot.incoming} · 중국창고 ${tot.china} · 출고중 ${tot.transit} · 쿠팡센터 ${tot.coupang}`
-    : '표시할 재고가 없습니다.';
+    : '표시할 재고가 없습니다.')
+    /* SKU가 없는 물량은 출고 대상이 아니다(바코드가 없으면 쿠팡에 못 보낸다) —
+       그래도 창고엔 실재하므로 숨기지 말고 왜 안 보이는지 알려준다. */
+    + (noSkuQty ? ` · SKU 미정 ${noSkuQty}개(출고 불가 — 입고 탭 참조)` : '');
 
   $('#shipRows').innerHTML = rows.length ? rows.map((r) => `<tr>
       <td>${esc(r.sku.sku_name)}<span class="sku-name-sub">${esc(r.sku.barcode || '바코드 없음')}</span></td>
