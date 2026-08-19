@@ -2647,6 +2647,23 @@ function suggestSkus(name, skus, limit) {
     .slice(0, limit || 3);
 }
 
+/* 줄(=SKU) 단위 진행 상태. **발주 단계와 별개다.**
+   한 발주 안에서도 어떤 SKU는 이미 쿠팡에 있고 어떤 건 아직 중국에 있을 수 있다
+   (부분 출고 + 1688에서 일부만 먼저 도착하는 경우, 사용자 확인 2026-08-18).
+   그래서 상태를 따로 저장하지 않고 **로트 수량에서 파생**시킨다 —
+   저장된 상태와 실제 수량이 어긋날 일이 원천적으로 없다. */
+function lineProgress(lots) {
+  if (!lots.length) return { code: 'nolot', label: '미연결', cls: 'warn' };
+  const n = (k) => lots.reduce((a, x) => a + (Number(x[k]) || 0), 0);
+  const cn = n('qty_china'), tr = n('qty_transit'), cp = n('qty_coupang');
+  if (cn + tr + cp === 0) return { code: 'empty', label: '재고 없음', cls: 'dim' };
+  const places = [cn > 0, tr > 0, cp > 0].filter(Boolean).length;
+  if (places > 1) return { code: 'partial', label: '일부 출고', cls: 'mid' };
+  if (cn > 0) return { code: 'china', label: '중국창고', cls: 'dim' };
+  if (tr > 0) return { code: 'transit', label: '쿠팡 출고중', cls: 'mid' };
+  return { code: 'coupang', label: '쿠팡센터', cls: 'ok' };
+}
+
 async function openPoDetail(poId) {
   const entry = PO.list.find((r) => r.o.id === poId);
   if (!entry) return;
@@ -2731,6 +2748,7 @@ function renderPoDetail() {
     const sum = (k) => lots.reduce((a, x) => a + (Number(x[k]) || 0), 0);
     const defect = POD.defectEdits.has(String(l.id))
       ? POD.defectEdits.get(String(l.id)) : (l.defect_qty || 0);
+    const prog = lineProgress(lots);
     const unit = l.qty ? Math.round((l.line_cost_krw || 0) / l.qty) : 0;
 
     let cell;
@@ -2764,8 +2782,9 @@ function renderPoDetail() {
       <td class="col-num"><input class="defect-input" type="number" min="0"
             data-line="${esc(l.id)}" value="${defect}" ${hasLot ? '' : 'disabled'} /></td>
       <td class="col-num">${hasLot
-          ? `${sum('qty_china')} · ${sum('qty_transit')} · ${sum('qty_coupang')}`
-          : '<span class="muted">—</span>'}</td>
+          ? `<span class="prog prog-${prog.cls}">${esc(prog.label)}</span>
+             <span class="prog-qty">${sum('qty_china')} · ${sum('qty_transit')} · ${sum('qty_coupang')}</span>`
+          : `<span class="prog prog-${prog.cls}">${esc(prog.label)}</span>`}</td>
       <td class="col-num">${unit ? unit.toLocaleString() + '원' : '—'}</td>
       <td>${cell}</td>
     </tr>`;
