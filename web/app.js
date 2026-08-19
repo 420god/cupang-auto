@@ -2557,21 +2557,22 @@ async function loadPOs() {
   }
 }
 
-/* 발주 진행 단계 — 사용자가 실제 업무 순서대로 정해준 것(2026-08-18).
-   순서 자체가 의미를 갖는다: 아래 배열의 인덱스로 "어디까지 왔나"를 판단하고,
-   재고 위치(중국창고/운송중/쿠팡)도 이 단계에서 파생시킨다. 순서를 바꾸지 말 것.
+/* 발주 진행 단계 — 사용자가 정해준 업무 순서 중 **발주 전체가 함께 움직이는 구간**만.
+   순서 자체가 의미를 가지므로 바꾸지 말 것.
 
-   재고 위치를 단계에서 "파생"시키는 이유: 단계를 바꿀 때마다 수량을 옮기면
-   앞뒤로 왔다갔다할 때 수량이 어긋난다(멱등하지 않다). 단계만 진실로 두고
-   수량은 항상 거기서 다시 계산하면 몇 번을 눌러도 같은 결과가 나온다. */
+   왜 "작업비 청구 / 쿠팡 출고중 / 쿠팡센터 도착"이 여기 없나(2026-08-18 재설계):
+   한 발주를 나눠서 한국에 보낼 수 있고(부분 출고), 제트 작업비 청구서는 여러 발주를
+   가로질러 묶여서 온다("28일 주문분 + 29일 주문분을 묶어서, 없는 건 빼고"). 그래서
+   그 세 단계는 발주 단위로는 참도 거짓도 아니다 — **출고 묶음(inbound_shipments)**
+   단위로 따로 관리한다. 발주 화면에서는 "얼마나 나갔나"를 수량으로 보여준다.
+
+   재고 수량도 더 이상 이 단계에서 파생시키지 않는다(예전엔 그랬음) — 부분 출고를
+   지원하는 순간 "발주 전량이 같이 움직인다"는 전제가 깨지기 때문. */
 const PO_STEPS = [
-  { code: 'invoiced',        label: '청구서 수령',      loc: 'china' },
-  { code: 'paid',            label: '결제완료',         loc: 'china' },
-  { code: 'shipping_cn',     label: '중국배대지 배송중', loc: 'china' },
-  { code: 'arrived_cn',      label: '중국배대지 도착',   loc: 'china' },
-  { code: 'work_invoiced',   label: '작업비 청구',      loc: 'china' },
-  { code: 'shipping_kr',     label: '쿠팡 출고중',      loc: 'transit' },
-  { code: 'arrived_coupang', label: '쿠팡센터 도착',    loc: 'coupang' }
+  { code: 'invoiced',    label: '청구서 수령' },
+  { code: 'paid',        label: '결제완료' },
+  { code: 'shipping_cn', label: '중국배대지 배송중' },
+  { code: 'arrived_cn',  label: '중국배대지 도착' }
 ];
 const PO_STEP_INDEX = new Map(PO_STEPS.map((s, i) => [s.code, i]));
 
@@ -2619,7 +2620,8 @@ function renderPOs() {
    **로트는 SKU가 붙는 순간 만들어진다.** 청구서 저장 시점엔 매칭된 줄만 로트를
    만들었으므로, 여기서 뒤늦게 붙인 줄도 같은 규칙으로 로트를 만들어줘야
    선입선출 대기열에 들어간다. 이미 로트가 있는 줄은 건드리지 않는다(중복 방지). */
-const POD = { poId: null, po: null, lines: [], lotByLine: new Map(), picks: new Map(), bcEdits: new Map() };
+const POD = { poId: null, po: null, lines: [], lots: [], lotByLine: new Map(),
+              picks: new Map(), bcEdits: new Map(), defectEdits: new Map() };
 
 /* 한글 상품명 비교는 단어 단위로는 잘 안 맞는다("도시락 말랑이" vs
    "덴넬 버터 스틱 말랑이 슬라임 스퀴시, 노랑 100g 2개"). 글자 2개씩 겹치는
@@ -2652,19 +2654,28 @@ async function openPoDetail(poId) {
   POD.po = entry.o;
   POD.picks = new Map();
   POD.bcEdits = new Map();
+  POD.defectEdits = new Map();
 
   $('#poDetailMsg').className = 'msg hidden';
   $('#poDetailTitle').textContent = `발주 상세 — ${(entry.o.requested_at || '').slice(0, 10)}`;
-  $('#poDetailRows').innerHTML = '<tr><td colspan="5" class="muted">불러오는 중…</td></tr>';
+  $('#poDetailRows').innerHTML = '<tr><td colspan="7" class="muted">불러오는 중…</td></tr>';
   $('#poDetailModal').classList.remove('hidden');
 
   try {
     const [lines, lots] = await Promise.all([
       apiAll(`purchase_order_lines?select=*&po_id=eq.${encodeURIComponent(poId)}&order=line_no.asc`),
-      apiAll(`inventory_lots?select=id,po_line_id&po_line_id=not.is.null`)
+      /* 로트를 수량까지 통째로 읽는다 — 창고/운송중/쿠팡이 각각 몇 개인지
+         화면에 보여줘야 부분 출고 뒤에도 상황이 파악된다. */
+      apiAll('inventory_lots?select=*&po_line_id=not.is.null')
     ]);
     POD.lines = lines;
-    POD.lotByLine = new Map(lots.map((l) => [l.po_line_id, l]));
+    POD.lots = lots.filter((lot) => lines.some((l) => l.id === lot.po_line_id));
+    POD.lotByLine = new Map();
+    POD.lots.forEach((lot) => {
+      const arr = POD.lotByLine.get(lot.po_line_id) || [];
+      arr.push(lot);
+      POD.lotByLine.set(lot.po_line_id, arr);
+    });
 
     /* 후보 목록은 datalist로 준다 — SKU가 수천 개가 돼도 브라우저가 알아서 걸러준다.
        select 태그였다면 수천 개 option을 그리느라 느려진다. */
@@ -2673,7 +2684,7 @@ async function openPoDetail(poId) {
 
     renderPoDetail();
   } catch (e) {
-    $('#poDetailRows').innerHTML = `<tr><td colspan="5" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
+    $('#poDetailRows').innerHTML = `<tr><td colspan="7" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
   }
 }
 
@@ -2715,7 +2726,11 @@ function renderPoDetail() {
        String()으로 맞추지 않으면 고른 값이 조용히 무시된다(2026-08-18에 실제로 겪음). */
     const picked = pickedOf(l);
     const cur = picked ? byId.get(picked) : null;
-    const hasLot = POD.lotByLine.has(l.id);
+    const lots = POD.lotByLine.get(l.id) || [];
+    const hasLot = lots.length > 0;
+    const sum = (k) => lots.reduce((a, x) => a + (Number(x[k]) || 0), 0);
+    const defect = POD.defectEdits.has(String(l.id))
+      ? POD.defectEdits.get(String(l.id)) : (l.defect_qty || 0);
     const unit = l.qty ? Math.round((l.line_cost_krw || 0) / l.qty) : 0;
 
     let cell;
@@ -2746,6 +2761,11 @@ function renderPoDetail() {
                  placeholder="바코드 없음" /></td>
       <td>${esc(l.product_name_text)}</td>
       <td class="col-num">${cnt(l.qty)}</td>
+      <td class="col-num"><input class="defect-input" type="number" min="0"
+            data-line="${esc(l.id)}" value="${defect}" ${hasLot ? '' : 'disabled'} /></td>
+      <td class="col-num">${hasLot
+          ? `${sum('qty_china')} · ${sum('qty_transit')} · ${sum('qty_coupang')}`
+          : '<span class="muted">—</span>'}</td>
       <td class="col-num">${unit ? unit.toLocaleString() + '원' : '—'}</td>
       <td>${cell}</td>
     </tr>`;
@@ -2776,6 +2796,16 @@ $('#poDetailRows').addEventListener('change', (ev) => {
     return;
   }
 
+  /* 불량 수량 — 중국 배대지 검수에서 발견된다. 창고 재고에서 빼되 개당 원가는
+     그대로 둔다(불량분은 대행사가 예치금으로 환불해주므로 단가가 아니라 수량이 준다). */
+  const dfInp = ev.target.closest('.defect-input');
+  if (dfInp) {
+    const v = Math.max(0, parseInt(dfInp.value, 10) || 0);
+    POD.defectEdits.set(dfInp.dataset.line, v);
+    renderPoDetail();
+    return;
+  }
+
   const bcInp = ev.target.closest('.bc-input');
   if (!bcInp) return;
   const lineId = bcInp.dataset.line;
@@ -2798,10 +2828,8 @@ $$('#poDetailModal [data-close]').forEach((b) => {
   b.onclick = () => $('#poDetailModal').classList.add('hidden');
 });
 
-/* 단계를 바꾸면 그 발주의 로트 재고 위치도 같이 맞춘다.
-   **수량을 옮기는 게 아니라 단계에서 다시 계산해서 덮어쓴다** — 그래야 앞뒤로
-   여러 번 눌러도 수량이 어긋나지 않는다(멱등). 지금은 발주 전량이 함께 움직인다고
-   보고 계산한다 — 한 발주를 나눠서 한국에 보내는 경우는 아직 다루지 않는다. */
+/* 단계 변경은 이제 재고를 건드리지 않는다 — 재고 이동은 출고 묶음이 담당한다.
+   '중국배대지 도착'만 로트에 도착 시각을 남긴다(리드타임 실측에 쓸 값이다). */
 $('#poSteps').addEventListener('click', async (ev) => {
   const btn = ev.target.closest('.po-step');
   if (!btn || !POD.po) return;
@@ -2816,24 +2844,14 @@ $('#poSteps').addEventListener('click', async (ev) => {
     });
     POD.po.status = code;
 
-    const step = PO_STEPS[PO_STEP_INDEX.get(code)];
-    const loc = step ? step.loc : 'china';
-    const lineIds = POD.lines.filter((l) => POD.lotByLine.has(l.id)).map((l) => l.id);
-    if (lineIds.length) {
-      const lots = await apiAll(
-        `inventory_lots?select=id,po_line_id,qty_ordered&po_line_id=in.(${lineIds.join(',')})`);
-      for (const lot of lots) {
-        const q = lot.qty_ordered || 0;
-        const body = {
-          qty_china: loc === 'china' ? q : 0,
-          qty_transit: loc === 'transit' ? q : 0,
-          qty_coupang: loc === 'coupang' ? q : 0
-        };
-        if (loc === 'coupang') body.arrived_coupang_at = new Date().toISOString();
-        if (code === 'arrived_cn') body.arrived_china_at = new Date().toISOString();
+    if (code === 'arrived_cn') {
+      const now = new Date().toISOString();
+      for (const lot of POD.lots.filter((l) => !l.arrived_china_at)) {
         await api(`inventory_lots?id=eq.${lot.id}`, {
-          method: 'PATCH', headers: { prefer: 'return=minimal' }, body
+          method: 'PATCH', headers: { prefer: 'return=minimal' },
+          body: { arrived_china_at: now }
         });
+        lot.arrived_china_at = now;
       }
     }
     renderPoDetail();
@@ -2847,20 +2865,28 @@ $('#poSteps').addEventListener('click', async (ev) => {
   }
 });
 
+/* 그 줄에 대해 이번에 바뀐 불량 증감분을 찾는다(여러 줄을 한 번에 저장하므로) */
+function changesDefectDelta(line, changes) {
+  const hit = changes.find((c) => c.line.id === line.id);
+  return hit ? (hit.defectDelta || 0) : 0;
+}
+
 $('#poDetailSave').onclick = async () => {
   const btn = $('#poDetailSave');
   const msg = $('#poDetailMsg');
   /* 연결과 바코드를 따로 저장하지 않는다 — 한 줄에 둘 다 바뀌었으면 PATCH 한 번으로 끝낸다 */
-  const touched = new Set([...POD.picks.keys(), ...POD.bcEdits.keys()]);
+  const touched = new Set([...POD.picks.keys(), ...POD.bcEdits.keys(), ...POD.defectEdits.keys()]);
   const changes = Array.from(touched).map((lineId) => {
     const line = POD.lines.find((l) => String(l.id) === String(lineId));
     if (!line) return null;
     const skuId = POD.picks.has(lineId) ? POD.picks.get(lineId) : line.sku_id;
     const bc = POD.bcEdits.has(lineId) ? POD.bcEdits.get(lineId) : line.barcode_text;
+    const df = POD.defectEdits.has(lineId) ? POD.defectEdits.get(lineId) : (line.defect_qty || 0);
     const patch = {};
     if ((line.sku_id || null) !== (skuId || null)) patch.sku_id = skuId;
     if ((line.barcode_text || null) !== (bc || null)) patch.barcode_text = bc;
-    return Object.keys(patch).length ? { line, skuId, patch } : null;
+    if ((line.defect_qty || 0) !== df) patch.defect_qty = df;
+    return Object.keys(patch).length ? { line, skuId, patch, defectDelta: df - (line.defect_qty || 0) } : null;
   }).filter(Boolean);
 
   if (!changes.length) { msg.className = 'msg'; msg.textContent = '바뀐 내용이 없습니다.'; return; }
@@ -2875,6 +2901,19 @@ $('#poDetailSave').onclick = async () => {
       });
       Object.assign(line, patch);
 
+      /* 불량이 늘거나 줄면 그만큼 창고 수량을 조정한다. 이미 한국으로 나간 수량은
+         건드릴 수 없으니 창고(qty_china)에서만 뺀다 — 0 밑으로는 안 내려간다. */
+      if (patch.defect_qty != null) {
+        for (const lot of (POD.lotByLine.get(line.id) || [])) {
+          if (!lot.id) continue;
+          const next = Math.max(0, (Number(lot.qty_china) || 0) - changesDefectDelta(line, changes));
+          await api(`inventory_lots?id=eq.${lot.id}`, {
+            method: 'PATCH', headers: { prefer: 'return=minimal' }, body: { qty_china: next }
+          });
+          lot.qty_china = next;
+        }
+      }
+
       /* 청구서 저장 때와 같은 규칙으로 로트를 만든다. 이미 있으면 건너뛴다 —
          같은 줄에 로트가 두 개 생기면 재고와 원가가 이중 계상된다. */
       if (skuId && !POD.lotByLine.has(line.id)) {
@@ -2886,6 +2925,8 @@ $('#poDetailSave').onclick = async () => {
             qty_ordered: line.qty,
             qty_china: line.qty,
             unit_cost_krw: line.qty ? Math.round((line.line_cost_krw / line.qty) * 100) / 100 : 0,
+            unit_purchase_cost_krw: line.qty ? Math.round((line.line_cost_krw / line.qty) * 100) / 100 : 0,
+            unit_work_fee_krw: 0,     // 배대지 작업비는 출고할 때 확정된다
             cost_status: 'estimated',
             cost_breakdown: {
               cny_line: line.line_cost_cny,
@@ -2897,7 +2938,7 @@ $('#poDetailSave').onclick = async () => {
             ordered_at: POD.po.requested_at
           }]
         });
-        POD.lotByLine.set(line.id, { po_line_id: line.id });
+        POD.lotByLine.set(line.id, [{ po_line_id: line.id, qty_china: line.qty }]);
         lotsMade++;
       }
     }
@@ -3122,6 +3163,8 @@ $('#poSave').onclick = async () => {
       qty_ordered: l.qty,
       qty_china: l.qty,
       unit_cost_krw: l.qty ? Math.round((l.line_cost_krw / l.qty) * 100) / 100 : 0,
+      unit_purchase_cost_krw: l.qty ? Math.round((l.line_cost_krw / l.qty) * 100) / 100 : 0,
+      unit_work_fee_krw: 0,
       cost_status: 'estimated',   // 배대지 작업비(개당 300원 수준)가 아직 안 붙었다
       cost_breakdown: {
         cny_line: l.line_cost_cny,

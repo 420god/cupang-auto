@@ -590,3 +590,5 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 .po-step.done b { background: var(--accent-soft); color: var(--accent); }
 .po-step.now { border-color: var(--accent); color: var(--text); font-weight: 600; }
 .po-step.now b { background: var(--accent); color: #fff; }
+.defect-input { width: 64px; padding: 5px 6px; font-size: 12.5px; text-align: right; }
+.defect-input:disabled { opacity: .4; }
