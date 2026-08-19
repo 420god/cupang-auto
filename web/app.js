@@ -3333,7 +3333,7 @@ $('#poSave').onclick = async () => {
    **도착은 SKU(로트) 단위다** — 1688에서 일부만 먼저 오는 일이 실제로 있어서
    발주 단위로는 표현이 안 된다. 한 발주 안에서도 상품마다 도착 시점이 다르다.
    그 발주의 모든 줄이 다 도착하면 발주 단계를 자동으로 '중국배대지 도착'으로 올린다. */
-const INB = { lots: [], skuById: new Map(), lineById: new Map(), poById: new Map() };
+const INB = { lots: [], lines: [], skuById: new Map(), lineById: new Map(), poById: new Map() };
 
 async function loadInbound() {
   $('#inboundWaitRows').innerHTML = '<tr><td colspan="8" class="muted">불러오는 중…</td></tr>';
@@ -3341,10 +3341,11 @@ async function loadInbound() {
     const [lots, skus, lines, orders] = await Promise.all([
       apiAll('inventory_lots?select=*'),
       apiAll('my_skus?select=id,sku_name,barcode'),
-      apiAll('purchase_order_lines?select=id,po_id,sku_id'),
+      apiAll('purchase_order_lines?select=id,po_id,sku_id,qty,product_name_text,barcode_text'),
       apiAll('purchase_orders?select=id,status,requested_at')
     ]);
     INB.lots = lots;
+    INB.lines = lines;
     INB.skuById = new Map(skus.map((s) => [s.id, s]));
     INB.lineById = new Map(lines.map((l) => [l.id, l]));
     INB.poById = new Map(orders.map((o) => [o.id, o]));
@@ -3382,6 +3383,27 @@ function renderInbound() {
   $('#inboundSummary').textContent =
     `도착 대기 ${waitQty}개 · 중국창고 ${stockQty}개 · 누적 불량 ${defectQty}개`;
 
+  /* **이 화면은 로트만 보여준다** — SKU가 연결 안 된 청구서 줄은 로트가 없어서
+     아무 데도 안 나온다. 그러면 "발주했는데 입고에 아무것도 없다"로 보이고 원인을
+     알 길이 없다(2026-08-18 사용자가 실제로 겪음). 그래서 그 줄들을 여기서 짚어준다. */
+  const lotLineIds = new Set(INB.lots.map((l) => l.po_line_id));
+  const orphans = (INB.lines || []).filter((ln) => {
+    if (lotLineIds.has(ln.id)) return false;
+    const po = INB.poById.get(ln.po_id);
+    return po && po.status !== 'cancelled';
+  });
+  const warn = $('#inboundOrphan');
+  if (orphans.length) {
+    const names = orphans.slice(0, 5).map((o) => esc(o.product_name_text || '(이름없음)')).join(', ');
+    warn.className = 'msg err';
+    warn.innerHTML = `SKU가 연결되지 않은 청구서 줄이 <b>${orphans.length}개</b> 있습니다 — ` +
+      '이 줄들은 재고 로트가 없어서 입고·출고·원가 어디에도 잡히지 않습니다.<br>' +
+      `<span class="muted">${names}${orphans.length > 5 ? ' 외' : ''}</span><br>` +
+      '<b>발주</b> 탭에서 해당 발주를 열어 SKU를 연결한 뒤 다시 오세요.';
+  } else {
+    warn.className = 'msg hidden';
+  }
+
   $('#inboundWaitRows').innerHTML = waiting.length ? waiting.map((l) => {
     const left = lotIncoming(l);
     return `<tr>
@@ -3396,7 +3418,7 @@ function renderInbound() {
             data-lot="${esc(l.id)}" value="0" /></td>
       <td><button class="btn btn-sm btn-primary inb-receive" data-lot="${esc(l.id)}">도착 처리</button></td>
     </tr>`;
-  }).join('') : '<tr><td colspan="8" class="muted">도착 대기 중인 물량이 없습니다.</td></tr>';
+  }).join('') : '<tr><td colspan="8" class="muted">도착 대기 중인 물량이 없습니다. (발주한 물량이 전부 도착했거나, 아직 SKU가 연결되지 않아 로트가 없는 상태입니다)</td></tr>';
 
   $('#inboundStockRows').innerHTML = inStock.length ? inStock.map((l) => `<tr>
       <td>${esc(inbPoDate(l))}</td>
@@ -3411,7 +3433,7 @@ function renderInbound() {
             <option value="loss">손실 처리</option>
           </select></td>
       <td><button class="btn btn-sm inb-defect-apply" data-lot="${esc(l.id)}">불량 반영</button></td>
-    </tr>`).join('') : '<tr><td colspan="7" class="muted">중국창고에 있는 물량이 없습니다.</td></tr>';
+    </tr>`).join('') : '<tr><td colspan="7" class="muted">중국창고에 있는 물량이 없습니다. (아직 도착 처리를 안 했거나, 이미 한국으로 출고된 상태입니다)</td></tr>';
 }
 
 /* 그 발주의 모든 줄이 다 도착했으면 발주 단계를 '중국배대지 도착'으로 올린다.
