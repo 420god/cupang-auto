@@ -300,9 +300,14 @@ function calcMargin(o) {
   const fulfillment = num(o.fulfillment) ?? 0;
   const settlement = price - commission - fulfillment;
 
-  const costKrw = (num(o.costCny) !== null)
-    ? Math.round(o.costCny * (num(o.rate) ?? settings.rate))
-    : null;
+  /* costKrw가 오면 그걸 그대로 쓴다 — 발주·출고에서 확정된 **실제 매입원가**(로트 선입선출,
+     db/migrations/015~019)다. 없을 때만 예전 방식(소싱 탭에 손으로 넣은 CNY 원가 x 환율)으로
+     떨어진다. 두 값을 섞지 않는다: 실제 원가가 있으면 추정을 볼 이유가 없다. */
+  const costKrw = (num(o.costKrw) !== null)
+    ? Math.round(o.costKrw)
+    : ((num(o.costCny) !== null)
+        ? Math.round(o.costCny * (num(o.rate) ?? settings.rate))
+        : null);
 
   if (costKrw === null) {
     return { commission, fulfillment, settlement, cost: null, margin: null, shipWork: null, rate: null };
@@ -1444,6 +1449,109 @@ function startOfMonthStr(dateStr) { return dateStr.slice(0, 8) + '01'; }
 
 /* vendorItemId → 카테고리/원가 메타. 일별집계(buildDailyRow)와 상품별 표(renderSales)가
    공유한다 — product_items/products/user_items 조회를 범위당 한 번만 하기 위함. */
+/* ── 실제 매입원가(선입선출) ──────────────────────────────────
+   발주 → 출고에서 확정된 로트 원가를 판매에 붙인다. 결과는 (날짜|옵션ID) 단위
+   개당 원가 맵이고, 판매현황의 원가·영업이익이 이걸 쓴다.
+
+   **왜 미리 계산해서 저장하지 않고 볼 때마다 계산하나**: 로트 원가는 출고 시점에
+   작업비가 붙으면서 한 번 올라간다. 미리 저장해두면 그때 과거 이익을 소급 갱신하는
+   로직이 필요해지는데, 매번 현재 로트 원가로 계산하면 그런 게 아예 필요 없다
+   (사용자와 확인, 2026-08-18 — 작업비 청구서가 쿠팡 도착 전에 오므로 실무상 어긋날
+   일도 거의 없다).
+
+   **판매 이력 전체를 읽는 이유**: 선입선출은 처음부터 순서대로 소진시켜야 맞다.
+   조회 기간만 읽으면 이미 팔려나간 옛 로트가 아직 남은 것처럼 계산돼 원가가 낮게 나온다.
+   이 계정 규모(상품 수십 개)에선 전량 조회가 몇백 KB라 문제되지 않는다 — 나중에
+   수천 SKU가 되어 느려지면 그때 cogs_allocations(016)에 확정분을 물질화할 것. */
+async function loadLotCogs(vendorItemIds) {
+  const out = new Map();
+  if (!vendorItemIds.length) return out;
+
+  const [listings, lots, wing, gross] = await Promise.all([
+    apiAll('sku_channel_listings?select=sku_id,external_option_id&channel=eq.coupang_rg'),
+    apiAll('inventory_lots?select=id,sku_id,qty_coupang,unit_cost_krw,arrived_coupang_at&arrived_coupang_at=not.is.null'),
+    apiAll('rocket_growth_sales_wing_daily?select=sale_date,vendor_item_id,quantity'),
+    apiAll('rocket_growth_sales_daily?select=sale_date,vendor_item_id,quantity')
+  ]);
+  if (!lots.length) return out;
+
+  const skuByVid = new Map();
+  listings.forEach((l) => { if (l.external_option_id) skuByVid.set(String(l.external_option_id), l.sku_id); });
+  if (!skuByVid.size) return out;
+
+  /* 로트를 SKU별 선입선출 대기열로. 쿠팡에 도착한 수량이 곧 팔 수 있는 수량이다
+     (불량은 출고 전에 이미 빠졌고, 판매될 때 로트 수량을 깎지는 않는다). */
+  const queues = new Map();
+  lots.slice()
+    .sort((a, b) => new Date(a.arrived_coupang_at) - new Date(b.arrived_coupang_at))
+    .forEach((lot) => {
+      const cap = Number(lot.qty_coupang) || 0;
+      if (!lot.sku_id || cap <= 0) return;
+      const q = queues.get(lot.sku_id) || [];
+      q.push({ left: cap, unit: Number(lot.unit_cost_krw) || 0,
+               arrivedAt: (lot.arrived_coupang_at || '').slice(0, 10) });
+      queues.set(lot.sku_id, q);
+    });
+
+  /* 판매 이력 병합 — 그 날짜에 WING 행이 하나라도 있으면 그 날짜는 WING만 쓴다
+     (fetchSalesRange()와 같은 규칙. 섞으면 반품 반영분이 이중 계상된다). */
+  const wingDates = new Set(wing.map((r) => r.sale_date));
+  const byDate = new Map();
+  const push = (r) => {
+    const arr = byDate.get(r.sale_date) || [];
+    arr.push(r);
+    byDate.set(r.sale_date, arr);
+  };
+  wing.forEach(push);
+  gross.forEach((r) => { if (!wingDates.has(r.sale_date)) push(r); });
+
+  const wanted = new Set(vendorItemIds.map(String));
+  Array.from(byDate.keys()).sort().forEach((date) => {
+    byDate.get(date).forEach((r) => {
+      const vid = String(r.vendor_item_id);
+      const skuId = skuByVid.get(vid);
+      if (!skuId) return;
+      const q = queues.get(skuId);
+      if (!q) return;
+
+      let qty = Number(r.quantity) || 0;
+      const sold = qty;              // 원가를 나눌 기준(아래 주석 참조)
+      if (qty <= 0) {
+        /* 반품(음수)은 로트로 되돌린다 — 맨 앞 로트에 얹으면 다음 판매가 그 원가로 나간다 */
+        if (qty < 0 && q.length) q[0].left += -qty;
+        return;
+      }
+      let total = 0, taken = 0;
+      for (const lot of q) {
+        if (qty <= 0) break;
+        /* **판매일보다 나중에 도착한 로트는 쓸 수 없다.** 이걸 안 막으면 시스템 도입
+           전의 옛 판매가 최근 매입분을 끌어다 써서, 없던 원가가 생기고 정작 최근
+           판매는 로트가 모자라게 된다(2026-08-18 검증 중 발견). 원가를 못 매긴
+           수량은 short로 남겨 화면에서 "원가 없음"으로 보이게 한다. */
+        if (lot.arrivedAt && lot.arrivedAt > date) break;
+        const take = Math.min(lot.left, qty);
+        if (take <= 0) continue;
+        lot.left -= take; qty -= take; taken += take; total += take * lot.unit;
+      }
+      /* 조회 대상 옵션만 결과에 담는다(계산은 전체를 돌려야 순서가 맞다).
+
+         **개당 원가는 "덮인 수량"이 아니라 그날 판매수량 전체로 나눈다** — 화면 계산이
+         (개당원가 x 판매수량)으로 합계를 내기 때문이다. 로트가 모자라 일부만 덮인 날에
+         덮인 부분의 평균을 그대로 넘기면 없는 원가가 부풀려진다(8개 팔렸는데 6개분
+         원가만 아는데도 8개분으로 계산되는 식). 이렇게 하면 합계는 항상 실제로 아는
+         원가와 정확히 같고, 모자란 만큼은 short로 남아 화면에서 구분된다. */
+      if (taken > 0 && wanted.has(vid)) {
+        out.set(`${date}|${vid}`, {
+          qty: sold, covered: taken, total,
+          unit: Math.round((total / sold) * 100) / 100,
+          short: qty > 0 ? qty : 0   // 로트가 모자라 원가를 못 매긴 수량
+        });
+      }
+    });
+  });
+  return out;
+}
+
 async function loadItemMeta(vendorItemIds) {
   const meta = {};
   if (!vendorItemIds.length) return meta;
@@ -1531,7 +1639,7 @@ async function loadProductRegistry(vendorItemIds) {
    광고비·밀크런은 정산현황 API에만 있는 값이라 추정 방법 자체가 없어 항상 0(사용자 확인:
    당일엔 몰라도 되는 값). 원가·배송/작업비·영업이익도 정산현황 API에 없는 필드라 항상
    옵션별 추정(user_items.cost_cny 등, calcMargin() 재사용)으로만 계산 — 확정/추정 여부와 무관. */
-function buildDailyRow(date, items, meta, confirmed, costSnapshots) {
+function buildDailyRow(date, items, meta, confirmed, costSnapshots, lotCogs) {
   let quantity = 0, itemRevenue = 0;
   let estCommission = 0, estFulfillment = 0, estCoupon = 0, estStorage = 0, estSettlement = 0;
   let cost = 0, shipWork = 0, opProfit = 0, costedQty = 0;
@@ -1564,8 +1672,10 @@ function buildDailyRow(date, items, meta, confirmed, costSnapshots) {
     const storageInfo = storageAllocationForItem(costSnapshots && costSnapshots[it.vendor_item_id], 1);
     if (storageInfo) estStorage += storageInfo.allocated;
 
+    const lc = lotCogs && lotCogs.get(`${date}|${it.vendor_item_id}`);
     const c = calcMargin({
       price: avgPrice, commission: commissionRate, fulfillment: fee,
+      costKrw: lc ? lc.unit : null,
       costCny: m.costCny, rate: m.exchangeRate, outbound: m.outboundFee, work: m.workFee
     });
     if (!c) return;
@@ -1904,6 +2014,8 @@ async function fetchAndRenderSales(fromDate, toDate) {
     // 조회 범위 전체(fetchFrom~fetchTo)를 커버하니 뒤에서 renderSales()용으로 다시 불러올
     // 필요 없다.
     const costSnapshots = await loadItemCostSnapshots(vendorItemIds);
+    // 발주·출고에서 확정된 실제 매입원가(선입선출) — 원가·영업이익이 이걸 우선 쓴다
+    const lotCogs = await loadLotCogs(vendorItemIds);
     // 등록상품ID·상품ID(옵션ID 클릭용) — meta에 병합해서 renderSales()가 그대로 씀.
     const registry = await loadProductRegistry(vendorItemIds);
     vendorItemIds.forEach((vid) => {
@@ -1912,7 +2024,7 @@ async function fetchAndRenderSales(fromDate, toDate) {
 
     const dailyByDate = {};
     dateRangeList(fetchFrom, fetchTo).forEach((d) => {
-      dailyByDate[d] = buildDailyRow(d, byDate[d] || [], meta, profitByDate[d], costSnapshots);
+      dailyByDate[d] = buildDailyRow(d, byDate[d] || [], meta, profitByDate[d], costSnapshots, lotCogs);
     });
 
     renderPeriodCards(dailyByDate, todayStr);
@@ -1932,7 +2044,7 @@ async function fetchAndRenderSales(fromDate, toDate) {
       return;
     }
 
-    renderSales(rangeDates, byDate, meta, costSnapshots, profitByDate);
+    renderSales(rangeDates, byDate, meta, costSnapshots, profitByDate, lotCogs);
   } catch (e) {
     $('#salesMsg').textContent = '판매현황을 불러오지 못했습니다: ' + e.message;
     $('#salesMsg').classList.remove('hidden');
@@ -1973,7 +2085,7 @@ function coupangProductUrl(m, vid) {
    **순이익 = 매출 − 수수료 − 입출고비 − 보관비 − 쿠폰비 − 광고비 − 부가세**
    (사용자 확정 공식, 2026-08-17) — 옵션 행은 보관비 항이 없어 6개 항만 빼고, 날짜
    합계 행에서 그 날짜의 고정 보관비와 그 부가세를 추가로 뺀다. */
-function renderSales(rangeDates, byDate, meta, costSnapshots, profitByDate) {
+function renderSales(rangeDates, byDate, meta, costSnapshots, profitByDate, lotCogs) {
   let costedCount = 0, noCommissionCount = 0, estimatedCount = 0, approxCount = 0, rowCount = 0;
 
   const sections = rangeDates.slice().reverse().map((date) => {
@@ -2008,8 +2120,10 @@ function renderSales(rangeDates, byDate, meta, costSnapshots, profitByDate) {
       if (hasEstimate) estimatedCount++;
       else if (hasApprox) approxCount++;
 
+      const lc = lotCogs && lotCogs.get(`${date}|${vid}`);
       const c = calcMargin({
         price: avgPrice, commission: commissionRate, fulfillment: fulfillmentAmt,
+        costKrw: lc ? lc.unit : null,
         costCny: m.costCny, rate: m.exchangeRate, outbound: m.outboundFee, work: m.workFee
       });
       const commission = c ? c.commission * r.quantity : 0;
