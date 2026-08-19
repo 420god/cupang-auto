@@ -94,6 +94,10 @@
         <svg viewBox="0 0 24 24"><path d="M3 9h18M7 3v4M17 3v4M4 5h16v16H4zM8 13h8M8 17h5"/></svg>
         <span>발주</span>
       </button>
+      <button class="nav-item" data-page="stock">
+        <svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V8l7-5 7 5v13M9 21v-6h6v6"/></svg>
+        <span>재고</span>
+      </button>
       <button class="nav-item" data-page="ship">
         <svg viewBox="0 0 24 24"><path d="M3 17h2l2-9h10l2 9h2M8 21h8M5 8h14M12 3v5"/></svg>
         <span>출고</span>
@@ -404,6 +408,45 @@
             <tbody id="poRows"></tbody>
           </table>
         </div>
+      </section>
+
+      <!-- ── 재고 · 재발주 제안 ── -->
+      <section id="page-stock" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>재고 · 재발주 제안</h2>
+            <p class="muted sm" id="stockSummary">—</p>
+          </div>
+          <div class="page-actions">
+            <select id="stockFilter" class="ship-filter">
+              <option value="action">조치 필요만</option>
+              <option value="all">전체</option>
+              <option value="order">발주 필요</option>
+              <option value="inbound">입고요청</option>
+            </select>
+            <input id="stockSearch" class="sku-search" type="search" placeholder="상품명 · 바코드 검색" />
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>상품 · 옵션</th>
+                <th class="col-num">쿠팡</th>
+                <th class="col-num">운송중</th>
+                <th class="col-num">중국창고</th>
+                <th class="col-num">일평균</th>
+                <th class="col-num">소진예상</th>
+                <th class="col-num">리드타임</th>
+                <th>판정</th>
+                <th class="col-num">권장 수량</th>
+              </tr>
+            </thead>
+            <tbody id="stockRows"></tbody>
+          </table>
+        </div>
+        <p class="muted xs" id="stockNote"></p>
       </section>
 
       <!-- ── 출고 ── -->

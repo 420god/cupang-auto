@@ -3322,6 +3322,206 @@ $('#poSave').onclick = async () => {
   }
 };
 
+/* ===================== 재고 · 재발주 제안 =====================
+   다품종 소량에서 가장 큰 손실은 적자가 아니라 **품절**이다(팔릴 물건이 없는 것).
+   반대로 너무 많이 사두면 재고에 현금이 묶인다. 사용자 방침(2026-08-18):
+   "최대한 타이트하되 품절은 안 나도록, 판매 추이 보면서 발주량을 점증/점감."
+
+   ── 계산 방식 (표준 공식으로 시작해서 나중에 튜닝) ──────────────
+   일평균  = 최근 7일 평균 x 0.6 + 최근 28일 평균 x 0.4
+     추이를 자동으로 따라간다. 최근에 잘 팔리면 7일 평균이 올라가 발주량이 늘고,
+     시들해지면 자연히 준다 — 사용자가 원한 "점증/점감"이 별도 규칙 없이 나온다.
+     28일만 쓰면 반응이 느리고, 7일만 쓰면 하루 튄 값에 휘둘린다.
+
+   재주문점 = 일평균 x (리드타임 + 안전일수)
+     리드타임 동안 팔릴 양 + 여유분. 쿠팡 재고가 이 밑으로 내려가면 조치가 필요하다.
+
+   권장 수량 = 일평균 x (리드타임 + 안전일수 + 보충주기) - (쿠팡+운송중+중국창고)
+     이미 파이프라인에 있는 물량을 빼야 이중 발주가 안 된다. MOQ 이상으로 올림.
+
+   ── 판정 ────────────────────────────────────────────────────
+   쿠팡 재고로 버틸 날이 (리드타임+안전일수)보다 짧으면 조치 필요.
+     중국 창고에 재고가 있으면 -> **입고요청**(새로 사는 것보다 훨씬 빠르다)
+     없으면 -> **발주 필요**
+   판매 이력이 14일 미만인 SKU는 "데이터 부족"으로 표시하고 수량을 제안하지 않는다 —
+   근거 없는 숫자를 자신 있게 내미는 것이 아무 말 안 하는 것보다 나쁘다. */
+const STOCK = { rows: [], defaults: { leadTime: 14, safetyDays: 5, reviewCycle: 14, historyDays: 28 } };
+
+async function loadStock() {
+  const el = $('#stockRows');
+  el.innerHTML = '<tr><td colspan="9" class="muted">불러오는 중…</td></tr>';
+  try {
+    const today = kstDateStr(new Date());
+    const from = addDaysStr(today, -(STOCK.defaults.historyDays - 1));
+    const [skus, listings, lots, wing, gross, poLines, orders] = await Promise.all([
+      apiAll('my_skus?select=id,sku_name,barcode,moq,lead_time_days,safety_days,status'),
+      apiAll('sku_channel_listings?select=sku_id,external_option_id&channel=eq.coupang_rg'),
+      apiAll('inventory_lots?select=id,sku_id,po_line_id,qty_china,qty_transit,qty_coupang,arrived_coupang_at'),
+      apiAll(`rocket_growth_sales_wing_daily?select=sale_date,vendor_item_id,quantity&sale_date=gte.${from}`),
+      apiAll(`rocket_growth_sales_daily?select=sale_date,vendor_item_id,quantity&sale_date=gte.${from}`),
+      apiAll('purchase_order_lines?select=id,po_id,sku_id'),
+      apiAll('purchase_orders?select=id,requested_at')
+    ]);
+
+    const vidBySku = new Map();
+    listings.forEach((l) => {
+      if (!l.external_option_id) return;
+      const arr = vidBySku.get(l.sku_id) || [];
+      arr.push(String(l.external_option_id));
+      vidBySku.set(l.sku_id, arr);
+    });
+
+    /* 판매 병합 규칙은 판매현황과 같다 — 그 날짜에 WING이 있으면 WING만 쓴다 */
+    const wingDates = new Set(wing.map((r) => r.sale_date));
+    const salesByVid = new Map();
+    const addSale = (r) => {
+      const key = String(r.vendor_item_id);
+      const m = salesByVid.get(key) || new Map();
+      m.set(r.sale_date, (m.get(r.sale_date) || 0) + (Number(r.quantity) || 0));
+      salesByVid.set(key, m);
+    };
+    wing.forEach(addSale);
+    gross.forEach((r) => { if (!wingDates.has(r.sale_date)) addSale(r); });
+
+    /* 리드타임 실측: 발주 요청일 → 그 로트가 쿠팡에 도착한 날.
+       예측(설정값)과 실측을 나란히 두는 게 이 프로젝트의 "복리" 방식이다
+       (docs/decisions.md 2026-08-18 "예측을 저장한다"). */
+    const poById = new Map(orders.map((o) => [o.id, o]));
+    const lineById = new Map(poLines.map((l) => [l.id, l]));
+    const leadBySku = new Map();
+    lots.forEach((lot) => {
+      if (!lot.arrived_coupang_at || !lot.sku_id) return;
+      const line = lineById.get(lot.po_line_id);
+      const po = line && poById.get(line.po_id);
+      if (!po || !po.requested_at) return;
+      const days = (new Date(lot.arrived_coupang_at) - new Date(po.requested_at)) / 86400000;
+      if (!(days > 0 && days < 200)) return;
+      const arr = leadBySku.get(lot.sku_id) || [];
+      arr.push(days);
+      leadBySku.set(lot.sku_id, arr);
+    });
+
+    const qtyBySku = new Map();
+    lots.forEach((lot) => {
+      if (!lot.sku_id) return;
+      const q = qtyBySku.get(lot.sku_id) || { china: 0, transit: 0, coupang: 0 };
+      q.china += Number(lot.qty_china) || 0;
+      q.transit += Number(lot.qty_transit) || 0;
+      q.coupang += Number(lot.qty_coupang) || 0;
+      qtyBySku.set(lot.sku_id, q);
+    });
+
+    const d7from = addDaysStr(today, -6);
+    STOCK.rows = skus.map((sku) => {
+      const vids = vidBySku.get(sku.id) || [];
+      let sum7 = 0, sum28 = 0, days = new Set();
+      vids.forEach((vid) => {
+        const m = salesByVid.get(vid);
+        if (!m) return;
+        m.forEach((q, date) => {
+          days.add(date);
+          sum28 += q;
+          if (date >= d7from) sum7 += q;
+        });
+      });
+      /* 판매가 아예 없는 날은 행이 없다 — 0으로 치고 기간 전체로 나눈다 */
+      const avg7 = sum7 / 7;
+      const avg28 = sum28 / STOCK.defaults.historyDays;
+      const daily = Math.round((avg7 * 0.6 + avg28 * 0.4) * 100) / 100;
+
+      const q = qtyBySku.get(sku.id) || { china: 0, transit: 0, coupang: 0 };
+      const measured = leadBySku.get(sku.id);
+      const measuredLead = measured && measured.length
+        ? Math.round((measured.reduce((a, x) => a + x, 0) / measured.length) * 10) / 10 : null;
+      const lead = num(sku.lead_time_days) ?? measuredLead ?? STOCK.defaults.leadTime;
+      const safety = num(sku.safety_days) ?? STOCK.defaults.safetyDays;
+
+      const coverDays = daily > 0 ? q.coupang / daily : null;
+      const pipeline = q.coupang + q.transit + q.china;
+      const target = daily * (lead + safety + STOCK.defaults.reviewCycle);
+      const moq = num(sku.moq) ?? 1;
+      let need = Math.max(0, Math.ceil(target - pipeline));
+      if (need > 0 && need < moq) need = moq;
+
+      const enoughHistory = days.size >= 14 || sum28 > 0;
+      let verdict = 'ok';
+      if (sku.status && sku.status !== 'active') verdict = 'inactive';
+      else if (!enoughHistory) verdict = 'nodata';
+      else if (daily <= 0) verdict = 'nosale';
+      else if (coverDays != null && coverDays < lead + safety) {
+        verdict = q.china > 0 ? 'inbound' : 'order';
+      }
+
+      return { sku, q, daily, avg7, avg28, coverDays, lead, measuredLead, safety, need, moq, verdict, pipeline };
+    });
+
+    renderStock();
+  } catch (e) {
+    el.innerHTML = `<tr><td colspan="9" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+const STOCK_VERDICT = {
+  order:    { label: '발주 필요',   cls: 'warn' },
+  inbound:  { label: '입고요청',    cls: 'mid' },
+  ok:       { label: '정상',        cls: 'dim' },
+  nosale:   { label: '판매 없음',   cls: 'dim' },
+  nodata:   { label: '데이터 부족', cls: 'dim' },
+  inactive: { label: '판매중지',    cls: 'dim' }
+};
+
+function renderStock() {
+  const f = $('#stockFilter').value;
+  const q = ($('#stockSearch').value || '').trim().toLowerCase();
+
+  const rows = STOCK.rows.filter((r) => {
+    if (q) {
+      const hay = `${r.sku.sku_name} ${r.sku.barcode || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (f === 'action') return r.verdict === 'order' || r.verdict === 'inbound';
+    if (f === 'order') return r.verdict === 'order';
+    if (f === 'inbound') return r.verdict === 'inbound';
+    return true;
+  }).sort((a, b) => {
+    const rank = (x) => ({ order: 0, inbound: 1, ok: 2 }[x.verdict] ?? 3);
+    if (rank(a) !== rank(b)) return rank(a) - rank(b);
+    return (a.coverDays ?? 9999) - (b.coverDays ?? 9999);
+  });
+
+  const nOrder = STOCK.rows.filter((r) => r.verdict === 'order').length;
+  const nInbound = STOCK.rows.filter((r) => r.verdict === 'inbound').length;
+  $('#stockSummary').textContent =
+    `발주 필요 ${nOrder} · 입고요청 ${nInbound} · 전체 SKU ${STOCK.rows.length}`;
+  $('#stockNote').textContent =
+    `일평균 = 최근 7일 평균×0.6 + 최근 ${STOCK.defaults.historyDays}일 평균×0.4 · ` +
+    `재주문점 = 일평균×(리드타임+안전 ${STOCK.defaults.safetyDays}일) · ` +
+    `권장 수량 = 일평균×(리드타임+안전+보충 ${STOCK.defaults.reviewCycle}일) − 이미 가진 물량, MOQ 이상 올림`;
+
+  $('#stockRows').innerHTML = rows.length ? rows.map((r) => {
+    const v = STOCK_VERDICT[r.verdict] || STOCK_VERDICT.ok;
+    const cover = r.coverDays == null ? '—'
+      : (r.coverDays < 999 ? `${Math.floor(r.coverDays)}일` : '—');
+    const leadTxt = `${r.lead}일` + (r.measuredLead != null && num(r.sku.lead_time_days) == null
+      ? '<span class="sku-name-sub">실측</span>' : '');
+    return `<tr>
+      <td>${esc(r.sku.sku_name)}<span class="sku-name-sub">${esc(r.sku.barcode || '바코드 없음')}</span></td>
+      <td class="col-num">${r.q.coupang || '—'}</td>
+      <td class="col-num">${r.q.transit || '—'}</td>
+      <td class="col-num">${r.q.china || '—'}</td>
+      <td class="col-num">${r.daily > 0 ? r.daily.toFixed(1) : '—'}</td>
+      <td class="col-num ${r.verdict === 'order' || r.verdict === 'inbound' ? 'warn-txt' : ''}">${cover}</td>
+      <td class="col-num">${leadTxt}</td>
+      <td><span class="prog prog-${v.cls}">${esc(v.label)}</span></td>
+      <td class="col-num">${(r.verdict === 'order' || r.verdict === 'inbound') && r.need > 0
+          ? `<b>${r.need.toLocaleString()}</b>${r.need === r.moq ? '<span class="sku-name-sub">MOQ</span>' : ''}`
+          : '—'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="9" class="muted">해당하는 SKU가 없습니다.</td></tr>';
+}
+$('#stockFilter').onchange = () => renderStock();
+$('#stockSearch').oninput = () => renderStock();
+
 /* ===================== 배대지(제트) 작업비 청구서 파서 =====================
    구매대행 청구서(PDF)와 완전히 다른 문서다. **어떤 상품이 몇 개인지가 아예 없고**
    작업 항목별 단가·건수·금액과 총액만 있다. 그래서 여기서 읽는 건 검산용 총액뿐이고,
@@ -4031,6 +4231,7 @@ $$('.nav-item').forEach((btn) => {
     closeSidebar();
 
     if (page === 'po')         loadPOs();
+    if (page === 'stock')      loadStock();
     if (page === 'ship')       loadShip();
     if (page === 'skus')       loadSkus();
     if (page === 'sales')      loadSales();
