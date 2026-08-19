@@ -24,6 +24,7 @@ migrations/018_registry_item_name.sql  rocket_growth_product_registry에 item_na
 migrations/019_work_fee_and_lot_split.sql  배대지 작업비(my_skus.work_fee_items) + 불량 수량(purchase_order_lines.defect_qty) + 로트 분할(inventory_lots.split_from_lot_id) + 원가를 구매대행분/작업비로 나눠 컬럼화
 migrations/020_lot_arrival.sql  로트 도착 수량(qty_arrived)·불량(qty_defect)·불량처리(refund/loss) 추가. 예전엔 로트 생성 시 qty_china에 발주수량을 그대로 넣어 '아직 안 온 물건이 창고에 있는' 상태였다 — 그걸 바로잡는 마이그레이션
 migrations/021_lot_without_sku.sql  inventory_lots.sku_id를 nullable로. 상품 등록 전에 먼저 발주하는 경우가 있어서 — 물건은 중국에 실재하는데 SKU가 없다고 로트를 안 만들면 시스템에 존재하지 않게 된다
+migrations/022_cancel_and_deposit.sql  로트 취소(qty_cancelled·사유) + 예치금 기록 확장(lot/sku/qty/reason/추정액/expected·confirmed·void 상태). 환불액이 상황마다 달라 추정만 하고 사람이 고친다
 ```
 
 **이미 실행된 파일은 절대 수정하지 않는다.** 스키마를 바꿔야 하면 `004_설명.sql`처럼 새 번호로 추가한다. 모든 마이그레이션은 `if not exists`/`drop ... if exists`를 써서 **여러 번 실행해도 안전**하게 만든다 — 이 관례를 유지할 것.

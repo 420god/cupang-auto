@@ -3349,7 +3349,7 @@ $('#poSave').onclick = async () => {
 const INB = { lots: [], lines: [], skuById: new Map(), lineById: new Map(), poById: new Map() };
 
 async function loadInbound() {
-  $('#inboundWaitRows').innerHTML = '<tr><td colspan="8" class="muted">불러오는 중…</td></tr>';
+  $('#inboundWaitRows').innerHTML = '<tr><td colspan="9" class="muted">불러오는 중…</td></tr>';
   try {
     const [lots, skus, lines, orders] = await Promise.all([
       apiAll('inventory_lots?select=*'),
@@ -3364,7 +3364,7 @@ async function loadInbound() {
     INB.poById = new Map(orders.map((o) => [o.id, o]));
     renderInbound();
   } catch (e) {
-    $('#inboundWaitRows').innerHTML = `<tr><td colspan="8" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
+    $('#inboundWaitRows').innerHTML = `<tr><td colspan="9" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
   }
 }
 
@@ -3388,8 +3388,10 @@ const inbSkuBarcode = (lot) => {
 };
 
 function renderInbound() {
+  /* 취소된 로트도 목록에 남긴다 — 안 그러면 전량 취소한 순간 행이 사라져서
+     실수로 눌렀을 때 되돌릴 방법이 없다(사용자가 되돌리기를 요청, 2026-08-18). */
   const waiting = INB.lots
-    .filter((l) => lotIncoming(l) > 0)
+    .filter((l) => lotIncoming(l) > 0 || (Number(l.qty_cancelled) || 0) > 0)
     .sort((a, b) => String(inbPoDate(a)).localeCompare(String(inbPoDate(b))));
   const inStock = INB.lots
     .filter((l) => (Number(l.qty_china) || 0) > 0)
@@ -3437,15 +3439,19 @@ function renderInbound() {
       <td>${esc(inbPoDate(l))}</td>
       <td>${esc(inbSkuName(l))}<span class="sku-name-sub">${esc(inbSkuBarcode(l))}</span></td>
       <td class="col-num">${l.qty_ordered || 0}</td>
-      <td class="col-num">${l.qty_arrived || 0}</td>
+      <td class="col-num">${l.qty_arrived || 0}${l.qty_cancelled
+          ? `<span class="sku-name-sub">취소 ${l.qty_cancelled}</span>` : ''}</td>
       <td class="col-num"><b>${left}</b></td>
       <td class="col-num"><input type="number" class="inb-arrive defect-input" min="0" max="${left}"
             data-lot="${esc(l.id)}" value="${left}" /></td>
       <td class="col-num"><input type="number" class="inb-defect defect-input" min="0"
             data-lot="${esc(l.id)}" value="0" /></td>
-      <td><button class="btn btn-sm btn-primary inb-receive" data-lot="${esc(l.id)}">도착 처리</button></td>
+      <td><button class="btn btn-sm btn-primary inb-receive" data-lot="${esc(l.id)}" ${left ? '' : 'disabled'}>도착 처리</button></td>
+      <td>${(Number(l.qty_cancelled) || 0) > 0
+          ? `<button class="btn btn-sm btn-ghost inb-uncancel" data-lot="${esc(l.id)}">취소 되돌리기</button>`
+          : `<button class="btn btn-sm inb-cancel" data-lot="${esc(l.id)}">취소</button>`}</td>
     </tr>`;
-  }).join('') : '<tr><td colspan="8" class="muted">도착 대기 중인 물량이 없습니다. (발주한 물량이 전부 도착했거나, 아직 SKU가 연결되지 않아 로트가 없는 상태입니다)</td></tr>';
+  }).join('') : '<tr><td colspan="9" class="muted">도착 대기 중인 물량이 없습니다. (발주한 물량이 전부 도착했거나, 아직 SKU가 연결되지 않아 로트가 없는 상태입니다)</td></tr>';
 
   $('#inboundStockRows').innerHTML = inStock.length ? inStock.map((l) => `<tr>
       <td>${esc(inbPoDate(l))}</td>
@@ -3520,6 +3526,150 @@ $('#inboundWaitRows').addEventListener('click', async (ev) => {
   }
 });
 
+/* ── 발주 취소 ────────────────────────────────────────────────
+   판매자가 못 팔겠다고 하는 경우다. 취소분은 영영 안 오므로 미도착에서 빼고,
+   금액은 예치금으로 돌아온다.
+
+   **환불액은 추정만 하고 사람이 고친다**(사용자 확인 2026-08-18):
+     배송 전 취소 -> 배송비까지 돌아온다
+     배송 후 취소 -> 판매자에 따라 다르다(배송비를 내가 부담하는 경우도 있다)
+   그래서 상품가만/전액 두 값을 참고로 보여주고 입력칸은 열어둔다. */
+const CANCEL = { lot: null };
+
+$('#inboundWaitRows').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.inb-cancel');
+  if (!btn) return;
+  const lot = INB.lots.find((l) => String(l.id) === String(btn.dataset.lot));
+  if (!lot) return;
+  CANCEL.lot = lot;
+
+  const left = lotIncoming(lot);
+  const purchase = Number(lot.unit_purchase_cost_krw != null
+    ? lot.unit_purchase_cost_krw : lot.unit_cost_krw) || 0;
+  const bd = lot.cost_breakdown || {};
+  const rate = Number(bd.rate_purchase) || 0;
+  /* 상품가만 = 개당 원가에서 배송비 배분분을 뺀 값. 청구서의 CNY 배분액에 환율을 곱해 되돌린다. */
+  const shipPerUnit = (rate && bd.cny_shipping_alloc && lot.qty_ordered)
+    ? Math.round((Number(bd.cny_shipping_alloc) / lot.qty_ordered) * rate) : 0;
+  const goodsOnly = Math.max(0, purchase - shipPerUnit);
+
+  $('#cancelTitle').textContent = `발주 취소 — ${inbSkuName(lot)}`;
+  $('#cancelRo').innerHTML = [
+    ['발주', `${lot.qty_ordered || 0}개`],
+    ['이미 도착', `${lot.qty_arrived || 0}개`],
+    ['취소 가능', `${left}개`],
+    ['개당 원가', `${Math.round(purchase).toLocaleString()}원`]
+  ].map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join('');
+
+  $('#cancelQty').value = left;
+  $('#cancelQty').max = left;
+  $('#cancelReason').value = 'seller_unavailable';
+  $('#cancelMemo').value = '';
+  $('#cancelDeposit').value = 'yes';
+  $('#cancelMsg').className = 'msg hidden';
+  CANCEL.goodsOnly = goodsOnly;
+  CANCEL.full = Math.round(purchase);
+  cancelRefreshHint();
+  $('#cancelModal').classList.remove('hidden');
+});
+
+function cancelRefreshHint() {
+  const qty = Math.max(0, parseInt($('#cancelQty').value, 10) || 0);
+  const a = CANCEL.goodsOnly * qty, b = CANCEL.full * qty;
+  $('#cancelHint').innerHTML =
+    `참고: 상품가만 <b>${a.toLocaleString()}원</b> · 배송비 포함 <b>${b.toLocaleString()}원</b><br>` +
+    '<span class="muted">배송 전 취소면 배송비까지 돌아오고, 배송 후면 판매자마다 다릅니다. ' +
+    '실제 금액을 아시면 직접 고치세요 — 나중에 실제 입금과 맞춰볼 때 이 값이 기준이 됩니다.</span>';
+  $('#cancelRefund').value = b;   // 기본은 전액 — 덜 받으면 줄이는 쪽이 자연스럽다
+}
+$('#cancelQty').oninput = () => cancelRefreshHint();
+$$('#cancelModal [data-close]').forEach((b) => { b.onclick = () => $('#cancelModal').classList.add('hidden'); });
+
+/* 취소 되돌리기 — 취소 수량을 0으로 돌리고, 그 로트로 만들어진 환불 기록을 void로 바꾼다.
+   기록을 지우지 않고 void로 남기는 이유: "취소했다가 되돌렸다"도 사실이고, 예치금을
+   실제 입금과 맞출 때 지워진 기록보다 무효 표시된 기록이 훨씬 추적하기 쉽다. */
+$('#inboundWaitRows').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('.inb-uncancel');
+  if (!btn) return;
+  const lot = INB.lots.find((l) => String(l.id) === String(btn.dataset.lot));
+  if (!lot) return;
+  btn.disabled = true;
+  try {
+    await api(`inventory_lots?id=eq.${encodeURIComponent(lot.id)}`, {
+      method: 'PATCH', headers: { prefer: 'return=minimal' },
+      body: { qty_cancelled: 0, cancel_reason: null, cancel_memo: null }
+    });
+    await api(`supplier_deposits?lot_id=eq.${encodeURIComponent(lot.id)}&reason=eq.cancel&status=eq.expected`, {
+      method: 'PATCH', headers: { prefer: 'return=minimal' }, body: { status: 'void' }
+    });
+    lot.qty_cancelled = 0; lot.cancel_reason = null;
+    toast('취소를 되돌렸습니다 — 환불 기록도 무효 처리했습니다');
+    renderInbound();
+  } catch (e) {
+    toast('되돌리기 실패: ' + e.message, 4000);
+    btn.disabled = false;
+  }
+});
+
+$('#cancelSave').onclick = async () => {
+  const lot = CANCEL.lot;
+  if (!lot) return;
+  const btn = $('#cancelSave');
+  const msg = $('#cancelMsg');
+  const left = lotIncoming(lot);
+  const qty = Math.min(left, Math.max(0, parseInt($('#cancelQty').value, 10) || 0));
+  if (qty <= 0) { msg.className = 'msg err'; msg.textContent = '취소 수량을 입력하세요.'; return; }
+
+  btn.disabled = true;
+  try {
+    const reason = $('#cancelReason').value;
+    const memo = $('#cancelMemo').value.trim() || null;
+    await api(`inventory_lots?id=eq.${encodeURIComponent(lot.id)}`, {
+      method: 'PATCH', headers: { prefer: 'return=minimal' },
+      body: {
+        qty_cancelled: (Number(lot.qty_cancelled) || 0) + qty,
+        cancel_reason: reason,
+        cancel_memo: memo
+      }
+    });
+    lot.qty_cancelled = (Number(lot.qty_cancelled) || 0) + qty;
+    lot.cancel_reason = reason;
+
+    if ($('#cancelDeposit').value === 'yes') {
+      const refund = Math.max(0, Math.round(Number($('#cancelRefund').value) || 0));
+      const line = INB.lineById.get(lot.po_line_id);
+      /* status='expected' — 아직 실제로 입금된 게 아니다. 예치금은 그때그때 들어오므로
+         나중에 실제 입금과 맞춰본 뒤 confirmed로 바꾼다(사용자 확인). */
+      await api('supplier_deposits', {
+        method: 'POST', headers: { prefer: 'return=minimal' },
+        body: [{
+          occurred_at: new Date().toISOString(),
+          type: 'refund',
+          reason: 'cancel',
+          amount_krw: refund,
+          estimated_amount_krw: CANCEL.full * qty,
+          status: 'expected',
+          lot_id: lot.id,
+          sku_id: lot.sku_id || null,
+          qty,
+          po_id: line ? line.po_id : null,
+          memo: `발주 취소 — ${inbSkuName(lot)} ${qty}개 (${$('#cancelReason').selectedOptions[0].text})`
+            + (memo ? ` / ${memo}` : '')
+        }]
+      });
+    }
+
+    $('#cancelModal').classList.add('hidden');
+    toast(`취소 ${qty}개 처리${$('#cancelDeposit').value === 'yes' ? ' · 예치금 환불 예정으로 기록' : ''}`);
+    renderInbound();
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = '취소 처리 실패: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
 $('#inboundStockRows').addEventListener('click', async (ev) => {
   const btn = ev.target.closest('.inb-defect-apply');
   if (!btn) return;
@@ -3545,8 +3695,31 @@ $('#inboundStockRows').addEventListener('click', async (ev) => {
       method: 'PATCH', headers: { prefer: 'return=minimal' }, body
     });
     Object.assign(lot, body);
+
+    /* 환불로 처리하기로 했으면 예치금 기록도 같이 남긴다(사용자 요청 2026-08-18).
+       금액은 개당 원가 x 수량으로 추정하고, status='expected'로 둔다 —
+       불량 환불도 판매자마다 달라서 실제 입금과 맞춰본 뒤 확정해야 한다. */
+    if (body.defect_disposition === 'refund') {
+      const unit = Number(lot.unit_purchase_cost_krw != null
+        ? lot.unit_purchase_cost_krw : lot.unit_cost_krw) || 0;
+      const line = INB.lineById.get(lot.po_line_id);
+      await api('supplier_deposits', {
+        method: 'POST', headers: { prefer: 'return=minimal' },
+        body: [{
+          occurred_at: new Date().toISOString(),
+          type: 'refund', reason: 'defect',
+          amount_krw: Math.round(unit * add),
+          estimated_amount_krw: Math.round(unit * add),
+          status: 'expected',
+          lot_id: lot.id, sku_id: lot.sku_id || null, qty: add,
+          po_id: line ? line.po_id : null,
+          memo: `불량 ${add}개 — ${inbSkuName(lot)}`
+        }]
+      });
+    }
+
     msg.className = 'msg hidden';
-    toast(`불량 ${add}개 반영 — ${body.defect_disposition === 'refund' ? '예치금 환불 대상' : '손실 처리'}`);
+    toast(`불량 ${add}개 반영 — ${body.defect_disposition === 'refund' ? '예치금 환불 예정으로 기록' : '손실 처리'}`);
     renderInbound();
   } catch (e) {
     msg.className = 'msg err';
@@ -3589,7 +3762,7 @@ async function loadStock() {
     const [skus, listings, lots, wing, gross, poLines, orders] = await Promise.all([
       apiAll('my_skus?select=id,sku_name,barcode,moq,lead_time_days,safety_days,status'),
       apiAll('sku_channel_listings?select=sku_id,external_option_id&channel=eq.coupang_rg'),
-      apiAll('inventory_lots?select=id,sku_id,po_line_id,qty_ordered,qty_arrived,qty_china,qty_transit,qty_coupang,arrived_coupang_at'),
+      apiAll('inventory_lots?select=id,sku_id,po_line_id,qty_ordered,qty_arrived,qty_cancelled,qty_china,qty_transit,qty_coupang,arrived_coupang_at'),
       apiAll(`rocket_growth_sales_wing_daily?select=sale_date,vendor_item_id,quantity&sale_date=gte.${from}`),
       apiAll(`rocket_growth_sales_daily?select=sale_date,vendor_item_id,quantity&sale_date=gte.${from}`),
       apiAll('purchase_order_lines?select=id,po_id,sku_id'),
@@ -3640,7 +3813,8 @@ async function loadStock() {
       const q = qtyBySku.get(lot.sku_id) || { china: 0, transit: 0, coupang: 0, incoming: 0 };
       /* 아직 중국에도 안 온 물량(발주수량 − 도착수량)도 파이프라인이다 —
          이걸 빼먹으면 이미 주문한 걸 또 발주하게 된다(020). */
-      q.incoming += Math.max(0, (Number(lot.qty_ordered) || 0) - (Number(lot.qty_arrived) || 0));
+      q.incoming += Math.max(0, (Number(lot.qty_ordered) || 0)
+        - (Number(lot.qty_arrived) || 0) - (Number(lot.qty_cancelled) || 0));
       q.china += Number(lot.qty_china) || 0;
       q.transit += Number(lot.qty_transit) || 0;
       q.coupang += Number(lot.qty_coupang) || 0;
@@ -3834,7 +4008,9 @@ const SHIP = { skus: [], lots: [], byPoLine: new Map(), poById: new Map(), hist:
    발주 단위 상태로는 표현이 안 됐다. 이제 미도착 = 발주수량 − 도착수량이고,
    창고에 실제로 있는 건 qty_china 하나뿐이라 우회 판정이 필요 없다. */
 function lotIncoming(lot) {
-  return Math.max(0, (Number(lot.qty_ordered) || 0) - (Number(lot.qty_arrived) || 0));
+  return Math.max(0, (Number(lot.qty_ordered) || 0)
+    - (Number(lot.qty_arrived) || 0)
+    - (Number(lot.qty_cancelled) || 0));   // 취소분은 영영 안 온다(022)
 }
 
 function skuWorkFee(sku) {
