@@ -623,6 +623,12 @@
         <label class="field"><span>우리 계산 합계</span>
           <input id="shipComputed" type="number" readonly /></label>
       </div>
+      <div id="shipDrop" class="dropzone dropzone-sm">
+        <b>작업비 청구서를 여기에 끌어다 놓으세요</b>
+        <span class="muted sm">엑셀(xlsx) · PDF · 또는 클릭해서 선택 — 없으면 그냥 저장해도 됩니다</span>
+        <input id="shipFile" type="file" accept=".xlsx,.xls,application/pdf" hidden />
+      </div>
+      <div id="shipInvoiceInfo" class="msg hidden"></div>
       <p id="shipCheck" class="muted sm"></p>
 
       <div class="table-wrap po-lines-wrap">

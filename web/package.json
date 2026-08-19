@@ -1,9 +1,10 @@
 {
   "name": "coupang-sourcing-web",
   "private": true,
-  "description": "정적 사이트 + web/api/*.js 서버리스 함수(Vercel). 프론트엔드는 여전히 번들러 없는 순수 HTML/CSS/JS. 여기 의존성은 api/ 전용: undici는 sales-today.js(프록시), pdf-parse는 parse-invoice.js(청구서 PDF 텍스트 추출).",
+  "description": "정적 사이트 + web/api/*.js 서버리스 함수(Vercel). 프론트엔드는 여전히 번들러 없는 순수 HTML/CSS/JS. 여기 의존성은 api/ 전용: undici는 sales-today.js(프록시), pdf-parse·xlsx는 parse-invoice.js(청구서 PDF/엑셀 읽기).",
   "dependencies": {
     "undici": "^6.0.0",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "xlsx": "^0.18.5"
   }
 }

@@ -102,10 +102,33 @@ module.exports = async (req, res) => {
       res.status(400).json({ error: '빈 요청입니다.' });
       return;
     }
-    /* %PDF 시그니처 확인 — 다른 파일을 끌어다 놨을 때 라이브러리 내부 에러 대신
-       사람이 읽을 수 있는 메시지를 주기 위함 */
-    if (buf.slice(0, 4).toString('latin1') !== '%PDF') {
-      res.status(400).json({ error: 'PDF 파일이 아닙니다.' });
+    /* 파일 종류는 확장자나 content-type이 아니라 **시그니처(매직 바이트)로 가른다** —
+       카톡으로 받은 파일은 확장자가 바뀌어 있거나 content-type이 엉뚱하게 오는 일이 흔하다.
+         %PDF...  구매대행 청구서
+         PK\x03\x04  ZIP = xlsx (배대지 작업비 청구서)
+       사용자가 "작업비 청구서는 지금은 엑셀인데 나중에 PDF로 올 수도 있다"고 해서
+       한 엔드포인트가 둘 다 받는다(2026-08-18). */
+    const head4 = buf.slice(0, 4);
+    const isPdf = head4.toString('latin1') === '%PDF';
+    const isZip = head4[0] === 0x50 && head4[1] === 0x4B;   // 'PK'
+
+    if (isZip) {
+      const XLSX = require('xlsx');
+      const wb = XLSX.read(buf, { type: 'buffer' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      if (!ws) {
+        res.status(400).json({ error: '엑셀에 시트가 없습니다.' });
+        return;
+      }
+      /* header:1 = 셀을 있는 그대로 2차원 배열로. 병합·서식은 무시하고 값만 본다 —
+         줄 구조를 해석하는 건 브라우저(parseZetInvoice)의 몫이다(PDF와 같은 역할 분리). */
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+      res.status(200).json({ kind: 'xlsx', sheet: wb.SheetNames[0], rows });
+      return;
+    }
+
+    if (!isPdf) {
+      res.status(400).json({ error: 'PDF나 엑셀 파일이 아닙니다.' });
       return;
     }
     /* 좌표 기반 추출을 먼저 시도하고, 그게 실패하면 pdf-parse 기본 추출로 물러선다.
@@ -117,13 +140,14 @@ module.exports = async (req, res) => {
       const d = await pdf(buf, { pagerender: renderPageByPosition });
       text = d.text || '';
       if (!text.trim()) throw new Error('빈 텍스트');
-      res.status(200).json({ text, pages: d.numpages || null, method });
+      res.status(200).json({ kind: 'pdf', text, pages: d.numpages || null, method });
       return;
     } catch (inner) {
       method = 'pdf-parse-default';
     }
     const data = await pdf(buf);
     res.status(200).json({
+      kind: 'pdf',
       text: data.text || '',
       pages: data.numpages || null,
       method

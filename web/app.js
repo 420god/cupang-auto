@@ -3322,6 +3322,61 @@ $('#poSave').onclick = async () => {
   }
 };
 
+/* ===================== 배대지(제트) 작업비 청구서 파서 =====================
+   구매대행 청구서(PDF)와 완전히 다른 문서다. **어떤 상품이 몇 개인지가 아예 없고**
+   작업 항목별 단가·건수·금액과 총액만 있다. 그래서 여기서 읽는 건 검산용 총액뿐이고,
+   상품별 배분은 화면에서 SKU 기본 작업비로 계산한 값을 쓴다(사용자와 확인, 2026-08-18).
+
+   실제 구조(2026-07-31 청구서 기준, 0-based 열):
+     3열=단가, 4열=건수, 5열=청구금액
+     "입고분류/검수/포장"  200원 x 447건 = 89,400원
+     "바코드작업/원산지작업" 100원 x 894건 = 89,400원
+     ...
+     "청구 금액 합계"  178,800
+     "부가세"           17,880
+     "총 금액 합계"    196,680
+
+   **빈 칸이 null이 아니라 공백 두 개('  ')나 '-'로 오는 칸이 많다** — 숫자인지부터
+   확인해야 한다. 항목 행은 "단가·건수·금액이 모두 숫자이고 금액이 0보다 큰" 것만 고른다
+   (금액 0인 행은 요금표에만 있고 이번에 청구되지 않은 항목이다). */
+function parseZetInvoice(rows) {
+  const isNum = (v) => typeof v === 'number' && isFinite(v);
+  const norm = (v) => String(v == null ? '' : v).replace(/\s+/g, '');
+
+  let totalKrw = null, vatKrw = null, grandTotalKrw = null, rateNote = null;
+  const items = [];
+
+  (rows || []).forEach((r) => {
+    if (!Array.isArray(r)) return;
+    const label = norm(r[0]);
+    const amount = r.find((c, i) => i >= 5 && isNum(c));
+
+    if (label === '청구금액합계' && isNum(amount)) totalKrw = amount;
+    else if (label === '부가세' && isNum(amount)) vatKrw = amount;
+    else if (label === '총금액합계' && isNum(amount)) grandTotalKrw = amount;
+
+    /* 구매대행 환율이 비고란에 문장으로 적혀 있다("... x 270 일괄적용").
+       계산에 쓰진 않지만 화면에 보여주면 환율이 바뀐 걸 눈치챌 수 있다. */
+    if (!rateNote) {
+      const joined = r.map((c) => (c == null ? '' : String(c))).join(' ');
+      const m = joined.match(/x\s*(\d{2,4})\s*일괄적용/);
+      if (m) rateNote = { rate: Number(m[1]), text: joined.trim() };
+    }
+
+    if (isNum(r[3]) && isNum(r[4]) && isNum(r[5]) && r[5] > 0) {
+      items.push({ name: String(r[1] || r[0] || '').trim(), unit: r[3], count: r[4], amount: r[5] });
+    }
+  });
+
+  const itemSum = items.reduce((a, x) => a + x.amount, 0);
+  return {
+    totalKrw, vatKrw, grandTotalKrw, items, rateNote, itemSum,
+    /* 항목 합과 "청구 금액 합계"가 다르면 우리가 못 읽은 항목이 있다는 뜻이다 */
+    itemMismatch: (totalKrw != null && Math.abs(itemSum - totalKrw) > 1) ? itemSum - totalKrw : 0,
+    error: totalKrw == null ? '청구 금액 합계를 찾지 못했습니다.' : null
+  };
+}
+
 /* ===================== 출고 =====================
    중국 배대지 창고에 있는 것을 골라 한국(쿠팡센터)으로 보내는 화면.
 
@@ -3504,6 +3559,9 @@ $('#shipNewBtn').onclick = () => {
   $('#shipDate').value = new Date().toISOString().slice(0, 10);
   $('#shipInvoiceTotal').value = '';
   $('#shipMsg').className = 'msg hidden';
+  $('#shipInvoiceInfo').className = 'msg hidden';
+  $('#shipFile').value = '';
+  SHIP.invoice = null;
   renderShipPicks();
   $('#shipModal').classList.remove('hidden');
 };
@@ -3561,6 +3619,62 @@ $('#shipPickRows').addEventListener('change', (ev) => {
   }
 });
 $('#shipInvoiceTotal').oninput = () => renderShipPicks();
+
+/* 작업비 청구서 업로드 — PDF와 같은 엔드포인트를 쓰고 응답의 kind로 갈린다.
+   읽는 건 총액·부가세뿐이고, 상품별 배분은 화면의 SKU 작업비가 담당한다. */
+$('#shipDrop').onclick = () => $('#shipFile').click();
+$('#shipDrop').addEventListener('dragover', (e) => { e.preventDefault(); $('#shipDrop').classList.add('over'); });
+$('#shipDrop').addEventListener('dragleave', () => $('#shipDrop').classList.remove('over'));
+$('#shipDrop').addEventListener('drop', (e) => {
+  e.preventDefault();
+  $('#shipDrop').classList.remove('over');
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) shipHandleFile(f);
+});
+$('#shipFile').onchange = (e) => { const f = e.target.files[0]; if (f) shipHandleFile(f); };
+
+async function shipHandleFile(file) {
+  const info = $('#shipInvoiceInfo');
+  info.className = 'msg';
+  info.textContent = '청구서 읽는 중…';
+  try {
+    const buf = await file.arrayBuffer();
+    const res = await fetch('/api/parse-invoice', {
+      method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: buf
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+    if (d.kind !== 'xlsx') throw new Error('엑셀 청구서만 자동 인식됩니다. PDF면 총액을 직접 넣어주세요.');
+
+    const z = parseZetInvoice(d.rows);
+    if (z.error) throw new Error(z.error);
+
+    SHIP.invoice = z;
+    $('#shipInvoiceTotal').value = z.totalKrw;
+
+    const lines = [
+      `<b>청구 금액 합계 ${z.totalKrw.toLocaleString()}원</b>` +
+      (z.vatKrw != null ? ` · 부가세 ${z.vatKrw.toLocaleString()}원` : '') +
+      (z.grandTotalKrw != null ? ` · 총액 ${z.grandTotalKrw.toLocaleString()}원` : '')
+    ];
+    z.items.forEach((it) => {
+      lines.push(`${esc(it.name)} — ${it.unit.toLocaleString()}원 × ${it.count.toLocaleString()}건 = ${it.amount.toLocaleString()}원`);
+    });
+    if (z.itemMismatch) {
+      lines.push(`<span class="warn-txt">항목 합계가 청구 금액 합계와 ${z.itemMismatch > 0 ? '+' : ''}${z.itemMismatch.toLocaleString()}원 차이 — 못 읽은 항목이 있을 수 있습니다.</span>`);
+    }
+    if (z.rateNote) {
+      lines.push(`<span class="muted">구매대행 적용 환율 ${z.rateNote.rate} (청구서 비고란)</span>`);
+    }
+    info.className = 'msg';
+    info.innerHTML = lines.join('<br>');
+    renderShipPicks();
+  } catch (e) {
+    SHIP.invoice = null;
+    info.className = 'msg err';
+    info.textContent = '청구서 인식 실패: ' + e.message;
+  }
+}
 $('#shipAll').onchange = (ev) => {
   SHIP.picks.forEach((p) => { p.on = ev.target.checked; });
   renderShipPicks();
@@ -3583,7 +3697,11 @@ $('#shipSave').onclick = async () => {
         shipping_method: $('#shipMethod').value,
         computed_work_fee_krw: computed,
         work_fee_total_krw: invoiceTotal,
-        invoice_source: invoiceTotal ? 'manual' : 'none',
+        vat_krw: SHIP.invoice ? SHIP.invoice.vatKrw : null,
+        grand_total_krw: SHIP.invoice ? SHIP.invoice.grandTotalKrw : null,
+        /* 총액이 파일에서 온 건지 손으로 넣은 건지 남긴다 — 나중에 신뢰도를 판단하려면
+           출처가 필요하다(프로젝트 원칙: 근거 데이터 소스를 추적 가능하게). */
+        invoice_source: SHIP.invoice ? 'xlsx' : (invoiceTotal ? 'manual' : 'none'),
         confirmed_by_user: true
       }]
     }))[0];
