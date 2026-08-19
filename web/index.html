@@ -94,6 +94,10 @@
         <svg viewBox="0 0 24 24"><path d="M3 9h18M7 3v4M17 3v4M4 5h16v16H4zM8 13h8M8 17h5"/></svg>
         <span>발주</span>
       </button>
+      <button class="nav-item" data-page="ship">
+        <svg viewBox="0 0 24 24"><path d="M3 17h2l2-9h10l2 9h2M8 21h8M5 8h14M12 3v5"/></svg>
+        <span>출고</span>
+      </button>
       <button class="nav-item" data-page="skus">
         <svg viewBox="0 0 24 24"><path d="M4 7l8-4 8 4-8 4zM4 7v10l8 4 8-4V7M12 11v10"/></svg>
         <span>상품원장</span>
@@ -402,6 +406,62 @@
         </div>
       </section>
 
+      <!-- ── 출고 ── -->
+      <section id="page-ship" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>출고</h2>
+            <p class="muted sm" id="shipSummary">—</p>
+          </div>
+          <div class="page-actions">
+            <select id="shipFilter" class="ship-filter">
+              <option value="all">전체</option>
+              <option value="china">중국창고 (출고 가능)</option>
+              <option value="incoming">도착 예정</option>
+              <option value="transit">쿠팡 출고중</option>
+              <option value="coupang">쿠팡센터</option>
+            </select>
+            <button id="shipNewBtn" class="btn btn-sm btn-primary">출고 만들기</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>상품 · 옵션</th>
+                <th class="col-num">도착 예정</th>
+                <th class="col-num">중국창고</th>
+                <th class="col-num">출고중</th>
+                <th class="col-num">쿠팡센터</th>
+                <th class="col-num">개당원가</th>
+              </tr>
+            </thead>
+            <tbody id="shipRows"></tbody>
+          </table>
+        </div>
+
+        <div class="page-head sales-detail-head">
+          <div><h3>출고 이력</h3></div>
+        </div>
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>출고일</th>
+                <th class="col-num">품목</th>
+                <th class="col-num">수량</th>
+                <th class="col-num">작업비(계산)</th>
+                <th class="col-num">청구서</th>
+                <th>상태</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="shipHistRows"></tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- ── 상품원장 ── -->
       <section id="page-skus" class="page hidden">
         <div class="page-head">
@@ -535,6 +595,56 @@
     <div class="modal-foot">
       <button class="btn btn-ghost" data-close>취소</button>
       <button id="settingsSave" class="btn btn-primary">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 출고 만들기 — 중국 창고에 있는 것을 골라 한국으로 보낸다 -->
+<div id="shipModal" class="modal hidden">
+  <div class="modal-backdrop" data-close></div>
+  <div class="modal-card modal-xwide">
+    <div class="modal-head">
+      <h3>출고 만들기</h3>
+      <button class="icon-btn" data-close aria-label="닫기">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="po-meta">
+        <label class="field"><span>출고일</span><input id="shipDate" type="date" /></label>
+        <label class="field"><span>운송 방식</span>
+          <select id="shipMethod">
+            <option value="milkrun_parcel">밀크런 택배</option>
+            <option value="pallet">파렛트</option>
+            <option value="direct_parcel">택배 직납</option>
+          </select></label>
+        <label class="field"><span>청구서 총액 (원, 부가세 제외)</span>
+          <input id="shipInvoiceTotal" type="number" placeholder="없으면 비워두세요" /></label>
+        <label class="field"><span>우리 계산 합계</span>
+          <input id="shipComputed" type="number" readonly /></label>
+      </div>
+      <p id="shipCheck" class="muted sm"></p>
+
+      <div class="table-wrap po-lines-wrap">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th><input type="checkbox" id="shipAll" /></th>
+              <th>상품 · 옵션</th>
+              <th class="col-num">창고</th>
+              <th class="col-num">보낼 수량</th>
+              <th class="col-num">개당 작업비</th>
+              <th class="col-num">작업비 합계</th>
+            </tr>
+          </thead>
+          <tbody id="shipPickRows"></tbody>
+        </table>
+      </div>
+      <div id="shipMsg" class="msg hidden"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close>취소</button>
+      <button id="shipSave" class="btn btn-primary">출고 저장</button>
     </div>
   </div>
 </div>
