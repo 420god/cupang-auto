@@ -24,3 +24,6 @@ scripts/_probe_*.json
 
 # npm 설치 산출물 — 커밋하지 않는다 (VPS/로컬에서 각자 npm install)
 node_modules/
+
+# 정찰 참고용 상품 샘플
+scripts/_probe_sample_product.json
