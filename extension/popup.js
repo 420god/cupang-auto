@@ -2751,6 +2751,10 @@ salesBtn.addEventListener('click', async () => {
 /* 판매분석 화면이 어떤 API를 부르는지 실물로 본다. 이 화면에 방문자·조회·장바구니·
    주문과 광고 성과·유입경로가 다 있어서, 엑셀을 받지 않고 그대로 가져올 수 있다.
    **응답이 크므로 경로별 요약을 먼저 보여준다** — 전문은 각 항목 앞부분만 낸다. */
+/* 판매분석 화면이 어떤 API를 부르는지 실물로 본다. 이 화면에 방문자·조회·장바구니·
+   주문과 유입경로가 다 있어서, 엑셀을 받지 않고 그대로 가져올 수 있다.
+   광고비는 여기서 '요약'만 나오므로 참고용이다 — 상세 내역은 별도 데이터로 받는다.
+   **응답이 크므로 경로별로 앞부분만 낸다.** */
 insightBtn.addEventListener('click', async () => {
   try {
     const tab = await getWingTab();
@@ -2762,27 +2766,19 @@ insightBtn.addEventListener('click', async () => {
     });
     const entries = Object.entries(store);
     if (!entries.length) {
-      setStatus('캡처된 비즈니스 인사이트 API가 없습니다.
-'
-        + 'WING > 비즈니스 인사이트 > 판매 분석 페이지를 연 뒤(날짜도 한 번 바꿔보세요) 다시 시도하세요.', true);
+      setStatus('캡처된 비즈니스 인사이트 API가 없습니다.\n'
+        + 'WING > 비즈니스 인사이트 > 판매 분석 페이지를 연 뒤 다시 시도하세요.\n'
+        + '(날짜도 한 번 바꿔보면 날짜 요청까지 같이 잡힙니다.)', true);
       return;
     }
-    const text = `캡처된 엔드포인트 ${entries.length}개
-
-`
-      + entries.map(([path, c]) =>
-          `--- ${c.method} ${path}
-[전체 URL]
-${c.url}
-[요청 바디]
-${c.reqBody || '(없음)'}
-`
-          + `[응답 앞부분]
-${(c.resText || '(없음)').slice(0, 6000)}`
-        ).join('
-
-');
-    setStatus(text);
+    const parts = entries.map(function (e) {
+      const path = e[0], c = e[1];
+      return '--- ' + c.method + ' ' + path
+        + '\n' + '[전체 URL] ' + c.url
+        + '\n' + '[요청 바디] ' + (c.reqBody || '(없음)')
+        + '\n' + '[응답 앞부분]' + '\n' + (c.resText || '(없음)').slice(0, 6000);
+    });
+    setStatus('캡처된 엔드포인트 ' + entries.length + '개\n\n' + parts.join('\n\n'));
   } catch (err) {
     setStatus('오류: ' + err.message, true);
   }
