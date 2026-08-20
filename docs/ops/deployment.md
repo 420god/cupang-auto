@@ -43,8 +43,10 @@ git commit --allow-empty -m "redeploy" && git push
 
 | 함수 | 의존성 | 상태 |
 |---|---|---|
-| `sales-today.js` | undici | **안 씀** (고정 IP 우회 시도의 잔재) |
 | `parse-invoice.js` | pdf-parse, xlsx | 청구서 PDF/엑셀 읽기 |
+
+**함수는 이것 하나뿐이다.** 쿠팡을 부르는 서버 일은 전부 VPS에 있다 — Vercel은 고정 IP가
+없어서 쿠팡 WAF에 막힌다(유료 프록시까지 사서 실패했다 → `../archive/2026-08-18-decisions.md`).
 
 새 npm 의존성을 추가하면 Vercel 첫 배포가 조금 더 걸린다.
 

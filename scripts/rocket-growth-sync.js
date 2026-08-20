@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* GCP VPS(고정 IP)에서 직접 실행하는 동기화 스크립트.
-   Vercel(web/api/sales-today.js)은 고정 IP가 없어서 쿠팡 WAF에 막혔다 —
+   Vercel은 고정 IP가 없어서 쿠팡 WAF에 막힌다(유료 프록시까지 사서 실패) —
    이 스크립트는 VPS 자체의 고정 IP로 쿠팡 로켓그로스 주문 API를 호출하고,
    결과를 Supabase의 rocket_growth_sales_daily 테이블에 upsert한다
    (db/migrations/005_rocket_growth_sales.sql). 웹은 이 테이블만 읽는다.

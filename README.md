@@ -48,7 +48,7 @@ bash scripts/check_all.sh
 ## 기술 스택
 
 프론트엔드(`web/`, `extension/`)는 Vanilla JavaScript만 사용, 프레임워크·번들러·npm 패키지 없음 — 의도적 선택.
-`web/api/`(서버리스, 현재 미사용)와 `scripts/`(GCP VPS에서 도는 독립 스크립트)는 이 원칙과 무관한 서버사이드 코드라 npm 의존성(`undici`, `dotenv`)을 쓴다.
+`web/api/`(서버리스 — 청구서 읽기 함수 하나)와 `scripts/`(GCP VPS에서 도는 독립 스크립트)는 이 원칙과 무관한 서버사이드 코드라 npm 의존성(`pdf-parse`, `xlsx`, `dotenv`)을 쓴다.
 DB는 Supabase(PostgreSQL) + RLS. 자세한 이유는 `docs/decisions.md`.
 
 ## 문서 지도

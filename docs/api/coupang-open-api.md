@@ -2,7 +2,7 @@
 
 > **언제 읽나**: 상품·주문 동기화(VPS 스크립트)를 고칠 때. 레지스트리가 0행일 때.
 > **최종 검증**: 2026-08-19 (필드명 수정 후 57행 적재 확인)
-> **관련 코드**: `scripts/rocket-growth-sync.js` · `web/api/sales-today.js`
+> **관련 코드**: `scripts/rocket-growth-sync.js`
 
 ## 호출 구조
 
@@ -11,8 +11,8 @@ GCP VPS (고정 IP) → 쿠팡 Open API → Supabase → 웹
 ```
 
 **쿠팡은 WING에 등록한 IP에서만 호출을 허용한다**(그 외 403). Vercel 서버리스는 고정 IP가
-없어서 못 쓴다 — 그래서 VPS cron이다. `web/api/sales-today.js`는 프록시로 우회하려던
-이전 시도의 잔재이고 지금은 아무것도 안 부른다.
+없어서 못 쓴다 — 그래서 VPS다. 유료 고정 IP 프록시로 우회하는 시도까지 해봤지만 쿠팡 WAF가
+IP 대역째로 막았다(`../archive/2026-08-18-decisions.md`). **이 길은 닫혀 있다 — 다시 시도하지 말 것.**
 
 인증: `CEA algorithm=HmacSHA256`. 서명 메시지 = `datetime + method + path + query`.
 
