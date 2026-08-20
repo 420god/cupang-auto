@@ -2771,8 +2771,18 @@ metricsSyncBtn.addEventListener('click', () => {
     }
     const r = res.result || {};
     const done = r.done || [];
+    /* **실패를 먼저 본다.** 순서를 반대로 뒀더니 첫 날짜에서 실패했을 때
+       "새로 받을 날짜가 없습니다"로 나와서 원인을 못 찾았다 — 화면은
+       "없음"과 "실패"를 구분해서 말해야 한다(R-15). */
+    if (r.error) {
+      setStatus('지표 동기화 실패' + (r.stoppedAt ? ' (' + r.stoppedAt + ' 처리 중)' : '') + ':\n'
+        + r.error
+        + (done.length ? '\n\n그 전까지 받은 날: ' + done.length + '일' : ''), true);
+      return;
+    }
     if (!done.length) {
-      setStatus('새로 받을 날짜가 없습니다. (이미 받은 날 ' + (r.skipped || 0) + '일)');
+      setStatus('새로 받을 날짜가 없습니다.\n'
+        + '대상 ' + (r.todo == null ? '?' : r.todo) + '일 · 이미 받은 날 ' + (r.skipped || 0) + '일');
       return;
     }
     const lines = done.map((d) => `${d.date} — 옵션 ${d.items}행 · 유입경로 ${d.traffic}행 (${d.pages}페이지)`);
@@ -2822,6 +2832,7 @@ insightBtn.addEventListener('click', async () => {
       const path = e[0], c = e[1];
       return '--- ' + c.method + ' ' + path
         + '\n' + '[전체 URL] ' + c.url
+        + '\n' + '[요청 헤더] ' + (c.headers ? JSON.stringify(c.headers) : '(없음)')
         + '\n' + '[요청 바디] ' + (c.reqBody || '(없음)')
         + '\n' + '[응답 앞부분]' + '\n' + (c.resText || '(없음)').slice(0, 6000);
     });

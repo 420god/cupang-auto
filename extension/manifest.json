@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "쿠팡윙 카테고리 상품 수집기",
-  "version": "12.4.0",
+  "version": "12.5.0",
   "description": "쿠팡 윙 카테고리별 상품 수집 + 소비자 페이지 판매량/배송유형 보강",
   "permissions": [
     "activeTab",

@@ -461,12 +461,24 @@ const INSIGHT_BASE = '/tenants/rfm-ss/api';
 function pageFetchInsightItems(dateStr) {
   return (async () => {
     try {
+      /* **세션 쿠키만으론 부족한 엔드포인트가 있다.** profit-status/search 가 그랬고,
+         그때 증상은 "Failed to fetch" 뿐이라 원인을 한참 못 찾았다
+         (docs/api/wing-internal.md 함정 1). XSRF-TOKEN 쿠키를 헤더로 되돌려주는
+         CSRF 이중제출 패턴이다. 쿠키는 페이지 컨텍스트에서만 읽힌다.
+         필요 없는 엔드포인트에 붙여도 무해하므로 기본으로 넣는다. */
+      function insightHeaders() {
+        const h = { 'content-type': 'application/json', 'accept': 'application/json, text/plain, */*',
+                    'x-cp-pt-locale': 'ko' };
+        const m = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]*)/);
+        if (m) h['x-xsrf-token'] = decodeURIComponent(m[1]);
+        return h;
+      }
       const out = [];
       let pages = 0;
       for (let pageNumber = 0; pageNumber < 200; pageNumber++) {
         const res = await fetch('/tenants/rfm-ss/api/business-insight/vi-detail-search', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          method: 'POST', credentials: 'include',
+          headers: insightHeaders(),
           body: JSON.stringify({
             startDate: dateStr, endDate: dateStr,          // 같은 날 = 하루치
             registrationTypes: ['NORMAL', 'RFM'],          // 판매자배송 + 로켓그로스
@@ -476,8 +488,13 @@ function pageFetchInsightItems(dateStr) {
         });
         const text = await res.text();
         let body;
-        try { body = JSON.parse(text); } catch (e) { return { ok: false, notLoggedIn: true }; }
-        if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
+        if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 400)}` };
+        try { body = JSON.parse(text); }
+        catch (e) {
+          /* JSON이 아니면 로그인 리다이렉트(HTML)일 가능성이 크지만 단정하지 않는다.
+             본문 앞부분을 같이 돌려줘야 원인을 알 수 있다. */
+          return { ok: false, error: `JSON이 아닌 응답 (HTTP ${res.status}): ${text.slice(0, 300)}` };
+        }
         const list = (body && body.vendorItems) || [];
         pages++;
         out.push(...list);
@@ -498,10 +515,22 @@ function pageFetchInsightItems(dateStr) {
 function pageFetchInsightTraffic(dateStr) {
   return (async () => {
     try {
+      /* **세션 쿠키만으론 부족한 엔드포인트가 있다.** profit-status/search 가 그랬고,
+         그때 증상은 "Failed to fetch" 뿐이라 원인을 한참 못 찾았다
+         (docs/api/wing-internal.md 함정 1). XSRF-TOKEN 쿠키를 헤더로 되돌려주는
+         CSRF 이중제출 패턴이다. 쿠키는 페이지 컨텍스트에서만 읽힌다.
+         필요 없는 엔드포인트에 붙여도 무해하므로 기본으로 넣는다. */
+      function insightHeaders() {
+        const h = { 'content-type': 'application/json', 'accept': 'application/json, text/plain, */*',
+                    'x-cp-pt-locale': 'ko' };
+        const m = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]*)/);
+        if (m) h['x-xsrf-token'] = decodeURIComponent(m[1]);
+        return h;
+      }
       const res = await fetch(
         '/tenants/rfm-ss/api/traffic-insight/distribution/summary/without-subscription?withVariance=true', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          method: 'POST', credentials: 'include',
+          headers: insightHeaders(),
           body: JSON.stringify({
             startDate: dateStr, endDate: dateStr,
             metrics: ['unit_sold_contribution'],
@@ -513,8 +542,9 @@ function pageFetchInsightTraffic(dateStr) {
         });
       const text = await res.text();
       let body;
-      try { body = JSON.parse(text); } catch (e) { return { ok: false, notLoggedIn: true }; }
-      if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
+      if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 400)}` };
+      try { body = JSON.parse(text); }
+      catch (e) { return { ok: false, error: `JSON이 아닌 응답: ${text.slice(0, 300)}` }; }
       return { ok: true, rows: Array.isArray(body) ? body : [] };
     } catch (e) {
       return { ok: false, error: (e && e.message) ? e.message : String(e) };
@@ -527,12 +557,24 @@ function pageFetchInsightTraffic(dateStr) {
 function pageFetchAdStatus(vendorItemIds) {
   return (async () => {
     try {
+      /* **세션 쿠키만으론 부족한 엔드포인트가 있다.** profit-status/search 가 그랬고,
+         그때 증상은 "Failed to fetch" 뿐이라 원인을 한참 못 찾았다
+         (docs/api/wing-internal.md 함정 1). XSRF-TOKEN 쿠키를 헤더로 되돌려주는
+         CSRF 이중제출 패턴이다. 쿠키는 페이지 컨텍스트에서만 읽힌다.
+         필요 없는 엔드포인트에 붙여도 무해하므로 기본으로 넣는다. */
+      function insightHeaders() {
+        const h = { 'content-type': 'application/json', 'accept': 'application/json, text/plain, */*',
+                    'x-cp-pt-locale': 'ko' };
+        const m = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]*)/);
+        if (m) h['x-xsrf-token'] = decodeURIComponent(m[1]);
+        return h;
+      }
       const out = {};
       for (let i = 0; i < vendorItemIds.length; i += 20) {
         const chunk = vendorItemIds.slice(i, i + 20);
         const res = await fetch('/tenants/cmg-wing-card/wing/one-click-setup/condition', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          method: 'POST', credentials: 'include',
+          headers: insightHeaders(),
           body: JSON.stringify({
             type: 'WING_SALES_ANALYSIS_CAMPAIGN_STATUS',
             items: chunk.map((id) => ({ vendorItemId: Number(id) }))
@@ -563,9 +605,8 @@ async function syncMetricsForDate(dateStr) {
 
   const itemsRes = await execWithRetry(tab.id, pageFetchInsightItems, [dateStr]);
   if (!itemsRes || !itemsRes.ok) {
-    throw new Error(itemsRes && itemsRes.notLoggedIn
-      ? 'WING 로그인이 필요합니다.'
-      : `옵션 지표 조회 실패: ${(itemsRes && itemsRes.error) || '알 수 없음'}`);
+    throw new Error(`옵션 지표 조회 실패: ${(itemsRes && itemsRes.error)
+      || '응답 없음 (WING 탭에 주입이 안 됐을 수 있습니다 — 로그인 상태를 확인하세요)'}`);
   }
 
   const vids = itemsRes.items
@@ -674,9 +715,12 @@ async function syncMetricsBackfill(maxDays) {
     try {
       done.push(await syncMetricsForDate(d));
     } catch (e) {
-      return { done, stoppedAt: d, error: e.message };
+      /* 실패해도 **같은 모양**으로 돌려준다. skipped 를 빼먹었더니 팝업이
+         "받을 게 없음" 분기로 빠져서 진짜 실패 이유를 감췄다(2026-08-20 실제로 겪음). */
+      return { done, todo: todo.length, skipped: days.length - todo.length,
+               stoppedAt: d, error: e.message };
     }
     await new Promise((r) => setTimeout(r, 800));     // WING에 몰아치지 않는다
   }
-  return { done, skipped: days.length - todo.length };
+  return { done, todo: todo.length, skipped: days.length - todo.length };
 }
