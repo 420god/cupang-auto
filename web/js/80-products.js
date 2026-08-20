@@ -22,7 +22,7 @@ async function loadSkus() {
   const el = $('#skuRows');
   el.innerHTML = '<tr><td colspan="9" class="muted">불러오는 중…</td></tr>';
   try {
-    const [skus, products, listings, suppliers, reg, lots, pending] = await Promise.all([
+    const [skus, products, listings, suppliers, reg, pending] = await Promise.all([
       apiAll('my_skus?select=*&order=sku_name.asc'),
       apiAll('my_products?select=id,name,status'),
       apiAll('sku_channel_listings?select=sku_id,channel,external_option_id,external_product_id'),
@@ -34,12 +34,6 @@ async function loadSkus() {
          가격은 부가 정보지 이 화면의 본체가 아니다 — 없으면 "미조회"로 보이면 된다. */
       apiAll('rocket_growth_product_registry?select=vendor_item_id,sale_price,on_sale,amount_in_stock,price_checked_at')
         .catch(() => []),
-      /* 마진 미리보기에 쓸 개당 매입원가. 쿠팡에 도착한 로트만, 최근 도착 순.
-         **"다음에 나갈 로트"가 아니라 "가장 최근 입고분"을 쓴다** — 앞으로 팔 물건은
-         최근 원가로 채워지고, 가격을 정할 때 보고 싶은 건 그쪽이기 때문이다.
-         선입선출 정확 계산(loadLotCogs)은 과거 판매의 이익을 매기는 용도라 목적이 다르다. */
-      apiAll('inventory_lots?select=sku_id,unit_cost_krw,arrived_coupang_at'
-             + '&arrived_coupang_at=not.is.null&order=arrived_coupang_at.desc'),
       /* 아직 쿠팡에 반영 안 된 가격 변경 요청. 화면이 "요청됨"을 보여줘야
          사용자가 같은 버튼을 두 번 누르지 않는다. */
       apiAll('coupang_write_queue?select=*&kind=eq.price&status=in.(queued,running)')
@@ -62,13 +56,6 @@ async function loadSkus() {
 
     const regByVid = new Map(reg.map((x) => [String(x.vendor_item_id), x]));
     const pendingByVid = new Map(pending.map((x) => [String(x.vendor_item_id), x]));
-    /* 로트는 최근 도착 순으로 왔으므로 SKU당 **처음 만난 것**이 가장 최근 입고분이다 */
-    const costBySku = new Map();
-    lots.forEach((l) => {
-      if (!l.sku_id || costBySku.has(l.sku_id)) return;
-      const u = Number(l.unit_cost_krw);
-      if (Number.isFinite(u) && u > 0) costBySku.set(l.sku_id, u);
-    });
 
     SKUS.rows = skus.map((s) => {
       const listing = listBySku.get(s.id) || null;
@@ -81,7 +68,11 @@ async function loadSkus() {
         vid,
         reg: vid ? (regByVid.get(vid) || null) : null,
         pending: vid ? (pendingByVid.get(vid) || null) : null,
-        costKrw: costBySku.get(s.id) || null,
+        /* 아래 loadLotCogs()로 채운다 — 선입선출로 다 팔고 남은 로트가 기준이다 */
+        costKrw: null,     // 지금 나갈 로트의 개당 원가
+        nextCost: null,    // 그 로트가 떨어진 뒤 나갈 로트의 개당 원가
+        remainQty: null,   // 지금 나갈 로트에 남은 수량
+        ourStock: null,    // 우리 기록상 창고 총 잔량(모든 로트 합)
         snap: null   // 수수료 스냅샷은 아래에서 옵션ID가 있는 것만 따로 받는다
       };
     });
@@ -97,6 +88,23 @@ async function loadSkus() {
           if (arr && arr.length) r.snap = arr[arr.length - 1];   // captured_at 오름차순 → 마지막이 최신
         });
       } catch (e) { /* 스냅샷이 없어도 목록은 떠야 한다. 마진만 "정보 없음"이 된다 */ }
+
+      /* 선입선출 잔량. 판매현황이 쓰는 loadLotCogs()를 그대로 부른다 —
+         같은 계산을 두 벌로 만들면 두 화면의 원가가 조용히 어긋난다. */
+      try {
+        const cogs = await loadLotCogs(vids);
+        const remaining = cogs.remainingBySku;   // 로트가 없으면 undefined일 수 있다
+        if (remaining) {
+          SKUS.rows.forEach((r) => {
+            const q = (remaining.get(r.sku.id) || []).filter((l) => l.left > 0);
+            if (!q.length) return;
+            r.costKrw = q[0].unit;
+            r.remainQty = q[0].left;
+            r.nextCost = q[1] ? q[1].unit : null;
+            r.ourStock = q.reduce((a, l) => a + l.left, 0);
+          });
+        }
+      } catch (e) { /* 원가를 못 구해도 목록·가격은 떠야 한다 */ }
     }
 
     SKUS.byId = new Map(SKUS.rows.map((r) => [r.sku.id, r]));
@@ -212,15 +220,21 @@ function skuCommissionRate(r) {
 
 /* 마진 계산은 반드시 calcMargin()을 거친다 — 계산식을 여기서 새로 쓰지 않는다
    (web/CLAUDE.md '절대 바꾸지 말 것'). */
-function skuMarginAt(r, price) {
+function skuMarginAt(r, price, costKrw) {
   const rate = skuCommissionRate(r);
   if (rate === null) return null;
   return calcMargin({
     price,
     commission: rate,
     fulfillment: r.snap ? r.snap.fulfillment_amount : null,
-    costKrw: r.costKrw
+    costKrw: costKrw === undefined ? r.costKrw : costKrw
   });
+}
+
+function marginLine(label, m) {
+  const cls = m.margin >= 0 ? 'pos' : 'neg';
+  return `${label} <span class="${cls}">마진 ${m.rate}% · 개당 ${m.margin.toLocaleString()}원</span>`
+    + ` <span class="muted">(원가 ${m.cost.toLocaleString()})</span>`;
 }
 
 function renderMarginLive() {
@@ -240,16 +254,27 @@ function renderMarginLive() {
   }
   const m = skuMarginAt(r, price);
   if (!m || m.margin === null) {
-    el.textContent = '매입원가가 없어 마진을 계산할 수 없습니다 — 이 SKU는 아직 입고된 로트가 없습니다.';
+    el.textContent = '매입원가가 없어 마진을 계산할 수 없습니다 — 창고에 남은 로트가 없습니다.';
     el.className = 'sm muted';
     return;
   }
-  /* 손해면 눈에 띄게 한다. 0 하나 빠뜨리면 여기가 크게 음수로 뜬다 — 변경 폭 경고 대신
-     이걸 쓰기로 했다(2026-08-20 사용자 결정). pos/neg는 이 프로젝트의 기존 관례다. */
-  const cls = m.margin >= 0 ? 'pos' : 'neg';
-  el.innerHTML = `이 가격이면 <span class="${cls}">마진 ${m.rate}% · 개당 ${m.margin.toLocaleString()}원</span>`
+
+  /* **로트마다 원가가 다르므로 마진도 하나가 아니다.** 지금 나갈 로트가 20개 남았으면
+     그 20개는 그 원가로 팔리고, 그 뒤부터 다음 로트 원가가 된다(2026-08-20 사용자 확인).
+     가격은 한 번 정하면 오래 유지되므로, 잔량이 얼마 안 남았을 땐 **다음 로트 쪽이 사실상
+     더 중요하다** — 하나만 보여주면 몇 개 팔고 마진이 반토막 나는 걸 못 본다.
+     손해면 pos/neg로 눈에 띈다. 0 하나 빠뜨리면 여기가 크게 음수로 뜬다. */
+  const lines = [marginLine(
+    r.remainQty != null ? `지금 나갈 ${r.remainQty.toLocaleString()}개 —` : '이 가격이면', m)];
+
+  if (r.nextCost != null) {
+    const mn = skuMarginAt(r, price, r.nextCost);
+    if (mn && mn.margin !== null) lines.push(marginLine('그다음 로트 —', mn));
+  }
+
+  el.innerHTML = lines.join('<br>')
     + `<br><span class="muted">수수료 ${m.commission.toLocaleString()} · 입출고비 ${m.fulfillment.toLocaleString()}`
-    + ` · 매입원가 ${m.cost.toLocaleString()} · 출고/작업 ${m.shipWork.toLocaleString()} (최근 입고분 기준)</span>`;
+    + ` · 출고/작업 ${m.shipWork.toLocaleString()} (선입선출 기준)</span>`;
   el.className = 'sm';
 }
 
@@ -270,13 +295,30 @@ async function renderPriceSection(r) {
   const box = $('#skuPriceHistory');
   box.innerHTML = '';
   if (!r.vid) return;
+
+  /* 우리가 계산한 잔량과 쿠팡이 말하는 실재고를 나란히 둔다. 차이가 나는 건 버그가 아니라
+     대개 **실제 사건**이다 — 불량 폐기, 분실, 쿠팡 자체 처리, 그리고 아직 거칠게 다루는 반품.
+     가리면 원가 계산을 어디까지 믿을지 알 수 없으므로 드러내 놓는다(R-05: 추정과 확정을 구분). */
+  const coupangStock = r.reg && r.reg.amount_in_stock != null ? Number(r.reg.amount_in_stock) : null;
+  if (r.ourStock != null && coupangStock != null) {
+    const diff = r.ourStock - coupangStock;
+    box.innerHTML = diff === 0
+      ? `<div class="muted">재고 ${coupangStock.toLocaleString()}개 — 우리 기록과 쿠팡이 일치합니다.</div>`
+      : `<div><span class="neg">재고가 안 맞습니다</span>`
+        + ` <span class="muted">— 우리 기록 ${r.ourStock.toLocaleString()}개 vs 쿠팡 ${coupangStock.toLocaleString()}개`
+        + ` (차이 ${diff > 0 ? '+' : ''}${diff.toLocaleString()}). 불량 폐기·분실·반품 처리 때문일 수 있어`
+        + ` 원가가 실제와 다를 수 있습니다.</span></div>`;
+  } else if (coupangStock != null && r.ourStock == null) {
+    box.innerHTML = `<div class="muted">쿠팡 재고 ${coupangStock.toLocaleString()}개.`
+      + ` 우리 쪽엔 남은 로트 기록이 없어 원가를 매길 수 없습니다.</div>`;
+  }
   try {
     /* 가격 궤적은 두 곳에 나뉘어 있지 않다 — 우리가 바꾼 것도, WING에서 사람이 바꾼 것도
        전부 rocket_growth_item_price_history에 모인다(source로 구분, db/migrations/024). */
     const rows = await api(`rocket_growth_item_price_history?select=*`
       + `&vendor_item_id=eq.${encodeURIComponent(r.vid)}&order=changed_at.desc&limit=10`) || [];
-    if (!rows.length) { box.innerHTML = '<span class="muted">가격 변동 기록이 아직 없습니다.</span>'; return; }
-    box.innerHTML = '<div class="muted" style="margin-top:8px"><b>가격 변동</b></div>' + rows.map((h) => {
+    if (!rows.length) { box.innerHTML += '<div class="muted">가격 변동 기록이 아직 없습니다.</div>'; return; }
+    box.innerHTML += '<div class="muted" style="margin-top:8px"><b>가격 변동</b></div>' + rows.map((h) => {
       const from = h.prev_sale_price == null ? '—' : Number(h.prev_sale_price).toLocaleString();
       const to = h.sale_price == null ? '—' : Number(h.sale_price).toLocaleString();
       const who = h.source === 'our_write' ? '여기서 변경' : 'WING/쿠팡에서 변경됨';
@@ -284,7 +326,7 @@ async function renderPriceSection(r) {
         + ` · ${from}원 → ${to}원 · ${who}</div>`;
     }).join('');
   } catch (e) {
-    box.innerHTML = '<span class="muted">변동 기록을 불러오지 못했습니다 (마이그레이션 024 미실행일 수 있습니다).</span>';
+    box.innerHTML += '<div class="muted">변동 기록을 불러오지 못했습니다 (마이그레이션 024 미실행일 수 있습니다).</div>';
   }
 }
 
