@@ -2766,9 +2766,30 @@ insightBtn.addEventListener('click', async () => {
     });
     const entries = Object.entries(store);
     if (!entries.length) {
-      setStatus('캡처된 비즈니스 인사이트 API가 없습니다.\n'
-        + 'WING > 비즈니스 인사이트 > 판매 분석 페이지를 연 뒤 다시 시도하세요.\n'
-        + '(날짜도 한 번 바꿔보면 날짜 요청까지 같이 잡힙니다.)', true);
+      /* 접두사를 잘못 짚었을 수 있다. 그때는 **모든 WING 요청 기록**을 대신 보여준다 —
+         interceptor가 coupang.com 요청을 전부 기록하고 있으므로 진짜 경로가 반드시
+         이 안에 있다. 추측으로 접두사를 또 바꾸느니 실물 목록에서 고르는 게 빠르다. */
+      const logRes = await runInAllFrames(tab.id, pageReadApiLog);
+      const seen = {};
+      const urls = [];
+      logRes.forEach(function (fr) {
+        if (!fr || !fr.result || !fr.result.log) return;
+        fr.result.log.forEach(function (e) {
+          if (seen[e.sig]) return;
+          seen[e.sig] = 1;
+          urls.push(e.method + ' ' + e.url
+            + (e.reqBody ? '\n      [바디] ' + e.reqBody.slice(0, 300) : ''));
+        });
+      });
+      if (!urls.length) {
+        setStatus('캡처가 없습니다.\n'
+          + '판매 분석 페이지를 **새로 열어야** 합니다 — 수집기는 페이지가 열릴 때 붙습니다.\n'
+          + '(확장프로그램을 새로고침했다면 열려 있던 WING 탭도 새로고침하세요.)', true);
+        return;
+      }
+      setStatus('비즈니스 인사이트 경로로 잡힌 건 없습니다.\n'
+        + '대신 이 탭이 부른 요청 ' + urls.length + '건을 그대로 보여줍니다 — 여기서 실제 경로를 찾습니다.\n\n'
+        + urls.join('\n'));
       return;
     }
     const parts = entries.map(function (e) {
