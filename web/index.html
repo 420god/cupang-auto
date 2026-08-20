@@ -1069,6 +1069,13 @@
           <input id="skuDetailImages" type="file" accept="image/*" multiple /></label>
         <div id="skuDetailPreview" class="sm muted"></div>
 
+        <!-- 메모가 아니라 **가설**로 받는다. 나중에 AI가 "이 가설이 맞았나"를 판정할
+             근거가 된다 — "그냥 바꿔봄"은 아무것도 학습시키지 못한다. -->
+        <label class="field"><span>왜 바꾸나 · 무엇을 기대하나</span>
+          <input id="skuProdHypothesis" type="text"
+                 placeholder="예: 썸네일이 어두워 눈에 안 띈다고 봄 → 조회수가 오를 것" /></label>
+        <p class="muted sm" id="skuProdMetricHint"></p>
+
         <label class="chk" style="margin:8px 0">
           <input type="checkbox" id="skuProdRequested" />
           <span>바로 승인 요청 (체크 안 하면 저장만 되고 심사는 WING에서 올립니다)</span>

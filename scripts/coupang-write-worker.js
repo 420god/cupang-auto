@@ -278,6 +278,49 @@ function itemVendorIds(item) {
   ].filter((x) => x != null).map(String);
 }
 
+/* ── 변경 이력 (db/migrations/026) ─────────────────────────────────────────
+   **"이렇게 바꿨더니 어떻게 됐나"를 나중에 답하려면 before가 남아야 한다.**
+   상품 정보는 바꾸면 product_json을 덮어써서 이전 값이 사라진다 — 오늘 썸네일이
+   뭐였는지는 내일이면 알 방법이 없다. 그래서 쏘기 직전에 조회한 값을 여기 남긴다.
+
+   바꾼 것에 따라 **봐야 할 지표가 다르다**(2026-08-20 실측으로 확인). 지표가 깔때기
+   단계별로 있어서, 썸네일을 바꿨는데 전환율만 보면 아무 결론도 못 낸다.
+   행마다 박아두면 AI가 매번 추측하지 않는다. */
+const PRIMARY_METRICS = {
+  thumbnail:    ['views', 'visitors'],           // 클릭을 좌우 → 유입이 움직여야 맞다
+  search_tags:  ['views', 'visitors'],           // 검색 노출 → 유입
+  product_name: ['views', 'visitors'],
+  item_name:    ['views', 'visitors'],
+  detail_page:  ['conversion_rate', 'cart_adds'], // 들어온 사람을 설득 → 조회는 안 변해야 정상
+  price:        ['conversion_rate', 'item_winner_rate'],
+  sale_status:  ['views']
+};
+
+/* entries: [{ field, before, after }] — 한 요청에서 두 가지를 바꿨으면 두 행이 된다.
+   섞인 변경은 원인을 못 가리므로, 나중에 "이건 분석에서 빼자"를 판단하려면 쪼개져 있어야 한다. */
+async function recordChanges(row, entries) {
+  const rows = entries
+    .filter((e) => e && e.field)
+    .map((e) => ({
+      vendor_item_id: row.vendor_item_id,
+      seller_product_id: row.seller_product_id || null,
+      sku_id: row.sku_id || null,
+      field: e.field,
+      before_value: e.before === undefined ? null : e.before,
+      after_value: e.after === undefined ? null : e.after,
+      source: 'our_write',
+      primary_metrics: PRIMARY_METRICS[e.field] || null,
+      hypothesis: row.hypothesis || row.reason || null,
+      changed_by: row.requested_by || null,
+      queue_id: row.id
+    }));
+  if (!rows.length) return;
+  /* 이력 기록이 실패해도 변경 자체는 이미 됐다. 큐 상태를 뒤집지 않되 **반드시 남긴다** —
+     조용히 넘기면 나중에 "왜 이력이 비었지"를 못 찾는다. */
+  try { await sb('POST', 'product_change_history', rows); }
+  catch (e) { log(`이력 기록 실패(변경 자체는 성공): ${e.message}`); }
+}
+
 /* 상품 원문을 가져와 레지스트리에 넣는다. **아무것도 바꾸지 않는다.**
    화면이 검색어·이미지·상세페이지의 '지금 값'을 보고 편집할 수 있게 하려는 것이다 —
    전체 몸통 PUT 방식에서 깜깜이 편집은 그대로 사고로 이어진다.
@@ -309,6 +352,20 @@ async function handleProductUpdate(row) {
       response_body: `상품 조회 실패 (sellerProductId=${row.seller_product_id}) — 수정하지 않았다` });
     return;
   }
+
+  /* **바꾸기 전 값을 먼저 붙잡는다.** PUT을 쏘고 나면 되돌아가서 알 방법이 없다.
+     여기서 놓치면 그 변경은 영원히 "before 없음"으로 남는다. */
+  const before = {};
+  const targetItem = (product.items || []).find((it) => itemVendorIds(it).includes(String(row.vendor_item_id)));
+  if (targetItem) {
+    const rep = (targetItem.images || []).find((im) => im.imageType === 'REPRESENTATION');
+    before.thumbnail = rep ? (rep.cdnPath || rep.vendorPath || null) : null;
+    before.detail_page = (targetItem.contents || []).flatMap((c) =>
+      (c.contentDetails || []).map((d) => d.content).filter(Boolean));
+    before.search_tags = targetItem.searchTags || null;
+    before.item_name = targetItem.itemName || null;
+  }
+  before.product_name = product.sellerProductName || null;
 
   /* 상품 단위 필드 */
   if (payload.product) {
@@ -367,6 +424,33 @@ async function handleProductUpdate(row) {
      않을 수 있다. 가격 변경 뒤 재조회를 넣은 것과 같은 이유다.
      여기서 실패해도 수정 자체는 성공이므로 큐 상태를 뒤집지 않는다. */
   if (ok) {
+    /* 무엇이 무엇으로 바뀌었는지를 항목 단위로 남긴다(db/migrations/026).
+       payload에 있는 것만 담는다 — 안 바꾼 항목까지 이력에 넣으면 나중에
+       "이때 썸네일도 바꿨네" 하고 잘못 읽는다. */
+    const p = (payload.items || {})[String(row.vendor_item_id)] || {};
+    const entries = [];
+    if (p.images !== undefined) {
+      const rep = (p.images || []).find((im) => im.imageType === 'REPRESENTATION');
+      entries.push({ field: 'thumbnail', before: before.thumbnail,
+                     after: rep ? (rep.vendorPath || rep.cdnPath || null) : null });
+    }
+    if (p.contents !== undefined) {
+      entries.push({ field: 'detail_page', before: before.detail_page,
+                     after: (p.contents || []).flatMap((c) =>
+                       (c.contentDetails || []).map((d) => d.content).filter(Boolean)) });
+    }
+    if (p.searchTags !== undefined) {
+      entries.push({ field: 'search_tags', before: before.search_tags, after: p.searchTags });
+    }
+    if (p.itemName !== undefined) {
+      entries.push({ field: 'item_name', before: before.item_name, after: p.itemName });
+    }
+    if (payload.product && payload.product.sellerProductName !== undefined) {
+      entries.push({ field: 'product_name', before: before.product_name,
+                     after: payload.product.sellerProductName });
+    }
+    await recordChanges(row, entries);
+
     await new Promise((s) => setTimeout(s, 1500));
     try {
       const fresh = await fetchProduct(row.seller_product_id);
@@ -459,6 +543,13 @@ async function handle(row) {
      여기서 실패해도 가격 변경 자체는 성공이므로 큐 상태를 뒤집지 않는다 —
      하루 1회 동기화가 어차피 다시 맞춘다. */
   if (ok) {
+    /* 가격도 같은 이력 표에 넣는다(db/migrations/026). 분석 관점에서 가격 변경과
+       썸네일 변경은 **같은 종류의 사건**이다 — 따로 두면 "가격도 내리고 썸네일도
+       바꾼 날"을 못 보고, AI가 표 두 개를 각각 이해해야 한다.
+       rocket_growth_item_price_history(024)는 그대로 둔다. 그쪽은 우리가 안 바꾼
+       변동(WING에서 사람이 바꾼 것)까지 잡는 역할이라 목적이 다르다. */
+    await recordChanges(row, [{ field: 'price', before, after }]);
+
     await new Promise((s) => setTimeout(s, 1000));
     try { await syncOne(row.vendor_item_id, 'our_write', row.id); }
     catch (e) { log(`변경 후 재조회 실패(가격 변경 자체는 성공): ${e.message}`); }

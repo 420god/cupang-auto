@@ -612,7 +612,7 @@ function renderProductSection(r) {
 
   const canEdit = has && !!item;
   ['#skuProdName', '#skuItemName', '#skuSearchTags', '#skuRepImage',
-   '#skuDetailImages', '#skuProdRequested', '#skuProdSave'].forEach((id) => {
+   '#skuDetailImages', '#skuProdRequested', '#skuProdSave', '#skuProdHypothesis'].forEach((id) => {
     $(id).disabled = !canEdit;
   });
   $('#skuProdFetch').disabled = !(r.vid && spid);
@@ -623,7 +623,9 @@ function renderProductSection(r) {
   $('#skuRepImage').value = '';
   $('#skuDetailImages').value = '';
   $('#skuProdRequested').checked = false;
+  $('#skuProdHypothesis').value = '';
   $('#skuProdMsg').textContent = '';
+  if ($('#skuProdMetricHint')) $('#skuProdMetricHint').textContent = '';
 
   const rep = item && (item.images || []).find((im) => im.imageType === 'REPRESENTATION');
   const repPath = rep ? (rep.cdnPath || rep.vendorPath || '') : '';
@@ -759,6 +761,7 @@ $('#skuProdSave').onclick = async () => {
         vendor_item_id: r.vid,
         sku_id: r.sku.id,
         payload: payload,
+        hypothesis: ($('#skuProdHypothesis').value || '').trim() || null,
         requested_by: AUTH.userId || null
       }
     });
@@ -805,3 +808,51 @@ $('#skuDetailImages').addEventListener('change', () => {
     + fs.map((f, i) => `<span style="display:inline-block;text-align:center">`
         + localPreview(f, 80) + `<div class="muted">${i + 1}</div></span>`).join('');
 });
+
+/* 무엇을 바꾸느냐에 따라 **봐야 할 지표가 다르다.** 지표가 깔때기 단계별로 있어서,
+   썸네일을 바꿨는데 전환율만 보면 아무 결론도 못 낸다(2026-08-20 실측 데이터로 확인).
+   고르는 순간 화면이 알려주면 가설을 그 지표에 맞춰 쓰게 된다 —
+   나중에 AI가 판정할 때 가설과 지표가 어긋나 있으면 판정 자체가 불가능하다.
+   워커의 PRIMARY_METRICS와 같은 표다. 어긋나면 화면과 기록이 갈린다. */
+const CHANGE_METRIC_HINT = {
+  thumbnail:    '대표이미지를 바꾸면 <b>조회·방문자</b>가 움직여야 맞습니다 (클릭을 좌우하므로).',
+  detail_page:  '상세페이지를 바꾸면 <b>구매전환율·장바구니</b>가 움직여야 맞습니다. 조회는 안 변하는 게 정상입니다.',
+  search_tags:  '검색어를 바꾸면 <b>조회·방문자</b>가 움직여야 맞습니다 (검색 노출 → 유입).',
+  product_name: '상품명을 바꾸면 <b>조회·방문자</b>가 움직여야 맞습니다.',
+  item_name:    '옵션명을 바꾸면 <b>조회·방문자</b>가 움직여야 맞습니다.'
+};
+
+/* 지금 무엇을 바꾸려는 상태인지 보고 힌트를 띄운다. 여러 개를 한 번에 바꾸면
+   **원인을 못 가린다**는 것도 같이 알린다 — 나중에 분석에서 빼야 할 사례다. */
+function updateMetricHint() {
+  const el = $('#skuProdMetricHint');
+  if (!el) return;
+  const r = SKUS.editing;
+  const prod = r && r.reg && r.reg.product_json;
+  const item = prod ? findProductItem(prod, r.vid) : null;
+  if (!item) { el.textContent = ''; return; }
+
+  const fields = [];
+  if ($('#skuRepImage').files[0]) fields.push('thumbnail');
+  if (($('#skuDetailImages').files || []).length) fields.push('detail_page');
+  const tagsRaw = ($('#skuSearchTags').value || '').trim();
+  const curTags = Array.isArray(item.searchTags) ? item.searchTags.join(', ') : '';
+  if (tagsRaw !== curTags) fields.push('search_tags');
+  const name = ($('#skuProdName').value || '').trim();
+  if (name && name !== (prod.sellerProductName || '')) fields.push('product_name');
+  const iname = ($('#skuItemName').value || '').trim();
+  if (iname && iname !== (item.itemName || '')) fields.push('item_name');
+
+  if (!fields.length) { el.textContent = ''; return; }
+  const lines = fields.map((f) => '· ' + CHANGE_METRIC_HINT[f]).join('<br>');
+  el.innerHTML = lines + (fields.length > 1
+    ? '<br><span class="neg">한 번에 여러 가지를 바꾸면 어느 것이 효과였는지 가릴 수 없습니다.</span>'
+      + ' 하나씩 바꾸는 편이 나중에 배울 게 많습니다.'
+    : '');
+}
+
+['#skuRepImage', '#skuDetailImages', '#skuSearchTags', '#skuProdName', '#skuItemName']
+  .forEach((id) => {
+    $(id).addEventListener('change', updateMetricHint);
+    $(id).addEventListener('input', updateMetricHint);
+  });
