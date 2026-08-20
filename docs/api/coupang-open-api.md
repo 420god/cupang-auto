@@ -1,7 +1,7 @@
 # 쿠팡 공식 Open API
 
 > **언제 읽나**: 상품·주문 동기화(VPS 스크립트)를 고칠 때. 레지스트리가 0행일 때.
-> **최종 검증**: 2026-08-19 (필드명 수정 후 57행 적재 확인)
+> **최종 검증**: 2026-08-20 (가격 변경 실물 성공 · 상품 수정 정찰)
 > **관련 코드**: `scripts/rocket-growth-sync.js`
 
 ## 호출 구조
@@ -94,3 +94,86 @@ node scripts/rocket-growth-sync.js --skus --skip-orders --limit=5 --dry-run   # 
 
 `.env`는 `scripts/.env`에 있고 `__dirname` 기준으로 읽으므로 **어느 디렉터리에서 실행해도 된다**.
 환경변수가 **7개 한꺼번에** 누락되면 키가 틀린 게 아니라 `.env` 자체를 못 읽은 것이다.
+
+## 쓰기 API (2026-08-20 정찰로 확인)
+
+### 가격 변경 — 실물로 성공 확인
+
+```
+PUT /v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/{vendorItemId}/prices/{가격}
+→ {"code":"SUCCESS","message":"가격 변경을 완료했습니다."}
+```
+
+**로켓그로스 옵션ID인데 마켓플레이스 계열 경로가 받는다.** `rg_open_api` 쪽은 404다.
+후보를 나란히 던져서 알아냈다 — 한쪽만 짚었으면 못 찾았다.
+
+현재가·판매여부·재고는 같은 계열의 하위 경로에서 읽는다. **옵션 단건 조회(`vendor-items/{id}`)
+자체는 404이고 이것만 산다:**
+```
+GET .../vendor-items/{vendorItemId}/inventories
+→ { amountInStock, salePrice, onSale, sellerItemId }
+```
+
+### 가격이 두 벌이다 — 옵션ID도 두 개다
+
+같은 상품에 로켓그로스와 마켓플레이스 가격이 따로 붙는다(실측: 7,500 / 13,000).
+```
+items[].rocketGrowthItemData.priceData.salePrice   vendorItemId 95827571043
+items[].marketplaceItemData.priceData.salePrice    vendorItemId 95827571044
+```
+**우리가 다루는 건 로켓그로스 쪽이다.** `rocket_growth_product_registry.vendor_item_id`에
+이미 그쪽이 들어 있다(`pickVendorItemId()`가 rocketGrowthItemData를 먼저 보므로).
+여기를 헷갈리면 엉뚱한 가격이 바뀐다.
+
+### 상품 수정은 부분 수정이 안 된다
+
+몸통을 키워가며 던져본 결과(대상은 존재하지 않는 상품이라 안전했다):
+```
+업체코드만        → "업체상품아이디를 입력해주세요"
++ 상품ID          → "시스템이 불안정합니다"    ← 검증 메시지가 아니다. 서버가 터진 것
++ 상품명·카테고리  → "시스템이 불안정합니다"
+전체 23개 키      → "로켓그로스 입고 불가 조건을 확인하시고 동의해주세요"
+```
+**전체 몸통을 보내야 비로소 정상 검증 단계로 들어간다.** 상품명 하나 바꾸려 해도
+상품 전체를 다시 보내야 하고, 빠뜨린 필드는 지워진다.
+
+### legalAgreement — 조회에 안 나오는 쓰기 전용 필드
+
+필수 최상위 필드에 `rocketGrowthAdditionalInformation`이 있고 그 안에
+`rfmInboundName`과 **`legalAgreement`**가 들어간다. 그런데 **조회 응답에는
+`rfmInboundName`만 있다.** 즉 "조회한 걸 그대로 되보내면 된다"가 성립하지 않는다.
+
+그리고 계정 단위 동의가 따로 필요하다:
+**WING > 판매자정보 > 추가정보 > "OPEN API key 발급" 영역 >
+"로켓그로스 상품 생성 API 이용 및 심사 기준 동의"**
+
+### 이미지 — 업로드 API가 없다. URL을 주면 쿠팡이 가져간다
+
+전용 업로드 엔드포인트를 찾다가 `/seller-products/images`가 400이라 있는 줄 알았는데,
+아무 문자열이나 넣어도 같은 400이었다(`업체상품아이디[...]는 숫자형으로 입력해주세요`).
+**경로 파라미터로 먹힌 것이지 엔드포인트가 아니다.**
+
+실제 방식: `images[].vendorPath`에 **`http://`로 시작하는 공개 URL**을 넣으면 쿠팡이
+자동으로 내려받아 자기 CDN에 넣는다. **80·443 포트만 된다.**
+조회 응답에 파일명만 보이는 건 쿠팡이 저장한 뒤의 결과값이라 입력값과 형태가 다르다.
+→ Supabase Storage 공개 URL을 그대로 쓸 수 있다.
+
+상세설명도 같은 그릇이다:
+```
+contents[] = { contentsType: HTML|IMAGE|TEXT,
+               contentDetails[] = { content, detailType: TEXT|IMAGE } }
+```
+실제 상품은 `contentsType: IMAGE_NO_SPACE` + `detailType: IMAGE`로, 상세페이지가
+HTML이 아니라 **이미지 나열**이었다.
+
+### 카테고리 메타 (등록에 필요)
+
+```
+GET .../meta/category-related-metas/display-category-codes/{displayCategoryCode}
+```
+`attributes`(필수/선택), `noticeCategories`(고시정보 4종 택1), `certifications`,
+`requiredDocumentNames`를 준다. 실측 카테고리 103112의 필수 속성은 색상·개당 중량·수량.
+
+고시정보 `기타 재화` 5개 항목은 `my_skus`의 `label_*` 컬럼과 거의 그대로 맞물린다
+(품명·제조국·제조자). **소비자상담 전화번호만 우리 쪽에 없다.**
+
