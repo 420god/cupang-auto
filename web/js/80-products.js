@@ -587,6 +587,7 @@ function coupangImageUrl(p) {
 }
 
 function renderProductSection(r) {
+  releasePreviewUrls();   // 이전에 만든 미리보기 URL 정리 (아래 localPreview 참조)
   const prod = r.reg && r.reg.product_json ? r.reg.product_json : null;
   const item = findProductItem(prod, r.vid);
   const has = !!prod;
@@ -769,3 +770,38 @@ $('#skuProdSave').onclick = async () => {
     btn.disabled = false;
   }
 };
+
+/* 파일을 고르면 **고른 그림을 바로 보여준다.**
+   안 그러면 "현재 대표이미지"만 계속 떠 있어서 무엇으로 바뀌는지 확인할 방법이 없다.
+   업로드 전이라 서버 왕복 없이 브라우저가 들고 있는 파일을 그대로 그린다.
+
+   createObjectURL은 명시적으로 놓아주지 않으면 탭이 닫힐 때까지 메모리에 남는다.
+   상세페이지를 여러 장씩 반복해서 고르면 쌓이므로, 다시 그릴 때 이전 것을 먼저 지운다. */
+const PROD_PREVIEW_URLS = [];
+function releasePreviewUrls() {
+  while (PROD_PREVIEW_URLS.length) URL.revokeObjectURL(PROD_PREVIEW_URLS.pop());
+}
+function localPreview(file, size) {
+  const u = URL.createObjectURL(file);
+  PROD_PREVIEW_URLS.push(u);
+  return `<img src="${u}" alt="" style="max-width:${size}px;border-radius:6px;margin:4px 4px 0 0" />`;
+}
+
+$('#skuRepImage').addEventListener('change', () => {
+  const f = $('#skuRepImage').files[0];
+  if (!f) { renderProductSection(SKUS.editing); return; }
+  $('#skuRepPreview').innerHTML =
+    '<div><b>이걸로 바꿉니다</b></div>' + localPreview(f, 120)
+    + `<div class="muted">${esc(f.name)} · ${Math.round(f.size / 1024).toLocaleString()}KB</div>`;
+});
+
+$('#skuDetailImages').addEventListener('change', () => {
+  const fs = Array.from($('#skuDetailImages').files || []);
+  if (!fs.length) { renderProductSection(SKUS.editing); return; }
+  /* 상세페이지는 **고른 것으로 전부 대체**된다. 순서가 곧 노출 순서라 번호를 붙여
+     보여준다 — 파일 탐색기에서 고른 순서와 다를 수 있어서 눈으로 확인해야 한다. */
+  $('#skuDetailPreview').innerHTML =
+    `<div><b>이 ${fs.length}장으로 전부 대체합니다</b> (왼쪽부터 노출 순서)</div>`
+    + fs.map((f, i) => `<span style="display:inline-block;text-align:center">`
+        + localPreview(f, 80) + `<div class="muted">${i + 1}</div></span>`).join('');
+});
