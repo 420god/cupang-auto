@@ -1,7 +1,7 @@
 # WING 내부 API (확장프로그램)
 
 > **언제 읽나**: 정산·반품·재고현황 동기화가 안 될 때. 확장프로그램을 고칠 때.
-> **최종 검증**: 2026-08-17
+> **최종 검증**: 2026-08-20 (비즈니스 인사이트 경로 확인)
 > **관련 코드**: `extension/background.js`·`interceptor.js`·`popup.js`
 
 ## 왜 확장프로그램인가
@@ -73,3 +73,43 @@
 반품 재판매 옵션은 별도 옵션ID를 받고 상품명은 원본과 같은데, WING 재고현황 화면에
 `반품-최상` 배지가 붙는다. **현재 저장 중인 스냅샷에는 이 필드가 없다** —
 반품 SKU 자동 판별을 하려면 API를 다시 캡처해서 필드를 추가해야 한다.
+
+## 비즈니스 인사이트 (판매 분석) — 2026-08-20 경로 확인
+
+**여기에 노출·클릭 지표가 있다.** 시스템에 없던 방문자·조회·장바구니와 유입경로가 전부 이 화면 것이다.
+
+처음엔 화면 주소 `/tenants/business-insight/sales-analysis`를 API 주소로 착각해서 캡처가
+0건이었다. 전체 요청 목록을 뽑고서야 알았다 — **실제 서비스는 `rfm-ss`이고, 이미 알고 있던
+`trends/search`와 같은 곳이다.** 화면 주소와 데이터 주소가 다르다는 걸 놓쳤다.
+
+| 용도 | 경로 (전부 POST, 일부 GET) |
+|---|---|
+| **옵션별 지표 목록** | `/tenants/rfm-ss/api/business-insight/vi-detail-search` |
+| 전체 요약 | `/tenants/rfm-ss/api/business-insight/vendor-summary` |
+| 시간대별 | `/tenants/rfm-ss/api/business-insight/hourly-vendor-sales-summary` |
+| **유입경로** | `/tenants/rfm-ss/api/traffic-insight/distribution/summary/without-subscription` |
+| 옵션별 광고 상태 | `/tenants/cmg-wing-card/wing/one-click-setup/condition` |
+| 구독 자격 | `/tenants/rfm-ss/api/subscription/v1/is-eligible` |
+
+**요청 형태 (실물)**
+```json
+// vi-detail-search — 하루치를 받으려면 startDate = endDate
+{"startDate":"2026-08-14","endDate":"2026-08-20",
+ "registrationTypes":["NORMAL","RFM"],
+ "pageNumber":0,"pageSize":20,"sortBy":"GMV","sortOrder":"DESC","includeSoldVICount":true}
+
+// traffic-insight — **without-subscription 이라 유료 구독 없이도 온다**
+{"startDate":"...","endDate":"...","metrics":["unit_sold_contribution"],
+ "trafficSources":["search","recommendation","promotion","product_list_pages",
+                   "mycoupang","brandstore","live","other","ADS"],
+ "registrationTypes":["NORMAL","RFM"],"isRecentlyListed":false}
+```
+
+`registrationTypes`: **RFM = 로켓그로스, NORMAL = 판매자배송.**
+
+**`trafficSources`에 `ADS`가 있다** — 조회 증가가 광고 때문인지 자연 검색 때문인지 가를 수 있다.
+실험 분석에서 이게 없으면 광고 효과를 썸네일 효과로 오독한다.
+
+날짜를 바꾸면 화면 URL 자체가 바뀐다(페이지 재로드). 그래서 날짜별로 반복 호출하면
+과거 백필이 가능하다. **당일 데이터는 다음날 밤에 채워지므로 어제치까지만 받는다.**
+

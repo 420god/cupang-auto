@@ -116,12 +116,28 @@
      다른 캡처와 달리 **URL 경로별로 따로 보관한다.** 이 화면은 요약·목록·광고를
      각각 다른 엔드포인트로 부를 가능성이 높은데, 고정 키로 저장하면 마지막 것만
      남아서 나머지를 못 본다. */
-  const INSIGHT_PREFIX = '/tenants/business-insight';
+  /* 2026-08-20 실물 확인 — 판매분석 화면이 실제로 부르는 것들.
+     처음엔 화면 주소(/tenants/business-insight)를 API 주소로 착각해서 0건이었다.
+     전체 요청 목록을 뽑아보고서야 rfm-ss 서비스라는 걸 알았다 —
+     이미 알고 있던 trends/search 와 같은 곳이다.
+
+     vi-detail-search 가 우리가 쓸 옵션별 지표 목록이다(vi = vendor item).
+     traffic-insight 는 유입경로인데 **without-subscription** 이라 구독 없이도 온다.
+     trafficSources 에 ADS 가 있어서 광고 유입을 자연 유입과 가를 수 있다.
+     one-click-setup/condition 은 옵션별 광고 캠페인 상태("광고 중지" 배지의 출처). */
+  const INSIGHT_PREFIXES = [
+    '/tenants/rfm-ss/api/business-insight/',
+    '/tenants/rfm-ss/api/traffic-insight/',
+    '/tenants/rfm-ss/api/info/categories',
+    '/tenants/rfm-ss/api/subscription/',
+    '/tenants/cmg-wing-card/sales-analysis/',
+    '/tenants/cmg-wing-card/wing/one-click-setup/condition'
+  ];
   const K_INSIGHT = '__cwc_insight_captures';
 
   function insightPathOf(url) {
     const u = String(url || '');
-    if (u.indexOf(INSIGHT_PREFIX) === -1) return null;
+    if (!INSIGHT_PREFIXES.some(function (p) { return u.indexOf(p) !== -1; })) return null;
     try {
       return new URL(u, location.origin).pathname;   // 쿼리는 빼고 경로만 키로
     } catch (e) {
