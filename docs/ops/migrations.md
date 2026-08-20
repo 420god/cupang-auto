@@ -27,6 +27,7 @@ RLS 패턴은 전부 같다 — `read_for_authenticated`(select, 전체) + `writ
 | 021 | `inventory_lots.sku_id` nullable |
 | 022 | 로트 취소 + 예치금 기록 확장 |
 | 023 | 쿠팡 쓰기 큐 — 웹이 넣고 VPS가 쏜다(D-16) |
+| 024 | 쿠팡 판매가·판매여부·재고 + 가격 변동 이력 |
 
 ## 설계에서 꼭 알아야 할 것
 

@@ -19,7 +19,7 @@ js/40-invoice.js    구매대행 청구서 파서
 js/50-purchase.js   발주 · 예치금
 js/60-inbound.js    입고 · 재고/재발주 · 제트 작업비 파서
 js/70-outbound.js   출고
-js/80-products.js   상품원장
+js/80-products.js   상품원장 · 쿠팡 판매가 변경(큐에 넣으면 VPS가 쏜다)
 js/90-boot.js       네비게이션 · 테마 · 시작
 ```
 

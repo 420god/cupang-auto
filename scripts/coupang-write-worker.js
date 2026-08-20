@@ -12,9 +12,16 @@
    재연결 처리도 필요 없다. cron(1분)으로는 느려서 안 되므로 상시 프로세스로 돈다.
 
    실행:
-     node scripts/coupang-write-worker.js            # 상시 실행 (systemd 권장)
-     node scripts/coupang-write-worker.js --once     # 한 바퀴만 돌고 종료 (점검용)
-     node scripts/coupang-write-worker.js --dry-run  # 쿠팡에 안 쏘고 무엇을 쏠지만 출력
+     node scripts/coupang-write-worker.js                # 상시 실행 (systemd 권장)
+     node scripts/coupang-write-worker.js --once         # 한 바퀴만 돌고 종료 (점검용)
+     node scripts/coupang-write-worker.js --dry-run      # 쿠팡에 안 쏘고 무엇을 쏠지만 출력
+     node scripts/coupang-write-worker.js --sync-prices  # 전체 가격 재조회 (하루 1회 크론)
+
+   가격 동기화가 도는 경로는 셋인데 **함수는 하나다**(syncAll/syncOne):
+     ① 하루 1회 크론          → --sync-prices
+     ② 웹의 '가격 새로고침'    → 큐에 kind='price_sync' → 워커가 집음
+     ③ 가격 변경 성공 직후     → 그 옵션 하나만 재조회 (source='our_write')
+   두 벌로 갈라지면 반드시 어긋나므로 갈라놓지 않는다.
 */
 
 const crypto = require('crypto');
@@ -35,7 +42,7 @@ const DRY = process.argv.includes('--dry-run');
 /* 판매중지·재개는 **아직 실물로 확인 안 됐다.** 실패하면 실제로 상품이 내려가서
    정찰 때 일부러 시험을 미뤘다. 확인 전까지 워커가 거부한다 — 큐에 들어와도 실행하지 않고
    failed로 남기며 이유를 적는다. 확인되면 이 집합에서 빼면 된다. */
-const VERIFIED_KINDS = new Set(['price']);
+const VERIFIED_KINDS = new Set(['price', 'price_sync']);
 
 function requireEnv() {
   const missing = ['COUPANG_ACCESS_KEY', 'COUPANG_SECRET_KEY', 'SUPABASE_URL',
@@ -74,15 +81,24 @@ async function coupang(method, apiPath) {
   return { status: res.status, text, json };
 }
 
-/* 쏘기 직전에 쿠팡의 **진짜 현재가**를 읽는다. 웹 화면이 아는 값은 마지막 동기화 시점
-   기준이라, 그 사이 WING에서 사람이 바꿨으면 다르다. 이 값을 price_before로 남긴다.
+/* 쿠팡의 **진짜 현재 상태**를 읽는다. 웹 화면이 아는 값은 마지막 동기화 시점 기준이라,
+   그 사이 WING에서 사람이 바꿨으면 다르다.
    실측(2026-08-20): /inventories 가 { amountInStock, salePrice, onSale, sellerItemId }를 준다.
-   (옵션 단건 조회 vendor-items/{id} 자체는 404다 — 이 경로만 살아 있다) */
-async function readCurrentPrice(vendorItemId) {
+   (옵션 단건 조회 vendor-items/{id} 자체는 404다 — 이 하위 경로만 살아 있다) */
+async function readInventory(vendorItemId) {
   const r = await coupang('GET', `/v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/${vendorItemId}/inventories`);
   if (r.status !== 200 || !r.json || !r.json.data) return null;
-  const v = r.json.data.salePrice;
-  return v == null ? null : Number(v);
+  const d = r.json.data;
+  return {
+    salePrice: d.salePrice == null ? null : Number(d.salePrice),
+    onSale: d.onSale == null ? null : Boolean(d.onSale),
+    amountInStock: d.amountInStock == null ? null : Number(d.amountInStock)
+  };
+}
+
+async function readCurrentPrice(vendorItemId) {
+  const inv = await readInventory(vendorItemId);
+  return inv ? inv.salePrice : null;
 }
 
 /* ── Supabase ─────────────────────────────────────────────────────────── */
@@ -137,6 +153,71 @@ async function finish(id, patch) {
     { ...patch, finished_at: new Date().toISOString() });
 }
 
+/* ── 가격 동기화 ───────────────────────────────────────────────────────────
+   쿠팡에 물어본 값을 registry(최신값)에 적고, **바뀌었을 때만** 이력에 1행 넣는다
+   (db/migrations/024). 매번 이력을 쌓으면 대부분이 같은 값의 반복이라
+   "언제 바뀌었나"를 다시 계산해야 한다. 바뀐 것만 넣으면 이 표 자체가 변경 목록이 된다.
+
+   source는 이 변경이 어디서 왔는지다. our_write는 우리가 바꾼 것이고,
+   sync는 **어느새 달라져 있는 걸 발견한 것** = WING에서 사람이 바꿨거나 쿠팡이 조정한 것.
+   나중에 둘을 구분해서 보는 게 이 표의 핵심 가치다. */
+async function syncOne(vendorItemId, source, writeQueueId) {
+  const inv = await readInventory(vendorItemId);
+  if (!inv) return { ok: false, changed: false };
+
+  const prevRows = await sb('GET',
+    `rocket_growth_product_registry?vendor_item_id=eq.${encodeURIComponent(vendorItemId)}`
+    + `&select=sale_price,on_sale`);
+  const prev = prevRows && prevRows.length ? prevRows[0] : null;
+
+  await sb('PATCH', `rocket_growth_product_registry?vendor_item_id=eq.${encodeURIComponent(vendorItemId)}`, {
+    sale_price: inv.salePrice,
+    on_sale: inv.onSale,
+    amount_in_stock: inv.amountInStock,
+    price_checked_at: new Date().toISOString()
+  });
+
+  /* prev가 없으면 레지스트리에 그 옵션이 없다는 뜻이다(동기화가 아직 안 돌았거나 신규).
+     그때는 '변경'이 아니라 '처음 알게 된 것'이라 이력에 넣지 않는다 —
+     넣으면 null에서 7500으로 내린 것처럼 보인다. */
+  if (!prev) return { ok: true, changed: false };
+
+  const priceChanged = Number(prev.sale_price) !== Number(inv.salePrice);
+  const saleChanged = prev.on_sale !== inv.onSale;
+  if (!priceChanged && !saleChanged) return { ok: true, changed: false };
+
+  await sb('POST', 'rocket_growth_item_price_history', [{
+    vendor_item_id: vendorItemId,
+    sale_price: inv.salePrice,
+    prev_sale_price: prev.sale_price,
+    on_sale: inv.onSale,
+    prev_on_sale: prev.on_sale,
+    source: source || 'sync',
+    write_queue_id: writeQueueId || null
+  }]);
+  log(`변동 ${vendorItemId} ${prev.sale_price}→${inv.salePrice}원`
+    + (saleChanged ? ` 판매 ${prev.on_sale}→${inv.onSale}` : '') + ` (${source || 'sync'})`);
+  return { ok: true, changed: true };
+}
+
+/* 전체 동기화. 하루 1회 크론과 웹의 '가격 새로고침' 버튼이 둘 다 여기로 온다. */
+async function syncAll() {
+  const rows = await sb('GET', 'rocket_growth_product_registry?select=vendor_item_id&order=vendor_item_id.asc');
+  log(`가격 동기화 시작 — 옵션 ${rows.length}개`);
+  let ok = 0, changed = 0, failed = 0;
+  for (const r of rows) {
+    try {
+      const res = await syncOne(r.vendor_item_id, 'sync', null);
+      if (res.ok) { ok++; if (res.changed) changed++; } else failed++;
+    } catch (e) {
+      failed++; log(`동기화 실패 ${r.vendor_item_id}: ${e.message}`);
+    }
+    await new Promise((s) => setTimeout(s, 200));   // 쿠팡에 몰아치지 않는다
+  }
+  log(`가격 동기화 끝 — 성공 ${ok} · 변동 ${changed} · 실패 ${failed}`);
+  return { ok, changed, failed, total: rows.length };
+}
+
 /* ── 한 건 처리 ────────────────────────────────────────────────────────── */
 async function handle(row) {
   if (!VERIFIED_KINDS.has(row.kind)) {
@@ -148,6 +229,21 @@ async function handle(row) {
       response_body: `워커가 거부함: kind='${row.kind}'는 아직 실물 호출로 확인되지 않았다. `
         + `확인 후 coupang-write-worker.js 의 VERIFIED_KINDS에 추가할 것.`
     });
+    return;
+  }
+
+  /* 가격 재조회 — 쿠팡에 쓰는 게 아니라 읽어서 우리 DB를 맞추는 일이다.
+     대상이 없으면 전체(웹의 '가격 새로고침' 버튼), 있으면 그 하나만. */
+  if (row.kind === 'price_sync') {
+    if (row.vendor_item_id) {
+      const res = await syncOne(row.vendor_item_id, 'sync', null);
+      await finish(row.id, { status: res.ok ? 'done' : 'failed', http_status: res.ok ? 200 : null,
+        response_body: res.ok ? (res.changed ? '값이 바뀌어 이력에 기록함' : '변동 없음') : '쿠팡 조회 실패' });
+    } else {
+      const s = await syncAll();
+      await finish(row.id, { status: s.failed && !s.ok ? 'failed' : 'done', http_status: 200,
+        response_body: `옵션 ${s.total}개 — 성공 ${s.ok} · 변동 ${s.changed} · 실패 ${s.failed}` });
+    }
     return;
   }
 
@@ -196,6 +292,17 @@ async function handle(row) {
     http_status: r.status,
     response_body: r.text.slice(0, 2000)
   });
+
+  /* 성공했으면 곧바로 다시 읽어서 우리 DB를 맞춘다(2026-08-20 사용자 결정: 변경 후 자동).
+     **쿠팡이 SUCCESS라고 답한 것과 실제로 그 값이 된 것은 다른 사실이다** —
+     읽어서 확인해야 화면이 진실을 보여준다. 1초 두는 건 반영 지연 대비.
+     여기서 실패해도 가격 변경 자체는 성공이므로 큐 상태를 뒤집지 않는다 —
+     하루 1회 동기화가 어차피 다시 맞춘다. */
+  if (ok) {
+    await new Promise((s) => setTimeout(s, 1000));
+    try { await syncOne(row.vendor_item_id, 'our_write', row.id); }
+    catch (e) { log(`변경 후 재조회 실패(가격 변경 자체는 성공): ${e.message}`); }
+  }
 }
 
 /* ── 한 바퀴 ───────────────────────────────────────────────────────────── */
@@ -221,6 +328,11 @@ async function main() {
   requireEnv();
   await login();
   log(`쿠팡 쓰기 워커 시작 (폴링 ${POLL_MS}ms${DRY ? ', dry-run' : ''}${ONCE ? ', 한 바퀴만' : ''})`);
+
+  /* 하루 1회 크론이 부르는 모드. 큐를 거치지 않고 바로 전체를 훑는다 —
+     크론은 이미 VPS에서 도는 것이라 큐라는 우회로가 필요 없다.
+     로직은 웹 버튼과 같은 syncAll()을 쓴다(두 벌로 갈라지면 반드시 어긋난다). */
+  if (process.argv.includes('--sync-prices')) { await syncAll(); return; }
 
   if (ONCE) { const n = await tick(); log(`처리 대상 ${n}건`); return; }
 

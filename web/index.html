@@ -643,8 +643,11 @@
               <input type="checkbox" id="skuNeedSupplier" />
               <span>1688 미연결만</span>
             </label>
+            <button id="skuPriceSync" class="btn btn-sm">가격 새로고침</button>
           </div>
         </div>
+
+        <p class="muted sm" id="skuPriceNote"></p>
 
         <div class="table-wrap">
           <table class="grid">
@@ -653,6 +656,8 @@
                 <th>바코드</th>
                 <th>상품 · 옵션</th>
                 <th>옵션ID</th>
+                <th class="col-num">판매가</th>
+                <th class="col-num">쿠팡재고</th>
                 <th>1688</th>
                 <th class="col-num">MOQ</th>
                 <th class="col-num">리드타임</th>
@@ -1018,6 +1023,26 @@
     </div>
     <div class="modal-body">
       <div class="sku-ro" id="skuRo"></div>
+
+      <!-- 쿠팡 판매가 — 여기서 고치면 VPS 워커가 쿠팡에 실제로 쏜다(db/migrations/023).
+           WING이 못 하는 걸 하는 자리다: 원가·수수료·입출고비를 다 아는 채로 가격을 정한다. -->
+      <h4 class="sku-sec">쿠팡 판매가</h4>
+      <div id="skuPriceBox">
+        <div class="two">
+          <label class="field"><span>현재 판매가</span>
+            <input id="skuPriceNow" type="text" readonly /></label>
+          <label class="field"><span>바꿀 가격 (원)</span>
+            <input id="skuPriceNew" type="number" step="10" min="0" placeholder="예: 12900" /></label>
+        </div>
+        <p class="sm" id="skuMarginLive">—</p>
+        <label class="field"><span>왜 바꾸나 (선택)</span>
+          <input id="skuPriceReason" type="text" placeholder="예: 경쟁사 인하 대응" /></label>
+        <div class="modal-foot" style="justify-content:flex-start;align-items:center">
+          <button id="skuPriceApply" class="btn btn-sm btn-primary">가격 변경 요청</button>
+          <span class="muted sm" id="skuPriceState"></span>
+        </div>
+        <div id="skuPriceHistory" class="sm"></div>
+      </div>
 
       <h4 class="sku-sec">공급처 (1688)</h4>
       <label class="field"><span>상품 링크</span>
