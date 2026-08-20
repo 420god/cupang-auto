@@ -1077,6 +1077,17 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script src="app.js"></script>
+<!-- app.js를 도메인별로 자른 것. 모듈이 아니라 같은 전역 스코프를 공유하므로
+     **이 순서를 바꾸면 조용히 깨진다.** 파일명 앞 숫자가 그 순서다. -->
+<script src="js/00-core.js"></script>
+<script src="js/10-sourcing.js"></script>
+<script src="js/20-sales.js"></script>
+<script src="js/30-shell.js"></script>
+<script src="js/40-invoice.js"></script>
+<script src="js/50-purchase.js"></script>
+<script src="js/60-inbound.js"></script>
+<script src="js/70-outbound.js"></script>
+<script src="js/80-products.js"></script>
+<script src="js/90-boot.js"></script>
 </body>
 </html>

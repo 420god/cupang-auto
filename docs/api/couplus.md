@@ -2,7 +2,7 @@
 
 > **언제 읽나**: 발주 프로세스·환율·서류를 다룰 때. 청구서 인식은 `domain/invoice-parsing.md`.
 > **최종 검증**: 2026-08-19 (청구서 5종 + 공지 팝업)
-> **관련 코드**: `web/app.js` 발주/입고/출고 · `db/migrations/016`
+> **관련 코드**: `web/js/50-purchase.js`·`60-inbound.js`·`70-outbound.js` · `db/migrations/016`
 
 ## 사업 구조 — 코드로는 알 수 없는 전제
 

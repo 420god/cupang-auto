@@ -2,7 +2,7 @@
 
 > **언제 읽나**: 판매현황 숫자가 WING과 다를 때. 수수료·부가세·보관비 계산을 고칠 때.
 > **최종 검증**: 2026-08-17 실사용 검증 완료 + 2026-08-19 매입원가 연결
-> **관련 코드**: `web/app.js` `fetchSalesRange()`·`buildDailyRow()`·`renderSales()`·`calcMargin()`
+> **관련 코드**: `web/js/20-sales.js` `fetchSalesRange()`·`buildDailyRow()`·`renderSales()` · `00-core.js calcMargin()`
 
 ## 공식
 

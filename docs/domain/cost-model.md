@@ -2,7 +2,7 @@
 
 > **언제 읽나**: 원가가 이상할 때. 원가·이익 계산을 고칠 때. 로트를 건드릴 때.
 > **최종 검증**: 2026-08-19 (실제 청구서 5종 + 브라우저 시뮬레이션)
-> **관련 코드**: `web/app.js` `loadLotCogs()`·`calcMargin()`·출고 저장 · `db/migrations/015,016,019,020,021,022`
+> **관련 코드**: `web/js/20-sales.js loadLotCogs()` · `00-core.js calcMargin()` · `70-outbound.js`(출고 저장) · `db/migrations/015,016,019,020,021,022`
 
 ## 한 장 요약
 

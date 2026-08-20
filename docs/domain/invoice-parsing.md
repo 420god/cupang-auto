@@ -2,18 +2,18 @@
 
 > **언제 읽나**: 청구서 인식이 깨졌을 때. 새 형식이 나왔을 때. 파서를 고칠 때.
 > **최종 검증**: 2026-08-19 (구매대행 PDF 5종 · 제트 엑셀 1종, 전부 역검증 통과)
-> **관련 코드**: `web/api/parse-invoice.js` · `web/app.js` `parseCouplusInvoice()`·`parseZetInvoice()`
+> **관련 코드**: `web/api/parse-invoice.js` · `web/js/40-invoice.js parseCouplusInvoice()` · `60-inbound.js parseZetInvoice()`
 
 ## 역할 분리 — 왜 PDF/엑셀 해석만 서버에 있나
 
 ```
 web/api/parse-invoice.js       파일 바이트 → 텍스트/셀   (라이브러리가 필요한 부분만)
-web/app.js parseCouplusInvoice()   텍스트 → 줄 구조      (파싱 규칙 전부 여기)
+web/js/40-invoice.js  parseCouplusInvoice()   텍스트 → 줄 구조   (파싱 규칙 전부 여기)
 ```
 
 파싱 규칙은 자주 손보게 되는데 **브라우저 쪽이면 배포 없이 바로 확인된다.** 그리고 사용자가
 텍스트를 직접 붙여넣는 경로와 로직을 한 벌로 공유한다.
-서버 함수는 외부 네트워크 호출이 없어서 `sales-today.js`의 고정 IP 문제와 무관하다.
+서버 함수는 외부 네트워크 호출이 없어서 쿠팡 고정 IP 문제와 무관하다 — 그래서 Vercel에 둘 수 있다.
 
 **파일 종류는 확장자나 content-type이 아니라 시그니처로 가른다** — `%PDF` vs `PK`(=ZIP).
 카톡으로 받은 파일은 확장자가 바뀌어 있거나 content-type이 엉뚱하게 오는 일이 흔하다.

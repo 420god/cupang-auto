@@ -55,7 +55,7 @@ docs/       모든 상세 문서                         → docs/INDEX.md
 
 **셋을 묶는 계약**: 스키마 하나가 세 곳의 API다.
 ```
-extension/supabase.js buildSupabasePayload()  →  db/migrations/*.sql  →  web/app.js
+extension/supabase.js buildSupabasePayload()  →  db/migrations/*.sql  →  web/js/*.js
 ```
 컬럼을 바꾸면 ①마이그레이션 새 번호 ②extension ③web ④`bash scripts/check_all.sh` 순으로 챙긴다.
 

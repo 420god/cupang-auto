@@ -2,7 +2,7 @@
 
 > **언제 읽나**: 소싱·카테고리 수집을 건드릴 때. 수수료 정보가 "없음"으로 뜰 때.
 > **최종 검증**: 2026-08-17 (그 이후 이 영역은 안 건드림)
-> **관련 코드**: `web/app.js` `commissionFor()`·`feeFor()`·`calcMargin()` · `extension/popup.js`
+> **관련 코드**: `web/js/00-core.js` `commissionFor()`·`feeFor()`·`calcMargin()` · `10-sourcing.js` · `extension/popup.js`
 
 ## 이 탭은 "남의 상품"을 조사하는 곳이다
 

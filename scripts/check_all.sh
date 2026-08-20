@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 echo "=== 1. JS 구문 검사 ==="
-for f in extension/*.js web/*.js; do
+for f in extension/*.js web/api/*.js web/js/*.js; do
   node --check "$f" && echo "  OK  $f"
 done
 
@@ -14,15 +14,18 @@ echo "=== 2. HTML/JS id 정합성 ==="
 python3 - <<'PY'
 import re, glob
 
-for pair in [("extension/popup.html", "extension/popup.js"),
-             ("web/index.html", "web/app.js")]:
-    html_path, js_path = pair
+# web 로직은 web/js/*.js 여러 파일로 나뉘어 있지만 전역 스코프를 공유하므로
+# 검사할 때는 전부 이어붙여 한 덩어리로 본다(분할 전 app.js 하나였을 때와 동일한 검사).
+for pair in [("extension/popup.html", ["extension/popup.js"]),
+             ("web/index.html", sorted(glob.glob("web/js/*.js")))]:
+    html_path, js_paths = pair
     html = open(html_path, encoding="utf-8").read()
-    js = open(js_path, encoding="utf-8").read()
+    js = "\n".join(open(p, encoding="utf-8").read() for p in js_paths)
+    js_path = js_paths[0] if len(js_paths) == 1 else f"web/js/*.js ({len(js_paths)}개)"
 
     ids_html = set(re.findall(r'id="([^"]+)"', html))
     ids_js = set(re.findall(r"getElementById\('([^']+)'\)", js))
-    ids_js |= set(re.findall(r"\$\('#([\w-]+)'\)", js))  # web app.js는 $() 헬퍼 사용
+    ids_js |= set(re.findall(r"\$\('#([\w-]+)'\)", js))  # web 쪽은 $() 헬퍼 사용
 
     missing = ids_js - ids_html - {"q", "tb"}  # q,tb는 동적 생성 HTML 내부용이라 예외
     status = "OK" if not missing else "FAIL"

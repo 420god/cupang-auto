@@ -2,7 +2,7 @@
 
 > **언제 읽나**: 권장 발주 수량이 감과 다를 때. 기본값(리드타임·안전일수)을 튜닝할 때.
 > **최종 검증**: 2026-08-19 (SKU 5종 시뮬레이션 — 추이 급증·중국창고 보유·신상품·판매중지)
-> **관련 코드**: `web/app.js` `loadStock()`·`renderStock()`·`STOCK.defaults`
+> **관련 코드**: `web/js/60-inbound.js` `loadStock()`·`renderStock()`·`STOCK.defaults`
 
 ## 방침
 
