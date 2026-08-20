@@ -15,6 +15,7 @@ const inspectBtn = document.getElementById('inspectBtn');
 const consumerBtn = document.getElementById('consumerBtn');
 const salesBtn = document.getElementById('salesBtn');
 const insightBtn = document.getElementById('insightBtn');
+const metricsSyncBtn = document.getElementById('metricsSyncBtn');
 const productProbeBtn = document.getElementById('productProbeBtn');
 const urlTestBtn = document.getElementById('urlTestBtn');
 const resetDetailBtn = document.getElementById('resetDetailBtn');
@@ -2755,6 +2756,31 @@ salesBtn.addEventListener('click', async () => {
    주문과 유입경로가 다 있어서, 엑셀을 받지 않고 그대로 가져올 수 있다.
    광고비는 여기서 '요약'만 나오므로 참고용이다 — 상세 내역은 별도 데이터로 받는다.
    **응답이 크므로 경로별로 앞부분만 낸다.** */
+/* 지표 동기화는 background 가 한다 — WING 탭 조작과 Supabase 업로드가 거기 있고,
+   팝업은 닫히면 죽어버려서 긴 작업을 맡기면 중간에 끊긴다. */
+metricsSyncBtn.addEventListener('click', () => {
+  setStatus('지표를 받는 중입니다... (밀린 날짜만큼 걸립니다)');
+  chrome.runtime.sendMessage({ type: 'SYNC_METRICS', days: 14 }, (res) => {
+    if (chrome.runtime.lastError) {
+      setStatus('오류: ' + chrome.runtime.lastError.message, true);
+      return;
+    }
+    if (!res || !res.ok) {
+      setStatus('실패: ' + ((res && res.error) || '알 수 없음'), true);
+      return;
+    }
+    const r = res.result || {};
+    const done = r.done || [];
+    if (!done.length) {
+      setStatus('새로 받을 날짜가 없습니다. (이미 받은 날 ' + (r.skipped || 0) + '일)');
+      return;
+    }
+    const lines = done.map((d) => `${d.date} — 옵션 ${d.items}행 · 유입경로 ${d.traffic}행 (${d.pages}페이지)`);
+    setStatus('지표 동기화 완료 ' + done.length + '일\n' + lines.join('\n')
+      + (r.stoppedAt ? `\n\n${r.stoppedAt} 에서 중단: ${r.error}` : ''));
+  });
+});
+
 insightBtn.addEventListener('click', async () => {
   try {
     const tab = await getWingTab();

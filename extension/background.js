@@ -372,6 +372,23 @@ async function syncSales(dateFrom, dateTo) {
   };
 }
 
+/* 팝업(같은 확장프로그램)에서 부르는 통로. onMessageExternal 은 웹 전용이라
+   팝업 메시지는 안 받는다 — 둘이 다른 리스너다. */
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!message || message.type !== 'SYNC_METRICS') return false;
+  (async () => {
+    try {
+      await sbLoadConfig();
+      if (!sbConfigured()) throw new Error('Supabase 설정이 없습니다. 팝업에서 먼저 로그인하세요.');
+      const r = await syncMetricsBackfill(message.days || 14);
+      sendResponse({ ok: true, result: r });
+    } catch (e) {
+      sendResponse({ ok: false, error: (e && e.message) ? e.message : String(e) });
+    }
+  })();
+  return true;
+});
+
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
   if (!message) return false;
 
@@ -388,6 +405,23 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
       }
     })();
     return true; // sendResponse를 비동기로 나중에 호출하겠다는 표시
+  }
+
+  /* 웹 대시보드가 열릴 때 부른다 — 이게 "자동"의 실질이다.
+     확장프로그램은 브라우저가 켜져 있을 때만 도니까, 사람이 화면을 여는 순간을
+     동기화 시점으로 삼는다. 이미 받은 날짜는 건너뛰므로 여러 번 불려도 싸다. */
+  if (message.type === 'SYNC_METRICS') {
+    (async () => {
+      try {
+        await sbLoadConfig();
+        if (!sbConfigured()) throw new Error('Supabase 설정이 없습니다. 확장프로그램 팝업에서 먼저 로그인하세요.');
+        const r = await syncMetricsBackfill(message.days || 14);
+        sendResponse({ ok: true, result: r });
+      } catch (e) {
+        sendResponse({ ok: false, error: (e && e.message) ? e.message : String(e) });
+      }
+    })();
+    return true;
   }
 
   if (message.type === 'SYNC_ITEM_COSTS') {
@@ -407,3 +441,242 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 
   return false;
 });
+
+/* ===================== 비즈니스 인사이트 지표 동기화 =====================
+   WING 판매분석 화면이 쓰는 API를 그대로 부른다(2026-08-20 실물 캡처로 확인,
+   docs/api/wing-internal.md). **엑셀을 받아 파싱하지 않는다** — 화면이 이미
+   JSON을 받고 있어서 엑셀은 그걸 포장한 결과일 뿐이다.
+
+   왜 확장프로그램인가: WING은 로그인 세션 기반이라 VPS가 못 부른다.
+   순매출·확정정산·재고현황과 같은 이유이고, 이게 네 번째다.
+
+   당일 데이터는 다음날 밤에 채워진다(사용자 확인) — 그래서 **어제까지만** 받는다. */
+
+const INSIGHT_BASE = '/tenants/rfm-ss/api';
+
+/* 페이지 컨텍스트에서 실행됨. 하루치 옵션별 지표를 **끝까지** 받는다.
+   pageSize는 화면이 쓰는 20 그대로 둔다 — 이 저장소엔 이미 교훈이 있다.
+   sold-vendor-item-list에서 pageSize를 키웠다가 400이 났다(실측). 미검증 변형은
+   만들지 않는다(R-14). 대신 pageNumber를 올려가며 전부 받는다. */
+function pageFetchInsightItems(dateStr) {
+  return (async () => {
+    try {
+      const out = [];
+      let pages = 0;
+      for (let pageNumber = 0; pageNumber < 200; pageNumber++) {
+        const res = await fetch('/tenants/rfm-ss/api/business-insight/vi-detail-search', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            startDate: dateStr, endDate: dateStr,          // 같은 날 = 하루치
+            registrationTypes: ['NORMAL', 'RFM'],          // 판매자배송 + 로켓그로스
+            pageNumber, pageSize: 20,
+            sortBy: 'GMV', sortOrder: 'DESC', includeSoldVICount: true
+          })
+        });
+        const text = await res.text();
+        let body;
+        try { body = JSON.parse(text); } catch (e) { return { ok: false, notLoggedIn: true }; }
+        if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
+        const list = (body && body.vendorItems) || [];
+        pages++;
+        out.push(...list);
+        /* 총 페이지 수를 주는 필드를 못 봤다(응답 앞부분만 캡처됨). 그래서
+           **빈 페이지가 오면 끝난 것으로 본다** — 총계 필드를 추측하는 것보다 안전하다. */
+        if (list.length < 20) break;
+      }
+      return { ok: true, items: out, pages };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) ? e.message : String(e) };
+    }
+  })();
+}
+
+/* 유입경로. **판매자 전체 단위다**(요청에 vendorItemIds가 없다).
+   옵션별 인과는 못 가르지만 "그날 광고 유입이 있었나"는 확실히 알 수 있고,
+   그게 없으면 광고 효과를 썸네일 효과로 오독한다. */
+function pageFetchInsightTraffic(dateStr) {
+  return (async () => {
+    try {
+      const res = await fetch(
+        '/tenants/rfm-ss/api/traffic-insight/distribution/summary/without-subscription?withVariance=true', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            startDate: dateStr, endDate: dateStr,
+            metrics: ['unit_sold_contribution'],
+            trafficSources: ['search', 'recommendation', 'promotion', 'product_list_pages',
+                             'mycoupang', 'brandstore', 'live', 'other', 'ADS'],
+            registrationTypes: ['NORMAL', 'RFM'],
+            isRecentlyListed: false
+          })
+        });
+      const text = await res.text();
+      let body;
+      try { body = JSON.parse(text); } catch (e) { return { ok: false, notLoggedIn: true }; }
+      if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
+      return { ok: true, rows: Array.isArray(body) ? body : [] };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) ? e.message : String(e) };
+    }
+  })();
+}
+
+/* 옵션별 광고 캠페인 상태. 화면의 "광고 중지" 배지가 여기서 온다.
+   한 번에 20개씩 보내는 걸 캡처했으므로 그 크기를 지킨다. */
+function pageFetchAdStatus(vendorItemIds) {
+  return (async () => {
+    try {
+      const out = {};
+      for (let i = 0; i < vendorItemIds.length; i += 20) {
+        const chunk = vendorItemIds.slice(i, i + 20);
+        const res = await fetch('/tenants/cmg-wing-card/wing/one-click-setup/condition', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            type: 'WING_SALES_ANALYSIS_CAMPAIGN_STATUS',
+            items: chunk.map((id) => ({ vendorItemId: Number(id) }))
+          })
+        });
+        if (!res.ok) continue;               // 광고 상태는 부가 정보다. 실패해도 지표는 넣는다
+        const text = await res.text();
+        let body;
+        try { body = JSON.parse(text); } catch (e) { continue; }
+        (Array.isArray(body) ? body : []).forEach((r) => {
+          const ex = r.extra || {};
+          out[String(r.vendorItemId)] = {
+            status: ex.representingCampaignServingStatus || null,
+            count: ex.campaignCount == null ? null : Number(ex.campaignCount)
+          };
+        });
+      }
+      return { ok: true, byItem: out };
+    } catch (e) {
+      return { ok: true, byItem: {} };       // 여기 실패로 전체를 멈추지 않는다
+    }
+  })();
+}
+
+/* 하루치를 받아 Supabase에 넣는다. 이 함수가 동기화의 본체다. */
+async function syncMetricsForDate(dateStr) {
+  const tab = await getOrOpenWingTab();
+
+  const itemsRes = await execWithRetry(tab.id, pageFetchInsightItems, [dateStr]);
+  if (!itemsRes || !itemsRes.ok) {
+    throw new Error(itemsRes && itemsRes.notLoggedIn
+      ? 'WING 로그인이 필요합니다.'
+      : `옵션 지표 조회 실패: ${(itemsRes && itemsRes.error) || '알 수 없음'}`);
+  }
+
+  const vids = itemsRes.items
+    .map((x) => x.vendorItemDetails && x.vendorItemDetails.vendorItemId)
+    .filter(Boolean).map(String);
+  const adRes = await execWithRetry(tab.id, pageFetchAdStatus, [vids]);
+  const adBy = (adRes && adRes.byItem) || {};
+
+  /* 응답 → 우리 표. **단위를 여기서 통일한다** — pvToOrder는 비율(0.0171)이고
+     엑셀의 "1.71%"와 다르다. 원본 그대로 담고 화면에서 곱한다(db/migrations/027). */
+  const itemRows = itemsRes.items.map((x) => {
+    const d = x.vendorItemDetails || {};
+    const m = x.businessInsightsMetricsResponse || {};
+    const ad = adBy[String(d.vendorItemId)] || {};
+    const n = (v) => (v == null ? null : Number(v));
+    const i = (v) => (v == null ? null : Math.round(Number(v)));
+    return {
+      metric_date: dateStr,
+      vendor_item_id: String(d.vendorItemId),
+      seller_product_id: d.inventoryId == null ? null : String(d.inventoryId),
+      item_name: d.itemName || null,
+      product_name: d.productName || null,
+      category: Array.isArray(d.categoryPath) ? d.categoryPath[d.categoryPath.length - 1] : null,
+      category_path: Array.isArray(d.categoryPath) ? d.categoryPath.join(' > ') : null,
+      sales_method: d.registrationType === 'RFM' ? '로켓그로스' : '판매자배송',
+      registration_type: d.registrationType || null,
+
+      revenue: i(m.totalGmv),
+      orders: i(m.totalOrders),
+      sold_qty: i(m.totalUnitsSold),
+      visitors: i(m.totalUniqueVisitor),
+      views: i(m.totalPageViews),
+      cart_adds: i(m.totalAddToCart),
+      conversion_rate: n(m.pvToOrder),        // 비율 그대로
+
+      search_volume: n(m.searchVolume),
+      srp_click: n(m.srpClick),
+      srp_click_share: n(m.srpClickShare),
+
+      is_item_winner: d.isItemWinner == null ? null : !!d.isItemWinner,
+      is_oos: d.isOOS == null ? null : !!d.isOOS,
+      has_badge: d.hasBadge == null ? null : !!d.hasBadge,
+      rating_count: i(d.ratingCount),
+      rating_review: n(d.ratingReview),
+      image_path: d.imagePath || null,
+
+      ad_campaign_status: ad.status || null,
+      ad_campaign_count: ad.count == null ? null : ad.count,
+
+      raw: x
+    };
+  });
+
+  const trafRes = await execWithRetry(tab.id, pageFetchInsightTraffic, [dateStr]);
+  const trafficRows = ((trafRes && trafRes.rows) || []).map((t) => ({
+    metric_date: dateStr,
+    traffic_source: t.trafficSourceName,
+    traffic_group: t.trafficSourceGroup || null,
+    registration_types: 'NORMAL,RFM',
+    impression: t.impression == null ? null : Math.round(t.impression),
+    glance_views: t.glanceViews == null ? null : Math.round(t.glanceViews),
+    add_to_cart: t.addToCart == null ? null : Math.round(t.addToCart),
+    orders: t.order == null ? null : Math.round(t.order),
+    units_sold: t.unitSold == null ? null : Math.round(t.unitSold),
+    gmv: t.gmv == null ? null : Math.round(t.gmv),
+    conversion_rate: t.conversionRate == null ? null : Number(t.conversionRate),
+    glance_views_mix: t.glanceViewsMixPercentage == null ? null : Number(t.glanceViewsMixPercentage),
+    unit_sold_contrib: t.unitSoldContributionPercentage == null ? null : Number(t.unitSoldContributionPercentage),
+    raw: t
+  }));
+
+  /* 같은 날짜를 다시 받으면 덮어쓴다 — 쿠팡이 나중에 값을 보정하는 경우가 있어서
+     최신값이 이기는 게 맞다(확정 정산에서 이미 겪은 패턴). */
+  if (itemRows.length) await sbUpsert('coupang_item_metrics_daily', itemRows, 'metric_date,vendor_item_id');
+  if (trafficRows.length) await sbUpsert('coupang_traffic_daily', trafficRows, 'metric_date,traffic_source');
+  await sbUpsert('coupang_metrics_sync_log', [{
+    metric_date: dateStr,
+    synced_at: new Date().toISOString(),
+    item_rows: itemRows.length,
+    traffic_rows: trafficRows.length,
+    pages: itemsRes.pages || null,
+    note: trafRes && trafRes.ok ? null : '유입경로 조회 실패'
+  }], 'metric_date');
+
+  return { date: dateStr, items: itemRows.length, traffic: trafficRows.length, pages: itemsRes.pages };
+}
+
+/* **빠진 날을 메운다.** 확장프로그램은 브라우저가 켜져 있을 때만 도니까 구멍이 생긴다.
+   이미 받은 날짜를 로그에서 확인하고 없는 날만 받는다 — 그래서 며칠 WING을 안 열어도
+   다음에 열면 밀린 게 다 들어온다.
+   **오늘은 안 받는다** — 당일 데이터는 다음날 밤에 채워진다(사용자 확인). */
+async function syncMetricsBackfill(maxDays) {
+  const days = [];
+  for (let i = 1; i <= (maxDays || 14); i++) days.push(kstDateStr(new Date(Date.now() - i * 86400000)));
+
+  let have = {};
+  try {
+    const rows = await sbRequest(
+      `coupang_metrics_sync_log?select=metric_date&metric_date=in.(${days.join(',')})`);
+    (rows || []).forEach((r) => { have[r.metric_date] = 1; });
+  } catch (e) { /* 로그를 못 읽으면 전부 다시 받는다 — 덮어쓰기라 안전하다 */ }
+
+  const todo = days.filter((d) => !have[d]).sort();   // 오래된 날부터
+  const done = [];
+  for (const d of todo) {
+    try {
+      done.push(await syncMetricsForDate(d));
+    } catch (e) {
+      return { done, stoppedAt: d, error: e.message };
+    }
+    await new Promise((r) => setTimeout(r, 800));     // WING에 몰아치지 않는다
+  }
+  return { done, skipped: days.length - todo.length };
+}
