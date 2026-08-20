@@ -21,3 +21,6 @@ scripts/_sample_seller_product.json
 
 # 쓰기 정찰 응답 덤프 (필드 구조 확인용, 커밋 불필요)
 scripts/_probe_*.json
+
+# npm 설치 산출물 — 커밋하지 않는다 (VPS/로컬에서 각자 npm install)
+node_modules/
