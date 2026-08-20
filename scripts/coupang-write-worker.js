@@ -296,7 +296,55 @@ const PRIMARY_METRICS = {
   sale_status:  ['views']
 };
 
-/* entries: [{ field, before, after }] — 한 요청에서 두 가지를 바꿨으면 두 행이 된다.
+/* ── 바꾸기 전 사진을 우리 쪽에 보관한다 ───────────────────────────────────
+   before_value에 경로 문자열만 남기면 **그림 자체는 쿠팡에만 있다.** 쿠팡이 지우면
+   "이전 썸네일이 뭐였나"를 영영 못 본다. 나중에 AI가 이전/이후 이미지를 눈으로
+   비교하려면 파일이 있어야 한다.
+
+   CDN 주소는 실물로 확인했다(2026-08-20):
+     https://image1.coupangcdn.com/image/{cdnPath}  → 200 image/png
+   **/image/ 접두사가 필요하다.** 없으면 403이다. 호스트는 image1·thumbnail1·static 등
+   여러 개가 같은 파일을 준다. */
+const COUPANG_IMAGE_BASE = 'https://image1.coupangcdn.com/image/';
+
+async function archiveCoupangImage(cdnPath, vendorItemId, tag) {
+  if (!cdnPath) return null;
+  const url = /^https?:\/\//.test(cdnPath) ? cdnPath : COUPANG_IMAGE_BASE + cdnPath;
+  /* 이미 우리 Storage에 있는 것(우리가 올린 이미지)은 다시 받지 않는다 —
+     그건 이미 영구 보관 중이고, 옮겨 담으면 사본만 늘어난다. */
+  if (url.startsWith(SUPABASE_URL)) return url;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`쿠팡 이미지 내려받기 실패 ${res.status} ${url.slice(0, 90)}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  const ext = (cdnPath.split('.').pop() || 'jpg').split(/[?#]/)[0].toLowerCase();
+  const p = `archive/${vendorItemId}/${Date.now()}-${tag}.${ext}`;
+  const up = await fetch(`${SUPABASE_URL}/storage/v1/object/product-images/${p}`, {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${token}`,
+      'content-type': res.headers.get('content-type') || 'application/octet-stream'
+    },
+    body: buf
+  });
+  if (!up.ok) throw new Error(`보관 실패 ${up.status}: ${(await up.text()).slice(0, 150)}`);
+  return `${SUPABASE_URL}/storage/v1/object/public/product-images/${p}`;
+}
+
+/* 경로 하나를 { 쿠팡 경로, 우리가 보관한 사본 } 으로 만든다.
+   **보관에 실패해도 경로는 남긴다** — 사본이 없는 것과 기록이 아예 없는 건 다르다. */
+async function archived(cdnPath, vendorItemId, tag) {
+  if (!cdnPath) return null;
+  try {
+    return { coupang_path: cdnPath, archived_url: await archiveCoupangImage(cdnPath, vendorItemId, tag) };
+  } catch (e) {
+    log(`이미지 보관 실패(계속): ${e.message}`);
+    return { coupang_path: cdnPath, archived_url: null, archive_error: e.message.slice(0, 200) };
+  }
+}
+
+/* entries: [{ field, before, after, hypothesis }] — 한 요청에서 두 가지를 바꿨으면 두 행이 된다.
    섞인 변경은 원인을 못 가리므로, 나중에 "이건 분석에서 빼자"를 판단하려면 쪼개져 있어야 한다. */
 async function recordChanges(row, entries) {
   const rows = entries
@@ -310,7 +358,7 @@ async function recordChanges(row, entries) {
       after_value: e.after === undefined ? null : e.after,
       source: 'our_write',
       primary_metrics: PRIMARY_METRICS[e.field] || null,
-      hypothesis: row.hypothesis || row.reason || null,
+      hypothesis: e.hypothesis || row.hypothesis || row.reason || null,
       changed_by: row.requested_by || null,
       queue_id: row.id
     }));
@@ -366,6 +414,20 @@ async function handleProductUpdate(row) {
     before.item_name = targetItem.itemName || null;
   }
   before.product_name = product.sellerProductName || null;
+
+  /* **사진은 PUT 전에 받아둬야 한다.** 쏘고 나면 쿠팡이 옛 이미지를 언제 지울지 모른다.
+     바꾸려는 항목의 것만 받는다 — 안 바꾸는 상세페이지 10장을 매번 받으면 느리고 낭비다. */
+  const wantedPatch = (payload.items || {})[String(row.vendor_item_id)] || {};
+  if (wantedPatch.images !== undefined && before.thumbnail) {
+    before.thumbnail = await archived(before.thumbnail, row.vendor_item_id, 'thumb');
+  }
+  if (wantedPatch.contents !== undefined && (before.detail_page || []).length) {
+    const arr = [];
+    for (let i = 0; i < before.detail_page.length; i++) {
+      arr.push(await archived(before.detail_page[i], row.vendor_item_id, `detail${i + 1}`));
+    }
+    before.detail_page = arr;
+  }
 
   /* 상품 단위 필드 */
   if (payload.product) {
@@ -428,25 +490,26 @@ async function handleProductUpdate(row) {
        payload에 있는 것만 담는다 — 안 바꾼 항목까지 이력에 넣으면 나중에
        "이때 썸네일도 바꿨네" 하고 잘못 읽는다. */
     const p = (payload.items || {})[String(row.vendor_item_id)] || {};
+    const hypos = payload.hypotheses || {};
     const entries = [];
     if (p.images !== undefined) {
       const rep = (p.images || []).find((im) => im.imageType === 'REPRESENTATION');
-      entries.push({ field: 'thumbnail', before: before.thumbnail,
+      entries.push({ field: 'thumbnail', before: before.thumbnail, hypothesis: hypos.thumbnail,
                      after: rep ? (rep.vendorPath || rep.cdnPath || null) : null });
     }
     if (p.contents !== undefined) {
-      entries.push({ field: 'detail_page', before: before.detail_page,
+      entries.push({ field: 'detail_page', before: before.detail_page, hypothesis: hypos.detail_page,
                      after: (p.contents || []).flatMap((c) =>
                        (c.contentDetails || []).map((d) => d.content).filter(Boolean)) });
     }
     if (p.searchTags !== undefined) {
-      entries.push({ field: 'search_tags', before: before.search_tags, after: p.searchTags });
+      entries.push({ field: 'search_tags', before: before.search_tags, after: p.searchTags, hypothesis: hypos.search_tags });
     }
     if (p.itemName !== undefined) {
-      entries.push({ field: 'item_name', before: before.item_name, after: p.itemName });
+      entries.push({ field: 'item_name', before: before.item_name, after: p.itemName, hypothesis: hypos.item_name });
     }
     if (payload.product && payload.product.sellerProductName !== undefined) {
-      entries.push({ field: 'product_name', before: before.product_name,
+      entries.push({ field: 'product_name', before: before.product_name, hypothesis: hypos.product_name,
                      after: payload.product.sellerProductName });
     }
     await recordChanges(row, entries);

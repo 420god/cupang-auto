@@ -612,7 +612,7 @@ function renderProductSection(r) {
 
   const canEdit = has && !!item;
   ['#skuProdName', '#skuItemName', '#skuSearchTags', '#skuRepImage',
-   '#skuDetailImages', '#skuProdRequested', '#skuProdSave', '#skuProdHypothesis'].forEach((id) => {
+   '#skuDetailImages', '#skuProdRequested', '#skuProdSave'].forEach((id) => {
     $(id).disabled = !canEdit;
   });
   $('#skuProdFetch').disabled = !(r.vid && spid);
@@ -623,7 +623,7 @@ function renderProductSection(r) {
   $('#skuRepImage').value = '';
   $('#skuDetailImages').value = '';
   $('#skuProdRequested').checked = false;
-  $('#skuProdHypothesis').value = '';
+  syncHypoInputs([]);
   $('#skuProdMsg').textContent = '';
   if ($('#skuProdMetricHint')) $('#skuProdMetricHint').textContent = '';
 
@@ -752,6 +752,10 @@ $('#skuProdSave').onclick = async () => {
     payload.items[r.vid] = patch;
     if (Object.keys(productPatch).length) payload.product = productPatch;
     if ($('#skuProdRequested').checked) payload.requested = true;
+    /* 항목별 가설. 썸네일과 상세페이지는 노리는 지표가 달라서 가설 하나를
+       두 곳에 복사하면 어느 쪽도 판정할 수 없다(2026-08-20 사용자 지적). */
+    const hypos = collectHypotheses();
+    if (Object.keys(hypos).length) payload.hypotheses = hypos;
 
     await api('coupang_write_queue', {
       method: 'POST',
@@ -761,7 +765,6 @@ $('#skuProdSave').onclick = async () => {
         vendor_item_id: r.vid,
         sku_id: r.sku.id,
         payload: payload,
-        hypothesis: ($('#skuProdHypothesis').value || '').trim() || null,
         requested_by: AUTH.userId || null
       }
     });
@@ -822,26 +825,53 @@ const CHANGE_METRIC_HINT = {
   item_name:    '옵션명을 바꾸면 <b>조회·방문자</b>가 움직여야 맞습니다.'
 };
 
-/* 지금 무엇을 바꾸려는 상태인지 보고 힌트를 띄운다. 여러 개를 한 번에 바꾸면
-   **원인을 못 가린다**는 것도 같이 알린다 — 나중에 분석에서 빼야 할 사례다. */
-function updateMetricHint() {
-  const el = $('#skuProdMetricHint');
-  if (!el) return;
+/* 지금 무엇을 바꾸려는 상태인지 계산한다. 저장할 때와 **같은 판정**을 써야
+   화면이 보여주는 항목과 실제로 기록되는 항목이 어긋나지 않는다. */
+function changedFields() {
   const r = SKUS.editing;
   const prod = r && r.reg && r.reg.product_json;
   const item = prod ? findProductItem(prod, r.vid) : null;
-  if (!item) { el.textContent = ''; return; }
-
-  const fields = [];
-  if ($('#skuRepImage').files[0]) fields.push('thumbnail');
-  if (($('#skuDetailImages').files || []).length) fields.push('detail_page');
+  if (!item) return [];
+  const out = [];
+  if ($('#skuRepImage').files[0]) out.push('thumbnail');
+  if (($('#skuDetailImages').files || []).length) out.push('detail_page');
   const tagsRaw = ($('#skuSearchTags').value || '').trim();
   const curTags = Array.isArray(item.searchTags) ? item.searchTags.join(', ') : '';
-  if (tagsRaw !== curTags) fields.push('search_tags');
+  if (tagsRaw !== curTags) out.push('search_tags');
   const name = ($('#skuProdName').value || '').trim();
-  if (name && name !== (prod.sellerProductName || '')) fields.push('product_name');
+  if (name && name !== (prod.sellerProductName || '')) out.push('product_name');
   const iname = ($('#skuItemName').value || '').trim();
-  if (iname && iname !== (item.itemName || '')) fields.push('item_name');
+  if (iname && iname !== (item.itemName || '')) out.push('item_name');
+  return out;
+}
+
+/* 바꾸는 항목의 가설 칸만 띄운다. 안 바꾸는 항목의 칸까지 보이면 빈 칸이 늘어서
+   결국 아무도 안 적게 된다 — 적게 만드는 게 목적이므로 필요한 것만 내놓는다. */
+function syncHypoInputs(fields) {
+  $$('#skuHypoBox [data-hypo]').forEach((lab) => {
+    const on = fields.indexOf(lab.dataset.hypo) >= 0;
+    lab.classList.toggle('hidden', !on);
+    if (!on) lab.querySelector('input').value = '';
+  });
+}
+
+function collectHypotheses() {
+  const out = {};
+  $$('#skuHypoBox [data-hypo]').forEach((lab) => {
+    if (lab.classList.contains('hidden')) return;
+    const v = (lab.querySelector('input').value || '').trim();
+    if (v) out[lab.dataset.hypo] = v;
+  });
+  return out;
+}
+
+/* 여러 개를 한 번에 바꾸면 **원인을 못 가린다**는 것도 같이 알린다 —
+   나중에 분석에서 빼야 할 사례다. */
+function updateMetricHint() {
+  const el = $('#skuProdMetricHint');
+  if (!el) return;
+  const fields = changedFields();
+  syncHypoInputs(fields);
 
   if (!fields.length) { el.textContent = ''; return; }
   const lines = fields.map((f) => '· ' + CHANGE_METRIC_HINT[f]).join('<br>');

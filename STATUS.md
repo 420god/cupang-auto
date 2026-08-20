@@ -69,5 +69,4 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 **기타**
 - SKU ID(WING 화면 8자리)는 공식 Open API 어디에도 없음
-- 이미지 CDN 주소 미검증
 - `fulfillment_fees`에 전용할인가 행이 없는 카테고리는 요금표 강제 재수집 필요

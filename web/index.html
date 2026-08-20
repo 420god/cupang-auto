@@ -1070,10 +1070,21 @@
         <div id="skuDetailPreview" class="sm muted"></div>
 
         <!-- 메모가 아니라 **가설**로 받는다. 나중에 AI가 "이 가설이 맞았나"를 판정할
-             근거가 된다 — "그냥 바꿔봄"은 아무것도 학습시키지 못한다. -->
-        <label class="field"><span>왜 바꾸나 · 무엇을 기대하나</span>
-          <input id="skuProdHypothesis" type="text"
-                 placeholder="예: 썸네일이 어두워 눈에 안 띈다고 봄 → 조회수가 오를 것" /></label>
+             근거가 된다 — "그냥 바꿔봄"은 아무것도 학습시키지 못한다.
+             **항목마다 따로 받는다** — 썸네일과 상세페이지는 노리는 지표가 다르므로
+             가설 하나를 두 곳에 복사하면 어느 쪽도 판정할 수 없다. -->
+        <div id="skuHypoBox">
+          <label class="field hidden" data-hypo="thumbnail"><span>대표이미지를 왜 바꾸나</span>
+            <input type="text" placeholder="예: 어두워서 눈에 안 띈다고 봄 → 조회수가 오를 것" /></label>
+          <label class="field hidden" data-hypo="detail_page"><span>상세페이지를 왜 바꾸나</span>
+            <input type="text" placeholder="예: 사용법 설명이 없어 이탈한다고 봄 → 전환율이 오를 것" /></label>
+          <label class="field hidden" data-hypo="search_tags"><span>검색어를 왜 바꾸나</span>
+            <input type="text" placeholder="예: '말랑이'보다 '슬라임' 검색이 많다고 봄 → 유입이 늘 것" /></label>
+          <label class="field hidden" data-hypo="product_name"><span>상품명을 왜 바꾸나</span>
+            <input type="text" /></label>
+          <label class="field hidden" data-hypo="item_name"><span>옵션명을 왜 바꾸나</span>
+            <input type="text" /></label>
+        </div>
         <p class="muted sm" id="skuProdMetricHint"></p>
 
         <label class="chk" style="margin:8px 0">
