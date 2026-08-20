@@ -107,6 +107,50 @@
     } catch (e) { /* 무시 */ }
   }
 
+  /* ── 비즈니스 인사이트(판매분석) — 2026-08-20 추가 ──────────────────────
+     이 화면에 방문자·조회·장바구니·주문·판매량·매출과 **광고 성과·유입경로**가 다 있다.
+     화면이 그리고 있으니 뒤에 JSON API가 있다는 뜻이고, 그러면 **엑셀을 받아서
+     파싱할 이유가 없다.** 어느 경로인지 모르니 접두사로 통째로 잡아서 실물을 본다
+     (R-12 — 구조를 추측하지 않는다).
+
+     다른 캡처와 달리 **URL 경로별로 따로 보관한다.** 이 화면은 요약·목록·광고를
+     각각 다른 엔드포인트로 부를 가능성이 높은데, 고정 키로 저장하면 마지막 것만
+     남아서 나머지를 못 본다. */
+  const INSIGHT_PREFIX = '/tenants/business-insight';
+  const K_INSIGHT = '__cwc_insight_captures';
+
+  function insightPathOf(url) {
+    const u = String(url || '');
+    if (u.indexOf(INSIGHT_PREFIX) === -1) return null;
+    try {
+      return new URL(u, location.origin).pathname;   // 쿼리는 빼고 경로만 키로
+    } catch (e) {
+      return u.split('?')[0].slice(0, 200);
+    }
+  }
+
+  function saveInsightCapture(url, method, reqBody, resText, headers) {
+    try {
+      const key = insightPathOf(url);
+      if (!key) return;
+      let store = {};
+      try { store = JSON.parse(ss(K_INSIGHT) || '{}') || {}; } catch (e) { store = {}; }
+      store[key] = {
+        url: String(url).slice(0, 500),
+        method: method,
+        reqBody: typeof reqBody === 'string' ? reqBody.slice(0, 4000) : null,
+        headers: headers || null,
+        resText: typeof resText === 'string' ? resText.slice(0, 300000) : null,
+        at: Date.now()
+      };
+      if (!ssSet(K_INSIGHT, JSON.stringify(store))) {
+        Object.keys(store).forEach((k) => { if (store[k].resText) store[k].resText = store[k].resText.slice(0, 40000); });
+        ssSet(K_INSIGHT, JSON.stringify(store));
+      }
+      console.log('[수집기] 비즈니스 인사이트 API 캡처: ' + key);
+    } catch (e) { /* 무시 */ }
+  }
+
   const K_BODY = '__cwc_template_body';
   const K_HEADERS = '__cwc_template_headers';
   const K_AT = '__cwc_template_at';
@@ -275,6 +319,18 @@
         }).catch(() => {});
       }
 
+      // 비즈니스 인사이트도 같은 방식으로 응답까지 저장
+      if (insightPathOf(url)) {
+        const _insHdrs = headersToObject(init && init.headers);
+        p.then((res) => {
+          try {
+            res.clone().text()
+              .then((t) => saveInsightCapture(url, method, reqBody, t, _insHdrs))
+              .catch(() => {});
+          } catch (e) { /* 무시 */ }
+        }).catch(() => {});
+      }
+
       // 요금 API는 GET/POST 모두 응답까지 저장
       if (feePathOf(url)) {
         const _pending = window.__cwc_pendingFee || {};
@@ -335,6 +391,7 @@
             maybeSaveProductPayload(url, t);
             if (feePathOf(url)) saveFeeCapture(url, method, typeof body === 'string' ? body : null, t, this.__cwc_headers);
             if (salesPathOf(url)) saveSalesCapture(url, method, typeof body === 'string' ? body : null, t, this.__cwc_headers);
+            if (insightPathOf(url)) saveInsightCapture(url, method, typeof body === 'string' ? body : null, t, this.__cwc_headers);
           }
         } catch (e) { /* 무시 */ }
       });

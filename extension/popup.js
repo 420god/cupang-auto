@@ -14,6 +14,7 @@ const diagCatBtn = document.getElementById('diagCatBtn');
 const inspectBtn = document.getElementById('inspectBtn');
 const consumerBtn = document.getElementById('consumerBtn');
 const salesBtn = document.getElementById('salesBtn');
+const insightBtn = document.getElementById('insightBtn');
 const productProbeBtn = document.getElementById('productProbeBtn');
 const urlTestBtn = document.getElementById('urlTestBtn');
 const resetDetailBtn = document.getElementById('resetDetailBtn');
@@ -132,6 +133,14 @@ function pageReadTemplateBody() {
 function pageReadSalesCaptures() {
   try {
     const store = JSON.parse(sessionStorage.getItem('__cwc_sales_captures') || '{}');
+    return { ok: true, store: store && typeof store === 'object' ? store : {} };
+  } catch (e) { return { ok: true, store: {} }; }
+}
+
+/* 비즈니스 인사이트(판매분석) 캡처 읽기 — 경로별로 저장돼 있다 */
+function pageReadInsightCaptures() {
+  try {
+    const store = JSON.parse(sessionStorage.getItem('__cwc_insight_captures') || '{}');
     return { ok: true, store: store && typeof store === 'object' ? store : {} };
   } catch (e) { return { ok: true, store: {} }; }
 }
@@ -2733,6 +2742,46 @@ salesBtn.addEventListener('click', async () => {
     const text = entries.map(([path, c]) =>
       `--- ${c.method} ${c.url}\n[요청 헤더]\n${c.headers ? JSON.stringify(c.headers, null, 2) : '(없음)'}\n[요청 바디]\n${c.reqBody || '(없음)'}\n[응답]\n${c.resText || '(없음)'}`
     ).join('\n\n');
+    setStatus(text);
+  } catch (err) {
+    setStatus('오류: ' + err.message, true);
+  }
+});
+
+/* 판매분석 화면이 어떤 API를 부르는지 실물로 본다. 이 화면에 방문자·조회·장바구니·
+   주문과 광고 성과·유입경로가 다 있어서, 엑셀을 받지 않고 그대로 가져올 수 있다.
+   **응답이 크므로 경로별 요약을 먼저 보여준다** — 전문은 각 항목 앞부분만 낸다. */
+insightBtn.addEventListener('click', async () => {
+  try {
+    const tab = await getWingTab();
+    const results = await runInAllFrames(tab.id, pageReadInsightCaptures);
+    const store = {};
+    results.forEach((fr) => {
+      if (!fr || !fr.result || !fr.result.store) return;
+      Object.assign(store, fr.result.store);
+    });
+    const entries = Object.entries(store);
+    if (!entries.length) {
+      setStatus('캡처된 비즈니스 인사이트 API가 없습니다.
+'
+        + 'WING > 비즈니스 인사이트 > 판매 분석 페이지를 연 뒤(날짜도 한 번 바꿔보세요) 다시 시도하세요.', true);
+      return;
+    }
+    const text = `캡처된 엔드포인트 ${entries.length}개
+
+`
+      + entries.map(([path, c]) =>
+          `--- ${c.method} ${path}
+[전체 URL]
+${c.url}
+[요청 바디]
+${c.reqBody || '(없음)'}
+`
+          + `[응답 앞부분]
+${(c.resText || '(없음)').slice(0, 6000)}`
+        ).join('
+
+');
     setStatus(text);
   } catch (err) {
     setStatus('오류: ' + err.message, true);
