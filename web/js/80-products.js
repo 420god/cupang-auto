@@ -148,7 +148,17 @@ function renderSkus() {
   const checked = SKUS.rows.filter((r) => r.reg && r.reg.price_checked_at).length;
   const note = $('#skuPriceNote');
   if (note) {
-    if (!withVid) note.textContent = '옵션ID가 연결된 SKU가 없어 판매가를 읽을 수 없습니다.';
+    /* **워커가 안 돌면 큐에 쌓이기만 하고 아무 일도 안 일어난다.** 그런데 화면은
+       "요청됨"만 보여주므로 사용자는 영원히 기다리게 된다(2026-08-20 실제로 겪음).
+       요청이 2분 넘게 안 처리되면 그 사실을 말해준다 — "없음"과 "안 돌고 있음"은 다르다(R-15). */
+    const stuck = SKUS.rows.filter((r) => r.pending && r.pending.requested_at
+      && (Date.now() - new Date(r.pending.requested_at).getTime()) > 2 * 60 * 1000).length;
+    if (stuck) {
+      note.innerHTML = `<span class="neg">가격 변경 요청 ${stuck}건이 2분 넘게 처리되지 않고 있습니다.</span>`
+        + ' VPS의 쓰기 워커가 멈춰 있을 수 있습니다 —'
+        + ' <code>systemctl status coupang-write-worker</code> 로 확인하세요.';
+    }
+    else if (!withVid) note.textContent = '옵션ID가 연결된 SKU가 없어 판매가를 읽을 수 없습니다.';
     else if (!checked) note.textContent =
       '판매가를 아직 한 번도 읽지 않았습니다 — [가격 새로고침]을 누르면 쿠팡에서 가져옵니다.';
     else if (checked < withVid) note.textContent =

@@ -33,6 +33,7 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 |---|---|---|
 | 웹 | `main` push → Vercel 자동배포 | 웹훅이 가끔 유실됨 → 배포 목록에 그 커밋이 없으면 `git commit --allow-empty` 후 push |
 | VPS 스크립트 | VPS에서 `git pull` | push만으론 반영 안 됨. 경로 `/home/thezone1633/cupang-auto` |
+| VPS 쓰기 워커 | `git pull` 후 **`systemctl restart coupang-write-worker`** | 상시 프로세스라 pull만으론 옛 코드가 계속 돈다. **안 떠 있으면 웹의 가격 변경이 큐에 쌓이기만 한다** (설치법은 `scripts/coupang-write-worker.service` 주석) |
 | 확장프로그램 | `chrome://extensions`에서 새로고침 | git과 무관 |
 
 ## 웹 코드 구조 (2026-08-20 분할)

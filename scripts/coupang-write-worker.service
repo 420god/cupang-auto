@@ -1,0 +1,43 @@
+# 쿠팡 쓰기 워커를 상시 실행하는 systemd 유닛.
+#
+# 왜 상시 프로세스인가: 웹에서 가격을 바꾸면 큐에 행이 들어가고, 이 워커가 그걸 집어
+# 쿠팡에 쏜다(D-16 — 웹은 고정 IP가 없어 직접 못 쏜다). 워커가 안 떠 있으면
+# **웹에서 아무리 눌러도 큐에 쌓이기만 하고 아무 일도 일어나지 않는다.**
+# cron으로는 안 된다 — 최소 1분 지연이라 버튼을 누른 사람이 고장으로 여긴다.
+#
+# ── 설치 ────────────────────────────────────────────────────────────────
+#   which node                 # 경로가 /usr/bin/node 가 아니면 아래 ExecStart를 고칠 것
+#   sudo cp scripts/coupang-write-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now coupang-write-worker
+#
+# ── 확인 ────────────────────────────────────────────────────────────────
+#   systemctl status coupang-write-worker
+#   journalctl -u coupang-write-worker -f      # 실시간 로그. 가격 변경이 여기 찍힌다
+#
+# ── 코드를 고친 뒤 ──────────────────────────────────────────────────────
+#   git pull && sudo systemctl restart coupang-write-worker
+#   (git pull만 하면 옛 코드가 계속 돈다 — 이건 상시 프로세스라 크론과 다르다)
+
+[Unit]
+Description=쿠팡 쓰기 워커 (가격 변경 큐 처리)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=thezone1633
+WorkingDirectory=/home/thezone1633/cupang-auto
+ExecStart=/usr/bin/node scripts/coupang-write-worker.js
+
+# 죽어도 계속 살린다. 쿠팡·Supabase 일시 장애로 프로세스가 내려가면
+# 그 뒤의 모든 가격 변경이 조용히 멈추기 때문이다.
+Restart=always
+RestartSec=10
+
+# 로그는 journald로 (journalctl -u coupang-write-worker)
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
