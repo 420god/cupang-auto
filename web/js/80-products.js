@@ -32,8 +32,12 @@ async function loadSkus() {
       /* .catch(()=>[])가 붙은 이유: 마이그레이션 024 전에는 이 컬럼들이 없어서 400이 온다.
          Promise.all은 하나만 깨져도 전부 깨지므로, 그러면 **상품원장 자체가 안 뜬다.**
          가격은 부가 정보지 이 화면의 본체가 아니다 — 없으면 "미조회"로 보이면 된다. */
-      apiAll('rocket_growth_product_registry?select=vendor_item_id,sale_price,on_sale,amount_in_stock,price_checked_at')
-        .catch(() => []),
+      apiAll('rocket_growth_product_registry?select=vendor_item_id,seller_product_id,sale_price,'
+             + 'on_sale,amount_in_stock,price_checked_at,product_json,product_fetched_at')
+        /* 025 전에는 product_json이 없어 400이 온다. 그때는 가격 컬럼만이라도 받는다 —
+           상품 정보 편집만 못 하고 나머지 화면은 그대로 돌아야 한다. */
+        .catch(() => apiAll('rocket_growth_product_registry?select=vendor_item_id,seller_product_id,'
+             + 'sale_price,on_sale,amount_in_stock,price_checked_at').catch(() => [])),
       /* 아직 쿠팡에 반영 안 된 가격 변경 요청. 화면이 "요청됨"을 보여줘야
          사용자가 같은 버튼을 두 번 누르지 않는다. */
       apiAll('coupang_write_queue?select=*&kind=eq.price&status=in.(queued,running)')
@@ -380,6 +384,8 @@ function openSkuModal(skuId) {
   /* 가격 절은 이력을 따로 받아오므로 비동기다. 모달을 먼저 띄우고 나중에 채운다 —
      기다렸다 띄우면 클릭이 먹통인 것처럼 보인다. */
   renderPriceSection(r);
+  /* 상품 정보 절은 이미 받아둔 registry.product_json만 읽으므로 동기다. */
+  renderProductSection(r);
 }
 
 function closeSkuModal() {
@@ -544,6 +550,221 @@ $('#skuPriceSync').onclick = async () => {
     note.textContent = '쿠팡에 가격을 다시 물어보는 중입니다 — VPS가 처리하며, 끝나면 이 화면을 새로고침하세요.';
   } catch (e) {
     note.textContent = `가격 새로고침 요청 실패: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+/* ── 쿠팡 상품 정보 (상품명·검색어·대표이미지·상세페이지) ──────────────────
+   **쿠팡 상품 수정은 부분 수정이 안 된다** — 전체 몸통을 PUT해야 하고 빠뜨린 필드는
+   지워진다(2026-08-20 정찰). 그래서 웹은 "무엇을 바꿀지"만 큐에 담고, 워커가 쏘기
+   직전에 최신 상품을 조회해 거기에 얹어 보낸다. 우리 사본을 보내면 그 사이 WING에서
+   바뀐 게 통째로 덮인다.
+
+   그래서 화면도 '지금 값'을 보고 편집해야 한다 — 깜깜이 편집은 전체 PUT에서 곧 사고다.
+   현재 값은 워커가 가져다 놓은 registry.product_json 에서 읽는다(db/migrations/025). */
+
+/* 이 SKU가 속한 상품 원문에서 이 옵션(items[])을 찾아낸다.
+   철자가 엔드포인트마다 달라 세 곳을 다 본다(docs/api/coupang-open-api.md). */
+function findProductItem(product, vid) {
+  if (!product || !vid) return null;
+  return (product.items || []).find((it) => [
+    it.rocketGrowthItemData && it.rocketGrowthItemData.vendorItemId,
+    it.marketplaceItemData && it.marketplaceItemData.vendorItemId,
+    it.marketPlaceItemData && it.marketPlaceItemData.vendorItemId,
+    it.vendorItemId
+  ].filter((x) => x != null).map(String).includes(String(vid))) || null;
+}
+
+/* 쿠팡 이미지 경로는 상대 경로로 온다(vendor_inventory/de96/....png).
+   미리보기로 띄우려면 CDN 호스트를 붙여야 하는데 **그 주소는 미검증이다**
+   (STATUS.md "이미지 CDN 주소 미검증"). 그래서 그림이 깨질 수 있고,
+   경로 문자열도 같이 보여줘서 최소한 무엇이 걸려 있는지는 알 수 있게 한다. */
+function coupangImageUrl(p) {
+  if (!p) return null;
+  if (/^https?:\/\//.test(p)) return p;
+  return `https://image1.coupangcdn.com/image/${p}`;
+}
+
+function renderProductSection(r) {
+  const prod = r.reg && r.reg.product_json ? r.reg.product_json : null;
+  const item = findProductItem(prod, r.vid);
+  const has = !!prod;
+  const spid = r.reg ? r.reg.seller_product_id : null;
+
+  const st = $('#skuProdState');
+  if (!r.vid || !spid) {
+    st.innerHTML = '<span class="muted">옵션ID 또는 등록상품ID가 없어 상품 정보를 다룰 수 없습니다.</span>';
+  } else if (!has) {
+    /* 원본이 없으면 그 사실을 말한다(R-15). 빈 칸만 보여주면 "값이 없다"로 오해하고
+       그대로 저장해서 멀쩡한 값을 지울 수 있다 — 전체 PUT이라 특히 위험하다. */
+    st.innerHTML = '<span class="neg">현재 정보를 아직 안 가져왔습니다.</span>'
+      + ' 먼저 [쿠팡에서 현재 정보 불러오기]를 누르세요 — 지금 값을 모르는 채로 저장하면'
+      + ' 쿠팡은 전체 덮어쓰기라 기존 내용이 지워질 수 있습니다.';
+  } else {
+    st.innerHTML = '<span class="muted">'
+      + (r.reg.product_fetched_at
+          ? esc(r.reg.product_fetched_at.slice(0, 16).replace('T', ' ')) + ' 기준 · ' : '')
+      + '등록상품ID ' + esc(spid)
+      + ' · 옵션 ' + (prod.items || []).length + '개</span>';
+  }
+
+  const canEdit = has && !!item;
+  ['#skuProdName', '#skuItemName', '#skuSearchTags', '#skuRepImage',
+   '#skuDetailImages', '#skuProdRequested', '#skuProdSave'].forEach((id) => {
+    $(id).disabled = !canEdit;
+  });
+  $('#skuProdFetch').disabled = !(r.vid && spid);
+
+  $('#skuProdName').value = prod ? (prod.sellerProductName || '') : '';
+  $('#skuItemName').value = item ? (item.itemName || '') : '';
+  $('#skuSearchTags').value = item && Array.isArray(item.searchTags) ? item.searchTags.join(', ') : '';
+  $('#skuRepImage').value = '';
+  $('#skuDetailImages').value = '';
+  $('#skuProdRequested').checked = false;
+  $('#skuProdMsg').textContent = '';
+
+  const rep = item && (item.images || []).find((im) => im.imageType === 'REPRESENTATION');
+  const repPath = rep ? (rep.cdnPath || rep.vendorPath || '') : '';
+  $('#skuRepPreview').innerHTML = rep
+    ? '<div>현재 대표이미지</div>'
+      + '<img src="' + esc(coupangImageUrl(repPath)) + '" alt=""'
+      + ' style="max-width:120px;border-radius:6px;margin-top:4px" />'
+      + '<div class="muted" style="word-break:break-all">' + esc(repPath) + '</div>'
+    : (canEdit ? '<span class="muted">대표이미지가 없습니다.</span>' : '');
+
+  const paths = [];
+  (item ? (item.contents || []) : []).forEach((c) => {
+    (c.contentDetails || []).forEach((d) => { if (d.content) paths.push(d.content); });
+  });
+  $('#skuDetailPreview').innerHTML = paths.length
+    ? '<div>현재 상세페이지 ' + paths.length + '장</div>'
+      + paths.slice(0, 6).map((p) => '<img src="' + esc(coupangImageUrl(p)) + '" alt=""'
+          + ' style="max-width:80px;border-radius:4px;margin:4px 4px 0 0" />').join('')
+    : (canEdit ? '<span class="muted">상세페이지 이미지가 없습니다.</span>' : '');
+}
+
+/* Supabase Storage에 올리고 **공개 URL**을 돌려준다.
+   쿠팡은 images[].vendorPath에 http로 시작하는 URL을 주면 직접 내려받는다(80·443 포트만).
+   Supabase는 https(443)라 조건을 만족한다. 업로드 API가 따로 없어서 이 방식뿐이다. */
+async function uploadProductImage(file, skuId) {
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
+  /* 경로에 시각을 넣어 덮어쓰기를 피한다 — 옛 이미지를 남겨야 "이걸로 바꿨더니 어땠나"를
+     나중에 되짚을 수 있다(R-04). 쿠팡 CDN에만 있으면 그 비교가 불가능하다. */
+  const p = skuId + '/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext;
+  const res = await fetch(CFG.url + '/storage/v1/object/product-images/' + p, {
+    method: 'POST',
+    headers: {
+      apikey: CFG.key,
+      Authorization: 'Bearer ' + AUTH.token,
+      'content-type': file.type || 'application/octet-stream'
+    },
+    body: file
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error('이미지 업로드 실패 (' + res.status + '): ' + t.slice(0, 200));
+  }
+  return CFG.url + '/storage/v1/object/public/product-images/' + p;
+}
+
+$('#skuProdFetch').onclick = async () => {
+  const r = SKUS.editing;
+  if (!r || !r.reg || !r.reg.seller_product_id) return;
+  const btn = $('#skuProdFetch');
+  btn.disabled = true;
+  try {
+    await api('coupang_write_queue', {
+      method: 'POST',
+      body: { kind: 'product_fetch', seller_product_id: r.reg.seller_product_id,
+              vendor_item_id: r.vid, sku_id: r.sku.id, requested_by: AUTH.userId || null }
+    });
+    $('#skuProdState').textContent =
+      '쿠팡에서 상품 정보를 가져오는 중입니다 — 몇 초 뒤 이 화면을 새로고침하면 값이 채워집니다.';
+  } catch (e) {
+    $('#skuProdState').textContent = '요청 실패: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+$('#skuProdSave').onclick = async () => {
+  const r = SKUS.editing;
+  if (!r || !r.vid || !r.reg || !r.reg.product_json) return;
+  const btn = $('#skuProdSave');
+  const msg = $('#skuProdMsg');
+  const prod = r.reg.product_json;
+  const item = findProductItem(prod, r.vid);
+  if (!item) { msg.textContent = '이 옵션을 상품 안에서 찾지 못했습니다.'; return; }
+
+  btn.disabled = true;
+  msg.textContent = '';
+  try {
+    /* **바뀐 것만 담는다.** 안 바꾼 필드를 payload에 넣으면 워커가 그 값으로 덮어쓰는데,
+       화면이 들고 있는 값이 낡았으면 그게 곧 되돌림이 된다. */
+    const patch = {};
+    const productPatch = {};
+    const name = ($('#skuProdName').value || '').trim();
+    const itemName = ($('#skuItemName').value || '').trim();
+    const tagsRaw = ($('#skuSearchTags').value || '').trim();
+    const curTags = Array.isArray(item.searchTags) ? item.searchTags.join(', ') : '';
+
+    if (name && name !== (prod.sellerProductName || '')) productPatch.sellerProductName = name;
+    if (itemName && itemName !== (item.itemName || '')) patch.itemName = itemName;
+    if (tagsRaw !== curTags) {
+      patch.searchTags = tagsRaw ? tagsRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+    }
+
+    /* 이미지: 새로 고른 게 있을 때만 손댄다. 대표이미지는 그 한 장만 바꾸고
+       나머지(DETAIL 등)는 원본을 그대로 살려 보낸다 — 빠뜨리면 지워진다. */
+    const repFile = $('#skuRepImage').files[0];
+    if (repFile) {
+      msg.textContent = '대표이미지 올리는 중…';
+      const url = await uploadProductImage(repFile, r.sku.id);
+      const others = (item.images || []).filter((im) => im.imageType !== 'REPRESENTATION');
+      patch.images = [{ imageOrder: 0, imageType: 'REPRESENTATION', vendorPath: url }]
+        .concat(others.map((im, i) => Object.assign({}, im, { imageOrder: i + 1 })));
+    }
+
+    const detFiles = Array.from($('#skuDetailImages').files || []);
+    if (detFiles.length) {
+      msg.textContent = '상세페이지 이미지 ' + detFiles.length + '장 올리는 중…';
+      const urls = [];
+      for (const f of detFiles) urls.push(await uploadProductImage(f, r.sku.id));
+      /* 기존 상세페이지 구조를 그대로 따라간다(실측: contentsType IMAGE_NO_SPACE +
+         detailType IMAGE, 한 장당 contents 원소 하나). 구조를 새로 지어내지 않는다. */
+      patch.contents = urls.map((u) => ({
+        contentsType: 'IMAGE_NO_SPACE',
+        contentDetails: [{ content: u, detailType: 'IMAGE' }]
+      }));
+    }
+
+    if (!Object.keys(patch).length && !Object.keys(productPatch).length) {
+      msg.textContent = '바뀐 내용이 없습니다.';
+      btn.disabled = false;
+      return;
+    }
+
+    const payload = { items: {} };
+    payload.items[r.vid] = patch;
+    if (Object.keys(productPatch).length) payload.product = productPatch;
+    if ($('#skuProdRequested').checked) payload.requested = true;
+
+    await api('coupang_write_queue', {
+      method: 'POST',
+      body: {
+        kind: 'product_update',
+        seller_product_id: r.reg.seller_product_id,
+        vendor_item_id: r.vid,
+        sku_id: r.sku.id,
+        payload: payload,
+        requested_by: AUTH.userId || null
+      }
+    });
+    msg.textContent = '변경을 요청했습니다 — VPS가 쿠팡에 반영합니다(보통 몇 초).'
+      + ($('#skuProdRequested').checked ? ' 승인 요청도 함께 올립니다.' : '');
+  } catch (e) {
+    msg.textContent = '실패: ' + e.message;
   } finally {
     btn.disabled = false;
   }

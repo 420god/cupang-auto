@@ -1044,6 +1044,42 @@
         <div id="skuPriceHistory" class="sm"></div>
       </div>
 
+      <!-- 쿠팡 상품 정보 — 상품명·검색어·대표이미지·상세페이지.
+           **쿠팡 상품 수정은 부분 수정이 안 된다**(전체 몸통 PUT). 그래서 워커가 쏘기 직전에
+           최신 상품을 조회해 여기서 바꾼 것만 얹어 보낸다. db/migrations/025 참조. -->
+      <h4 class="sku-sec">쿠팡 상품 정보</h4>
+      <div id="skuProdBox">
+        <p class="sm" id="skuProdState">—</p>
+        <div class="modal-foot" style="justify-content:flex-start">
+          <button id="skuProdFetch" class="btn btn-sm">쿠팡에서 현재 정보 불러오기</button>
+        </div>
+
+        <label class="field"><span>상품명 (쿠팡 노출명)</span>
+          <input id="skuProdName" type="text" /></label>
+        <label class="field"><span>옵션명</span>
+          <input id="skuItemName" type="text" /></label>
+        <label class="field"><span>검색어 (쉼표로 구분)</span>
+          <input id="skuSearchTags" type="text" placeholder="말랑이, 슬라임, 스퀴시" /></label>
+
+        <label class="field"><span>대표이미지</span>
+          <input id="skuRepImage" type="file" accept="image/*" /></label>
+        <div id="skuRepPreview" class="sm muted"></div>
+
+        <label class="field"><span>상세페이지 이미지 (여러 장 선택 가능 — 고르면 기존 것을 전부 대체합니다)</span>
+          <input id="skuDetailImages" type="file" accept="image/*" multiple /></label>
+        <div id="skuDetailPreview" class="sm muted"></div>
+
+        <label class="chk" style="margin:8px 0">
+          <input type="checkbox" id="skuProdRequested" />
+          <span>바로 승인 요청 (체크 안 하면 저장만 되고 심사는 WING에서 올립니다)</span>
+        </label>
+
+        <div class="modal-foot" style="justify-content:flex-start;align-items:center">
+          <button id="skuProdSave" class="btn btn-sm btn-primary">상품 정보 변경 요청</button>
+          <span class="muted sm" id="skuProdMsg"></span>
+        </div>
+      </div>
+
       <h4 class="sku-sec">공급처 (1688)</h4>
       <label class="field"><span>상품 링크</span>
         <input id="skuOfferUrl" type="url" placeholder="https://detail.1688.com/offer/..." /></label>

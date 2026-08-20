@@ -42,7 +42,12 @@ const DRY = process.argv.includes('--dry-run');
 /* 판매중지·재개는 **아직 실물로 확인 안 됐다.** 실패하면 실제로 상품이 내려가서
    정찰 때 일부러 시험을 미뤘다. 확인 전까지 워커가 거부한다 — 큐에 들어와도 실행하지 않고
    failed로 남기며 이유를 적는다. 확인되면 이 집합에서 빼면 된다. */
-const VERIFIED_KINDS = new Set(['price', 'price_sync']);
+const VERIFIED_KINDS = new Set(['price', 'price_sync', 'product_update', 'product_fetch']);
+
+/* 로켓그로스 상품 수정에 반드시 들어가야 하는 쓰기 전용 값(2026-08-20 실물 확인).
+   **조회 응답에는 안 나온다** — 그래서 "조회한 걸 그대로 되보내면 된다"가 성립하지 않는다.
+   불리언 true나 "Y"는 안 먹고 문자열 "AGREE"만 통과한다. 후보를 나란히 던져 가렸다. */
+const RG_LEGAL_AGREEMENT = 'AGREE';
 
 function requireEnv() {
   const missing = ['COUPANG_ACCESS_KEY', 'COUPANG_SECRET_KEY', 'SUPABASE_URL',
@@ -70,10 +75,13 @@ function authHeader(method, apiPath, query) {
   return `CEA algorithm=HmacSHA256, access-key=${COUPANG_ACCESS_KEY}, signed-date=${datetime}, signature=${signature}`;
 }
 
-async function coupang(method, apiPath) {
+async function coupang(method, apiPath, body) {
   const res = await fetch(`${HOST}${apiPath}`, {
     method,
-    headers: { Authorization: authHeader(method, apiPath, ''), 'Content-Type': 'application/json;charset=UTF-8' }
+    headers: { Authorization: authHeader(method, apiPath, ''), 'Content-Type': 'application/json;charset=UTF-8' },
+    /* 서명 대상은 datetime+method+path+query다 — 몸통은 서명에 안 들어간다.
+       가격 변경은 값이 경로에 있어 몸통이 없고, 상품 수정만 몸통을 쓴다. */
+    body: body === undefined ? undefined : JSON.stringify(body)
   });
   const text = await res.text();
   let json = null;
@@ -230,6 +238,143 @@ async function syncAll() {
   return { ok, changed, failed, total: rows.length };
 }
 
+/* ── 상품 정보 수정 ────────────────────────────────────────────────────────
+   **쿠팡 상품 수정은 부분 수정이 안 된다.** 전체 몸통을 PUT해야 하고, 빠뜨린 필드는
+   지워진다(2026-08-20 정찰). 그래서 절차가 이렇게 된다:
+
+     ① 쏘기 직전에 쿠팡에서 최신 상품을 조회한다
+     ② 거기에 웹이 요청한 변경분만 얹는다
+     ③ legalAgreement를 넣는다 (조회에 안 나오는 쓰기 전용 값)
+     ④ 통째로 PUT하고, **보낸 몸통을 그대로 저장한다**
+
+   ①이 핵심이다. 우리 DB의 사본을 보내면 그 사이 WING에서 바뀐 게 통째로 덮인다.
+   가격에서 price_before를 워커가 직접 읽는 것과 같은 이유이고, 전체 PUT이라
+   여기서는 결과가 훨씬 파괴적이다. */
+async function fetchProduct(sellerProductId) {
+  const r = await coupang('GET',
+    `/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/${sellerProductId}`);
+  if (r.status !== 200 || !r.json || !r.json.data) return null;
+  return r.json.data;
+}
+
+/* 옵션 하나에 변경분을 얹는다. **payload에 있는 키만 건드린다** — 없는 키는
+   조회해온 원본 값을 그대로 둔다. 여기서 실수하면 멀쩡한 필드가 지워진다. */
+function applyItemPatch(item, patch) {
+  if (!patch) return;
+  if (patch.itemName !== undefined) item.itemName = patch.itemName;
+  if (patch.searchTags !== undefined) item.searchTags = patch.searchTags;
+  if (patch.images !== undefined) item.images = patch.images;
+  if (patch.contents !== undefined) item.contents = patch.contents;
+}
+
+/* 이 옵션이 payload의 어느 키에 해당하나. 쿠팡은 같은 개념을 엔드포인트마다 다르게
+   쓰므로 세 철자를 다 본다(docs/api/coupang-open-api.md "대소문자가 다르다"). */
+function itemVendorIds(item) {
+  return [
+    item.rocketGrowthItemData && item.rocketGrowthItemData.vendorItemId,
+    item.marketplaceItemData && item.marketplaceItemData.vendorItemId,
+    item.marketPlaceItemData && item.marketPlaceItemData.vendorItemId,
+    item.vendorItemId
+  ].filter((x) => x != null).map(String);
+}
+
+/* 상품 원문을 가져와 레지스트리에 넣는다. **아무것도 바꾸지 않는다.**
+   화면이 검색어·이미지·상세페이지의 '지금 값'을 보고 편집할 수 있게 하려는 것이다 —
+   전체 몸통 PUT 방식에서 깜깜이 편집은 그대로 사고로 이어진다.
+   레지스트리는 옵션 단위라, 같은 상품에 속한 모든 행에 같은 원문을 넣는다. */
+async function storeProductJson(sellerProductId, product) {
+  await sb('PATCH',
+    `rocket_growth_product_registry?seller_product_id=eq.${encodeURIComponent(sellerProductId)}`,
+    { product_json: product, product_fetched_at: new Date().toISOString() });
+}
+
+async function handleProductFetch(row) {
+  const product = await fetchProduct(row.seller_product_id);
+  if (!product) {
+    await finish(row.id, { status: 'failed',
+      response_body: `상품 조회 실패 (sellerProductId=${row.seller_product_id})` });
+    return;
+  }
+  await storeProductJson(row.seller_product_id, product);
+  log(`상품 원문 저장 ${row.seller_product_id} (옵션 ${(product.items || []).length}개)`);
+  await finish(row.id, { status: 'done', http_status: 200,
+    response_body: `옵션 ${(product.items || []).length}개 · 최상위 키 ${Object.keys(product).length}개` });
+}
+
+async function handleProductUpdate(row) {
+  const payload = row.payload || {};
+  const product = await fetchProduct(row.seller_product_id);
+  if (!product) {
+    await finish(row.id, { status: 'failed',
+      response_body: `상품 조회 실패 (sellerProductId=${row.seller_product_id}) — 수정하지 않았다` });
+    return;
+  }
+
+  /* 상품 단위 필드 */
+  if (payload.product) {
+    Object.keys(payload.product).forEach((k) => { product[k] = payload.product[k]; });
+  }
+
+  /* 옵션 단위 필드. 이미지·상세페이지·검색어가 전부 여기다(items[] 안). */
+  let touched = 0;
+  const wanted = payload.items || {};
+  (product.items || []).forEach((item) => {
+    const key = itemVendorIds(item).find((v) => wanted[v]);
+    if (!key) return;
+    applyItemPatch(item, wanted[key]);
+    touched++;
+  });
+  const askedCount = Object.keys(wanted).length;
+  if (askedCount && !touched) {
+    /* 바꾸려던 옵션을 상품 안에서 못 찾았다. 이대로 PUT하면 **아무것도 안 바뀐 채
+       전체를 덮어쓴다** — 조용히 성공으로 보이는 최악의 경우다. 여기서 멈춘다. */
+    await finish(row.id, { status: 'failed',
+      response_body: `요청한 옵션 ${askedCount}개를 상품 안에서 찾지 못했다 — 덮어쓰기를 막으려고 중단했다` });
+    return;
+  }
+
+  /* 승인 요청 여부는 요청마다 사람이 정한다(2026-08-20 사용자 결정).
+     지정이 없으면 조회해온 값을 그대로 둔다 — 우리가 임의로 심사를 걸지 않는다. */
+  if (payload.requested !== undefined) product.requested = payload.requested;
+
+  /* 쓰기 전용 필드. 없으면 "입고 불가 조건에 동의해주세요"로 막힌다. */
+  product.rocketGrowthAdditionalInformation =
+    Object.assign({}, product.rocketGrowthAdditionalInformation || {},
+      { legalAgreement: RG_LEGAL_AGREEMENT });
+
+  const apiPath = '/v2/providers/seller_api/apis/api/v1/marketplace/seller-products';
+  if (DRY) {
+    log(`[dry-run] PUT ${apiPath} sellerProductId=${row.seller_product_id} (옵션 ${touched}개 수정)`);
+    await finish(row.id, { status: 'queued', started_at: null, sent_body: product });
+    return;
+  }
+
+  const r = await coupang('PUT', apiPath, product);
+  const ok = r.status === 200 && (!r.json || r.json.code === 'SUCCESS');
+  log(`${ok ? '성공' : '실패'} 상품수정 ${row.seller_product_id} 옵션${touched}개 HTTP ${r.status} ${r.text.slice(0, 160)}`);
+
+  await finish(row.id, {
+    status: ok ? 'done' : 'failed',
+    http_status: r.status,
+    response_body: r.text.slice(0, 2000),
+    /* 보낸 몸통을 통째로 남긴다(R-04). 전체 PUT이라 **무엇을 덮어썼는지가 사고 조사의
+       전부**다 — 나중에 "이 필드가 왜 비었지"를 추적할 유일한 단서가 된다. */
+    sent_body: product
+  });
+
+  /* 성공했으면 원문을 다시 읽어 화면을 진실에 맞춘다. **쿠팡이 SUCCESS라고 답한 것과
+     실제로 그렇게 저장된 것은 다른 사실이다** — 특히 심사가 걸리면 값이 바로 반영되지
+     않을 수 있다. 가격 변경 뒤 재조회를 넣은 것과 같은 이유다.
+     여기서 실패해도 수정 자체는 성공이므로 큐 상태를 뒤집지 않는다. */
+  if (ok) {
+    await new Promise((s) => setTimeout(s, 1500));
+    try {
+      const fresh = await fetchProduct(row.seller_product_id);
+      if (fresh) await storeProductJson(row.seller_product_id, fresh);
+    } catch (e) { log(`수정 후 재조회 실패(수정 자체는 성공): ${e.message}`); }
+  }
+}
+
 /* ── 한 건 처리 ────────────────────────────────────────────────────────── */
 async function handle(row) {
   if (!VERIFIED_KINDS.has(row.kind)) {
@@ -258,6 +403,9 @@ async function handle(row) {
     }
     return;
   }
+
+  if (row.kind === 'product_fetch')  { await handleProductFetch(row);  return; }
+  if (row.kind === 'product_update') { await handleProductUpdate(row); return; }
 
   const before = await readCurrentPrice(row.vendor_item_id);
   const after = Number(row.price_after);
