@@ -177,11 +177,23 @@ async function syncOne(vendorItemId, source, writeQueueId) {
     price_checked_at: new Date().toISOString()
   });
 
-  /* prev가 없으면 레지스트리에 그 옵션이 없다는 뜻이다(동기화가 아직 안 돌았거나 신규).
-     그때는 '변경'이 아니라 '처음 알게 된 것'이라 이력에 넣지 않는다 —
-     넣으면 null에서 7500으로 내린 것처럼 보인다. */
-  if (!prev) return { ok: true, changed: false };
+  /* '변경'과 '처음 알게 된 것'을 구분한다. 둘을 섞으면 이 표의 존재 이유가 깨진다 —
+     바뀐 것만 담기로 했기 때문에 **이 표를 읽는 것 자체가 곧 변경 목록**이어야 한다.
 
+     막아야 하는 경우가 둘이다:
+       ① prev가 아예 없다  — 레지스트리에 그 옵션이 없다(신규이거나 동기화 전)
+       ② prev는 있는데 값이 null — 024 직후 첫 동기화가 정확히 이 상태다
+     ②를 안 막아서 첫 실행에 57행이 전부 "null→12900원"으로 들어갔다(2026-08-20 실제로 겪음).
+     주석엔 "처음 알게 된 것은 넣지 않는다"고 써놓고 ①만 막았던 것 — 코드가 주석을 안 지켰다. */
+  if (!prev) return { ok: true, changed: false };
+  const firstSeen = prev.sale_price == null && prev.on_sale == null;
+  if (firstSeen) {
+    log(`처음 확인 ${vendorItemId} ${inv.salePrice}원 (이력에는 남기지 않음)`);
+    return { ok: true, changed: false };
+  }
+
+  /* null끼리 비교하지 않도록 한쪽이라도 null이면 '다름'으로 보되, 위에서 firstSeen을
+     걸러냈으므로 여기 오는 null은 "한쪽 값만 뒤늦게 채워진" 진짜 변화다. */
   const priceChanged = Number(prev.sale_price) !== Number(inv.salePrice);
   const saleChanged = prev.on_sale !== inv.onSale;
   if (!priceChanged && !saleChanged) return { ok: true, changed: false };
