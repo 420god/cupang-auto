@@ -23,6 +23,7 @@ $$('.nav-item').forEach((btn) => {
     if (page === 'stock')      loadStock();
     if (page === 'ship')       loadShip();
     if (page === 'skus')       loadSkus();
+    if (page === 'product-edit') loadProductEdit();
     if (page === 'sales')      loadSales();
     if (page === 'favorites')  loadFavorites();
     if (page === 'categories') loadCategories();

@@ -27,7 +27,9 @@ for pair in [("extension/popup.html", ["extension/popup.js"]),
     ids_js = set(re.findall(r"getElementById\('([^']+)'\)", js))
     ids_js |= set(re.findall(r"\$\('#([\w-]+)'\)", js))  # web 쪽은 $() 헬퍼 사용
 
-    missing = ids_js - ids_html - {"q", "tb"}  # q,tb는 동적 생성 HTML 내부용이라 예외
+    # q,tb는 동적 생성 HTML 내부용. metrics*는 지표 배너를 JS가 만들어 붙이는 것이라
+    # index.html에 없다(web/js/90-boot.js autoSyncMetrics).
+    missing = ids_js - ids_html - {"q", "tb", "metricsBanner", "metricsOpenWing", "metricsRetry"}
     status = "OK" if not missing else "FAIL"
     print(f"  {status}  {js_path} -> {html_path}"
           + (f"  누락: {sorted(missing)}" if missing else ""))

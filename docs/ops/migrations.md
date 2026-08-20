@@ -31,6 +31,7 @@ RLS 패턴은 전부 같다 — `read_for_authenticated`(select, 전체) + `writ
 | 025 | 상품 정보 수정(상품명·검색어·이미지) 큐 + Storage 버킷 |
 | 026 | 상품 변경 이력(field 정규화) + 일별 옵션 지표 |
 | 027 | 지표 단위를 API 기준으로 교정 + 유입경로 + 동기화 로그 |
+| 028 | v_product_experiments — 변경 1건 = 1행, 전후 7일 지표 + 교란 요인 |
 
 ## 설계에서 꼭 알아야 할 것
 

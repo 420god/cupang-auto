@@ -4,7 +4,7 @@
 명시했다. `api/*.js`는 예외(Vercel이 번들러 없이 함수로 인식).
 
 ```
-index.html  로그인 + 11개 화면 + 모달
+index.html  로그인 + 12개 화면 + 모달
 style.css   CSS 변수 기반 라이트/다크
 js/         전체 로직. 빌드 없음 — 아래 순서대로 로드된다
 api/        서버리스 함수 — parse-invoice.js(청구서 읽기) 하나뿐
@@ -19,7 +19,8 @@ js/40-invoice.js    구매대행 청구서 파서
 js/50-purchase.js   발주 · 예치금
 js/60-inbound.js    입고 · 재고/재발주 · 제트 작업비 파서
 js/70-outbound.js   출고
-js/80-products.js   상품원장 · 쿠팡 가격/상품정보 변경(큐에 넣으면 VPS가 쏜다)
+js/80-products.js   상품원장(공급처·발주 파라미터) + 가격/상품정보 편집 로직
+js/85-product-edit.js 상품수정 화면 — 편집 UI와 실험 기록(v_product_experiments)
 js/90-boot.js       네비게이션 · 테마 · 시작
 ```
 
