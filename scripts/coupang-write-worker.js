@@ -636,8 +636,21 @@ async function handleProductCreate(row) {
   for (let i = 0; i < wanted.length; i++) {
     const w = wanted[i];
     const it = stripItemIdentifiers(JSON.parse(JSON.stringify(template)));
+
+    /* 옵션 공통 뼈대(과세유형·고시정보·인증·필수속성·구매제한 …).
+       **이게 없으면 복제 원본 값이 그대로 등록된다** — 웹에서 뼈대를 고쳐도 소용이 없다.
+       031/035 의 listing_templates(kind='notice')가 여기로 온다.
+       얕은 병합인 이유: notices·attributes·certifications 는 **통째로 갈아끼우는 게 맞다**.
+       항목이 카테고리마다 달라서 깊은 병합을 하면 원본 항목이 섞여 남는다. */
+    if (payload.itemCommon) {
+      Object.keys(payload.itemCommon).forEach((k) => { it[k] = payload.itemCommon[k]; });
+    }
+
     if (w.itemName !== undefined) it.itemName = w.itemName;
     if (w.searchTags !== undefined) it.searchTags = w.searchTags;
+    /* 필수속성은 **옵션마다 다르다**(색상이 옵션명이다). 그래서 공통이 아니라 옵션별로 받는다.
+       공통에 넣으면 모든 옵션이 같은 색으로 등록된다. */
+    if (w.attributes !== undefined) it.attributes = w.attributes;
     if (w.images !== undefined) it.images = w.images;         // 새로 올린 이미지
     if (w.contents !== undefined) it.contents = w.contents;
     /* 가격은 옵션 안에 **두 벌**이다 — 로켓그로스와 마켓플레이스(판매자배송).
@@ -664,18 +677,31 @@ async function handleProductCreate(row) {
     const rg = it.rocketGrowthItemData;
     if (rg && rg.skuInfo) {
       const o = w.skuInfo || {};
-      ['width', 'length', 'height', 'weight'].forEach((k) => {
+      /* 실측(2026-08-21, 상품 13건): skuInfo 는 22개 항목이고 **주면 전부 필수**다.
+         그래서 새로 만들지 않고 원본에 덮어쓴다. 아래는 우리가 화면에서 받는 것들이다. */
+      ['width', 'length', 'height', 'weight', 'netWeight'].forEach((k) => {
         if (o[k] != null) rg.skuInfo[k] = Number(o[k]);
+      });
+      ['fragile', 'expiredAtManaged', 'producedAtManaged', 'manufacturedAtManaged',
+       'standAlone'].forEach((k) => {
+        if (o[k] != null) rg.skuInfo[k] = Boolean(o[k]);
       });
       if (o.distributionPeriod != null) {
         const dp = Number(o.distributionPeriod);
         rg.skuInfo.distributionPeriod = dp;
-        rg.skuInfo.expiredAtManaged = dp > 0;
+        /* 일수를 넣었으면 관리하는 것이다. 다만 화면이 명시적으로 준 값이 있으면 그게 이긴다 —
+           "일수는 0인데 소비기한은 관리" 같은 조합을 사람이 고를 수 있다. */
+        if (o.expiredAtManaged == null) rg.skuInfo.expiredAtManaged = dp > 0;
       }
       rg.skuInfo.quantityPerBox = 1;
-      if (w.itemName) rg.skuInfo.inboundName = w.itemName;
-      /* 원본 바코드가 skuInfo 안에도 남아 있으면 지운다 — 새 상품은 쿠팡이 발급한다. */
-      if (rg.skuInfo.originalBarcode) rg.skuInfo.originalBarcode = null;
+      /* 옵션 단위 입고 표기명. **화면이 준 값이 우선**이다(보통 "상품명 옵션명").
+         안 주면 옵션명이라도 넣는다 — 안 바꾸면 창고에 원본 옵션 이름표가 붙는다. */
+      if (o.inboundName) rg.skuInfo.inboundName = o.inboundName;
+      else if (w.itemName) rg.skuInfo.inboundName = w.itemName;
+      /* 바코드: 기본은 쿠팡 발급(originalBarcode = null).
+         자체 바코드를 쓰겠다고 하면 그 값을 넣는다 — **이 경로는 미검증이다**
+         (우리 상품 13건이 전부 null이라 반대 사례를 못 봤다). */
+      rg.skuInfo.originalBarcode = o.originalBarcode || null;
     }
     /* 이미지를 새로 안 올렸으면 원본 것을 우리 Storage로 옮겨서 URL로 준다. */
     if (w.images === undefined || w.contents === undefined) {

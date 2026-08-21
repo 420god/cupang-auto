@@ -32,7 +32,8 @@ for pair in [("extension/popup.html", ["extension/popup.js"]),
     # 화면이 JS로 직접 그려 넣는 id는 index.html에 없다(뼈대 편집칸·지표 배너 등).
     dynamic = {"q", "tb", "metricsBanner", "metricsOpenWing", "metricsRetry",
                "lcMetaFetch", "lcMetaState"}
-    dynamic |= {i for i in ids_js if i.startswith("lt") and i not in ids_html}
+    dynamic |= {i for i in ids_js
+                if (i.startswith("lt") or i.startswith("lstSub")) and i not in ids_html}
     missing = ids_js - ids_html - dynamic
     status = "OK" if not missing else "FAIL"
     print(f"  {status}  {js_path} -> {html_path}"

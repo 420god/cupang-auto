@@ -213,10 +213,7 @@ $('#lstRows').addEventListener('click', async (ev) => {
   }
 
   if (ev.target.closest('.lst-submit')) {
-    /* 등록 실행은 ④단계에서 붙인다. 지금 누를 수 있는 건 모든 단계가 끝난
-       건뿐인데, 작업 화면들이 아직 없어서 여기까지 오는 경우가 없다.
-       **버튼이 조용히 아무것도 안 하는 것**이 제일 나쁘므로 말은 해준다. */
-    toast('등록 실행은 다음 단계에서 연결됩니다 — 아직 쿠팡에 아무것도 보내지 않았습니다');
+    await lstOpenSubmit(id);
   }
 });
 
@@ -349,3 +346,368 @@ async function lstLastNote(projectId, step) {
     + `&project_id=eq.${projectId}&step=eq.${step}&order=created_at.desc&limit=1`) || [];
   return rows[0] || null;
 }
+
+/* ============================================================
+   등록 실행 — 준비 건 + 뼈대 두 벌 → 쿠팡 몸통 → 큐
+   ------------------------------------------------------------
+   **등록은 되돌릴 수 없다.** 그래서 만든 몸통을 먼저 보여주고 한 번 더 누르게 한다.
+
+   워커(scripts/coupang-write-worker.js)와의 계약:
+     payload = { source_seller_product_id, product{}, itemCommon{}, items[], requested }
+   워커가 복제 원본을 조회해 식별자를 지우고, 여기서 준 값을 얹어 POST 한다.
+   **워커를 고치면 여기도 같이 고쳐야 한다** — 두 곳이 어긋나면 조용히 원본 값이 등록된다.
+   ============================================================ */
+
+async function lstBuildPayload(projectId) {
+  const { p, items } = await lstFetchOne(projectId);
+  const warn = [];
+  const auto = [];
+
+  const [assets, tpls, metaRows] = await Promise.all([
+    api(`listing_assets?select=*&project_id=eq.${projectId}&is_selected=is.true&order=set_no.asc,position.asc`),
+    api('listing_templates?select=*'),
+    p.display_category_code
+      ? api('coupang_category_meta?select=raw&display_category_code=eq.'
+          + encodeURIComponent(p.display_category_code) + '&limit=1')
+      : Promise.resolve([])
+  ]);
+  const shipT = (tpls || []).find((t) => t.id === p.shipping_template_id);
+  const noticeT = (tpls || []).find((t) => t.id === p.notice_template_id);
+  const meta = (metaRows || [])[0] || null;
+
+  if (!shipT) warn.push('배송·반품 뼈대가 없습니다');
+  if (!noticeT) warn.push('고시정보·상품주요정보 뼈대가 없습니다');
+
+  /* 복제 원본이 있어야 워커가 몸통을 만든다(빈 양식 등록은 아직 워커가 거부한다) */
+  const src = p.clone_seller_product_id
+    || (shipT && shipT.source_seller_product_id) || (noticeT && noticeT.source_seller_product_id);
+  if (!src) warn.push('복제 원본이 없습니다 — 뼈대를 기존 상품에서 떠야 합니다');
+
+  /* ── 상품 단위 ── */
+  const product = Object.assign({},
+    (shipT && shipT.payload.product) || {},
+    (noticeT && noticeT.payload.product) || {},
+    {
+      sellerProductName: p.product_name || '',
+      displayProductName: (p.display_product_name || p.product_name || ''),
+      generalProductName: p.product_name || '',
+      brand: p.brand || '',
+      manufacture: p.manufacture || p.brand || ''
+    });
+  if (p.display_category_code) product.displayCategoryCode = Number(p.display_category_code);
+  if (!p.manufacture) auto.push('제조사가 비어 브랜드명을 넣었습니다 (쿠팡 안내와 같은 방식)');
+
+  /* ── 옵션 공통(뼈대) ── */
+  const itemCommon = Object.assign({},
+    (shipT && shipT.payload.item) || {},
+    (noticeT && noticeT.payload.item) || {});
+
+  /* 고시정보의 '품명 및 모델명'은 상품명으로 채운다(사용자 결정 2026-08-21) */
+  if (Array.isArray(itemCommon.notices)) {
+    itemCommon.notices = itemCommon.notices.map((n) => {
+      if (/품명/.test(n.noticeCategoryDetailName || '')) {
+        auto.push(`고시정보 '${n.noticeCategoryDetailName}' ← 상품명`);
+        return Object.assign({}, n, { content: p.product_name || '' });
+      }
+      return n;
+    });
+    const empty = itemCommon.notices.filter((n) => !String(n.content || '').trim());
+    if (empty.length) warn.push(`고시정보 ${empty.length}개 항목이 비어 있습니다 `
+      + `(${empty.map((n) => n.noticeCategoryDetailName).join(', ')})`);
+  }
+  /* 필수속성은 옵션별이라 공통에서 뺀다 */
+  const attrTemplate = itemCommon.attributes || [];
+  delete itemCommon.attributes;
+
+  /* 카테고리가 요구하는 필수속성 목록 */
+  const mandatory = ((meta && meta.raw && meta.raw.attributes) || [])
+    .filter((a) => a.required === 'MANDATORY');
+
+  /* ── 옵션 ── */
+  const repByItem = {};
+  const detail = [];
+  (assets || []).forEach((a) => {
+    if (a.kind === 'rep' && a.item_id) repByItem[a.item_id] = a.url;
+    if (a.kind === 'detail') detail.push(a.url);
+  });
+
+  const outItems = items.map((it) => {
+    const name = (it.item_name || '').trim();
+    const one = {
+      itemName: name,
+      salePrice: it.sale_price,
+      marketplaceSalePrice: it.marketplace_sale_price,
+      searchTags: p.search_tags || [],
+      skuInfo: {
+        inboundName: (it.inbound_name || '').trim()
+          || [p.product_name, name].filter(Boolean).join(' '),
+        width: it.sku_width, length: it.sku_length, height: it.sku_height,
+        weight: it.sku_weight, netWeight: it.sku_net_weight,
+        distributionPeriod: it.distribution_period || 0,
+        expiredAtManaged: it.expired_at_managed === true,
+        producedAtManaged: it.produced_at_managed === true,
+        manufacturedAtManaged: it.manufactured_at_managed === true,
+        fragile: it.fragile === true,
+        originalBarcode: it.barcode_mode === 'own' ? (it.own_barcode || null) : null
+      },
+      attributes: lstFillAttributes(attrTemplate, mandatory, name, it, auto, warn)
+    };
+    if (repByItem[it.id]) {
+      one.images = [{ imageOrder: 0, imageType: 'REPRESENTATION', vendorPath: repByItem[it.id] }];
+    } else {
+      warn.push(`옵션 "${name || '(이름없음)'}"에 대표이미지가 없습니다`);
+    }
+    /* 상세페이지: 세트를 골랐으면 그것으로, '복제 원본 그대로'면 아예 안 준다
+       (워커가 원본 이미지를 우리 Storage로 옮겨 넣는다) */
+    if (p.detail_source !== 'clone') {
+      if (detail.length) {
+        one.contents = detail.map((u) => ({
+          contentsType: 'IMAGE_NO_SPACE',
+          contentDetails: [{ content: u, detailType: 'IMAGE' }]
+        }));
+      } else {
+        warn.push('상세페이지 세트를 고르지 않았습니다');
+      }
+    }
+    if (it.barcode_mode === 'own') {
+      warn.push(`옵션 "${name}"이 자체 바코드를 씁니다 — **이 경로는 미검증**입니다`);
+    }
+    return one;
+  });
+
+  return {
+    payload: { source_seller_product_id: src ? String(src) : null,
+               product, itemCommon, items: outItems, requested: p.requested === true },
+    warn, auto, project: p
+  };
+}
+
+/* 필수속성 채우기.
+   ------------------------------------------------------------
+   **뼈대의 필수속성 값은 복제 원본 상품의 값이다** — 우리 상품 값이 아니다.
+   실제로 확인했다(2026-08-21): 그냥 두면 `색상=감자색 · 개당 중량=70g` 이 그대로
+   등록될 뻔했다. 우리 옵션은 '레드'에 210g이었다.
+   그래서 **비었을 때만 채우는 방식은 위험하다.** 필수속성은 다음 규칙으로 간다:
+
+     색상·컬러      → 옵션명으로 **항상 덮어쓴다** (옵션마다 다른 값이므로)
+     무게·중량      → 우리가 잰 값으로 **항상 덮어쓴다** (내용물 무게 > 포장 무게 순)
+     그 밖의 필수    → 값이 있으면 두되 **"복제 원본 값"이라고 반드시 보여준다**
+     빈 필수        → 경고
+
+   조용히 채우거나 조용히 두는 게 제일 나쁘다 — 확인 화면에 전부 올린다. */
+function lstFillAttributes(template, mandatory, itemName, row0, auto, warn) {
+  const out = (template || []).map((a) => Object.assign({}, a));
+  const find = (nm) => out.find((a) => a.attributeTypeName === nm);
+  const label = itemName || '(이름없음)';
+
+  mandatory.forEach((m) => {
+    const nm = m.attributeTypeName;
+    let row = find(nm);
+    if (!row) {
+      row = { attributeTypeName: nm, attributeValueName: '', exposed: 'EXPOSED', editable: true };
+      out.push(row);
+    }
+    const cur = String(row.attributeValueName || '').trim();
+    const unit = (m.basicUnit && m.basicUnit !== '없음') ? m.basicUnit : '';
+
+    if (/색상|컬러/.test(nm)) {
+      if (!itemName) { warn.push(`필수속성 '${nm}'을 채울 옵션명이 없습니다`); return; }
+      row.attributeValueName = itemName;
+      auto.push(`[${label}] '${nm}' ← 옵션명${cur && cur !== itemName ? ` (복제 원본의 "${cur}"을 덮어씀)` : ''}`);
+      return;
+    }
+    if (/무게|중량/.test(nm)) {
+      const g = row0.sku_net_weight || row0.sku_weight;
+      if (!g) { warn.push(`[${label}] '${nm}'을 채울 무게가 없습니다 — 물류 화면에서 넣으세요`); return; }
+      row.attributeValueName = `${g}${unit || 'g'}`;
+      auto.push(`[${label}] '${nm}' ← ${g}${unit || 'g'}${cur ? ` (복제 원본의 "${cur}"을 덮어씀)` : ''}`);
+      return;
+    }
+    if (cur) {
+      /* 값은 있는데 우리가 만든 값이 아니다. 맞을 수도 있지만 **반드시 눈으로 보게 한다.** */
+      auto.push(`[${label}] '${nm}' = "${cur}" — 복제 원본 값 그대로입니다. 맞는지 확인하세요`);
+      return;
+    }
+    warn.push(`[${label}] 필수속성 '${nm}'이 비어 있습니다 — 뼈대에서 채우세요`);
+  });
+  return out;
+}
+
+/* ---------- 등록 확인 모달 ---------- */
+/* **등록은 되돌릴 수 없다.** 그래서 무엇을 보낼지 먼저 보여주고, 경고가 있으면
+   그것부터 읽게 한다. 자동으로 채운 값도 반드시 보여준다 — 조용히 채우면
+   틀린 값이 그대로 등록된다. */
+async function lstOpenSubmit(projectId) {
+  const modal = $('#lstSubmitModal');
+  modal.classList.remove('hidden');
+  $('#lstSubBody').innerHTML = '<div class="loader"><div class="spinner"></div>몸통을 만드는 중…</div>';
+  $('#lstSubGo').disabled = true;
+  $('#lstSubMsg').classList.add('hidden');
+
+  let built;
+  try {
+    built = await lstBuildPayload(projectId);
+  } catch (e) {
+    $('#lstSubBody').innerHTML = '<p class="msg err">몸통을 못 만들었습니다: ' + esc(e.message) + '</p>';
+    return;
+  }
+  LISTING.building = built;
+
+  const p = built.project;
+  const pay = built.payload;
+  const blocking = !pay.source_seller_product_id;
+
+  const rows = pay.items.map((it) => '<tr>'
+    + '<td>' + esc(it.itemName || '(이름없음)') + '</td>'
+    + '<td class="col-num">' + (it.salePrice ? won(it.salePrice) : '—') + '</td>'
+    + '<td class="col-num">' + (it.marketplaceSalePrice ? won(it.marketplaceSalePrice) : '—') + '</td>'
+    + '<td class="sm">' + esc(it.skuInfo.inboundName) + '</td>'
+    + '<td class="sm">' + it.skuInfo.width + '×' + it.skuInfo.length + '×' + it.skuInfo.height
+      + 'mm · ' + it.skuInfo.weight + 'g</td>'
+    + '<td class="sm">' + (it.skuInfo.originalBarcode ? esc(it.skuInfo.originalBarcode) : '쿠팡 발급') + '</td>'
+    + '</tr>').join('');
+
+  $('#lstSubBody').innerHTML =
+    '<div class="kv-grid">'
+    + '<span class="kv"><span class="kv-k">상품명</span><span class="kv-v">' + esc(pay.product.sellerProductName) + '</span></span>'
+    + '<span class="kv"><span class="kv-k">카테고리</span><span class="kv-v">' + esc(p.category_path || pay.product.displayCategoryCode || '—') + '</span></span>'
+    + '<span class="kv"><span class="kv-k">옵션</span><span class="kv-v">' + pay.items.length + '개</span></span>'
+    + '<span class="kv"><span class="kv-k">복제 원본</span><span class="kv-v">' + esc(pay.source_seller_product_id || '없음') + '</span></span>'
+    + '</div>'
+    + '<h4 class="sku-sec">옵션</h4>'
+    + '<div class="table-wrap"><table class="grid"><thead><tr>'
+    + '<th>옵션명</th><th class="col-num">로켓그로스</th><th class="col-num">판매자배송</th>'
+    + '<th>입고 표기명</th><th>규격</th><th>바코드</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+    + (built.auto.length
+        ? '<h4 class="sku-sec">자동으로 채운 값 <span class="muted sm">— 틀렸으면 지금 고치세요</span></h4><ul class="sm">'
+          + built.auto.map((a) => '<li>' + esc(a) + '</li>').join('') + '</ul>'
+        : '')
+    + (built.warn.length
+        ? '<div class="msg err"><b>확인이 필요합니다</b><ul class="sm">'
+          + built.warn.map((w) => '<li>' + w + '</li>').join('') + '</ul></div>'
+        : '')
+    + (blocking ? '<p class="msg err">복제 원본이 없어 등록할 수 없습니다 — 뼈대를 기존 상품에서 뜨세요.</p>' : '')
+    + '<details style="margin-top:10px"><summary class="muted sm">쿠팡에 보낼 몸통 전체 보기</summary>'
+    + '<textarea rows="16" readonly style="width:100%;font-family:monospace;font-size:12px">'
+    + esc(JSON.stringify(pay, null, 1)) + '</textarea></details>'
+    + '<label class="chk" style="margin-top:10px"><input type="checkbox" id="lstSubRequested"'
+    + (pay.requested ? ' checked' : '') + ' />'
+    + '<span>등록과 동시에 <b>승인 요청</b>까지 보냅니다 (체크를 빼면 임시저장 상태로 들어갑니다)</span></label>';
+
+  $('#lstSubGo').disabled = blocking;
+  $('#lstSubGo').dataset.pid = projectId;
+}
+
+$('#lstSubmitModal').addEventListener('click', (ev) => {
+  if (ev.target.matches('[data-close], .modal-backdrop')) $('#lstSubmitModal').classList.add('hidden');
+});
+
+/* 진짜 등록 — 여기서부터는 되돌릴 수 없다 */
+$('#lstSubGo').onclick = async () => {
+  const built = LISTING.building;
+  if (!built) return;
+  const btn = $('#lstSubGo');
+  const pid = btn.dataset.pid;
+  btn.disabled = true;
+  $('#lstSubMsg').classList.remove('hidden');
+  $('#lstSubMsg').textContent = '등록 요청을 넣는 중…';
+
+  try {
+    const payload = built.payload;
+    payload.requested = $('#lstSubRequested').checked === true;
+
+    /* 판단을 먼저 박제한다. **등록이 실패해도 판단은 남아야 한다** —
+       "이렇게 보고 골랐는데 등록이 안 됐다"도 기록이다(017). */
+    let decisionId = built.project.sourcing_decision_id || null;
+    if (!decisionId) {
+      const p = built.project;
+      const snap = p.source_snapshot || {};
+      const cat = p.catalog_snapshot || {};
+      const [made] = await api('sourcing_decisions', {
+        method: 'POST', headers: { prefer: 'return=representation' },
+        body: {
+          method: p.source_kind,
+          snapshot_min_price: snap.current_price || cat.salePrice || null,
+          snapshot_review_count: cat.ratingCount || null,
+          snapshot_raw: { favorite: snap, catalog: cat },
+          expected_monthly_qty: p.expected_monthly_qty,
+          expected_unit_cost_krw: p.expected_unit_cost_krw,
+          expected_sell_price: p.expected_sell_price || (payload.items[0] || {}).salePrice || null,
+          expected_margin_rate: p.expected_margin_rate,
+          reason_memo: p.reason_memo
+        }
+      });
+      decisionId = made.id;
+      await api('listing_projects?id=eq.' + pid, {
+        method: 'PATCH', headers: { prefer: 'return=minimal' },
+        body: { sourcing_decision_id: decisionId }
+      });
+    }
+    payload.sourcing_decision_id = decisionId;
+
+    const [q] = await api('coupang_write_queue', {
+      method: 'POST', headers: { prefer: 'return=representation' },
+      body: { kind: 'product_create', payload, requested_by: AUTH.userId || null }
+    });
+
+    await api('listing_projects?id=eq.' + pid, {
+      method: 'PATCH', headers: { prefer: 'return=minimal' },
+      body: { status: 'submitted', submitted_queue_id: q.id,
+              submitted_at: new Date().toISOString(), requested: payload.requested }
+    });
+    await lstAddNote(pid, 'submit',
+      '쿠팡 등록 요청 (옵션 ' + payload.items.length + '개, '
+      + (payload.requested ? '승인요청까지' : '임시저장') + ')', { queue_id: q.id });
+
+    $('#lstSubMsg').textContent = '등록을 요청했습니다 — VPS 워커가 처리합니다. 결과를 지켜봅니다.';
+    lstWatchQueue(q.id, pid);
+    await loadListing();
+  } catch (e) {
+    $('#lstSubMsg').textContent = '요청 실패: ' + e.message;
+    btn.disabled = false;
+  }
+};
+
+/* 큐가 처리되는지 지켜본다. **워커가 꺼져 있으면 영원히 기다리게 되므로**
+   2분이 지나면 그 사실을 말한다(가격 변경 화면과 같은 규칙). */
+function lstWatchQueue(queueId, projectId) {
+  const started = Date.now();
+  const tick = async () => {
+    let row;
+    try {
+      row = (await api('coupang_write_queue?select=*&id=eq.' + queueId + '&limit=1'))[0];
+    } catch (e) { return; }
+    if (!row) return;
+
+    if (row.status === 'done' || row.status === 'failed') {
+      const ok = row.status === 'done';
+      $('#lstSubMsg').innerHTML = ok
+        ? '<b>등록되었습니다.</b> 새 상품ID ' + esc(row.created_seller_product_id || '—')
+        : '<b class="neg">등록 실패</b> — ' + esc(String(row.response_body || '').slice(0, 400));
+      if (ok) {
+        await api('listing_projects?id=eq.' + projectId, {
+          method: 'PATCH', headers: { prefer: 'return=minimal' },
+          body: { status: 'registered', created_seller_product_id: row.created_seller_product_id,
+                  registered_at: new Date().toISOString() }
+        });
+      } else {
+        /* 실패하면 다시 준비중으로 돌린다 — 고쳐서 다시 시도할 수 있어야 한다 */
+        await api('listing_projects?id=eq.' + projectId, {
+          method: 'PATCH', headers: { prefer: 'return=minimal' }, body: { status: 'preparing' }
+        });
+        $('#lstSubGo').disabled = false;
+      }
+      await loadListing();
+      return;
+    }
+
+    if (Date.now() - started > 120000) {
+      $('#lstSubMsg').innerHTML = '2분이 지나도 처리되지 않았습니다 — '
+        + '<b>VPS 워커가 꺼져 있을 수 있습니다.</b> 요청은 큐에 남아 있어서 워커가 켜지면 처리됩니다.';
+      return;
+    }
+    setTimeout(tick, 3000);
+  };
+  setTimeout(tick, 3000);
+}
+

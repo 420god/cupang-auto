@@ -45,7 +45,7 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 |---|---|---|
 | 웹 | `main` push → Vercel 자동배포 | 웹훅이 가끔 유실됨 → 배포 목록에 그 커밋이 없으면 `git commit --allow-empty` 후 push |
 | VPS 스크립트 | VPS에서 `git pull` | push만으론 반영 안 됨. 경로 `/home/thezone1633/cupang-auto` |
-| VPS 쓰기 워커 | `git pull` 후 **`systemctl restart coupang-write-worker`** | 상시 프로세스라 pull만으론 옛 코드가 계속 돈다. **안 떠 있으면 웹의 가격 변경이 큐에 쌓이기만 한다** (설치법은 `scripts/coupang-write-worker.service` 주석) |
+| VPS 쓰기 워커 | `git pull` 후 **`systemctl restart coupang-write-worker`** ← 2026-08-21 등록 payload 계약이 바뀜(itemCommon·attributes·skuInfo 확장). **재시작 전엔 뼈대 값이 무시된다** | 상시 프로세스라 pull만으론 옛 코드가 계속 돈다. **안 떠 있으면 웹의 가격 변경이 큐에 쌓이기만 한다** (설치법은 `scripts/coupang-write-worker.service` 주석) |
 | 확장프로그램 | `chrome://extensions`에서 새로고침 | git과 무관 |
 
 ## 웹 코드 구조 (2026-08-20 분할)
@@ -83,7 +83,7 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 | 대표이미지(후보 보관·교체 이력) | 대표이미지 | ✅ |
 | 상세페이지(세트 단위·긴 이미지) | 상세페이지 | ✅ |
 | 물류·바코드(skuInfo 22항목·바코드 방식) | 물류·바코드 | ✅ |
-| 등록 실행(payload 빌드 → 큐) | 상품등록 | ⬜ 버튼만 있고 아직 안 쏜다 |
+| 등록 실행(payload 빌드 → 확인 → 큐) | 상품등록 | ✅ **워커 재시작 필요** |
 
 **031은 추가 컬럼까지 전부 실행됐다**(2026-08-21 브라우저에서 확인: 준비 건 생성 →
 상품명·검색어 저장 → 옵션 2개 저장 → 진행 뷰 판정 → 삭제까지 왕복 확인. 테스트 행은 지웠다).

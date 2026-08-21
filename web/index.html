@@ -1746,6 +1746,27 @@
 <script src="js/70-outbound.js"></script>
 <script src="js/80-products.js"></script>
 <script src="js/85-product-edit.js"></script>
+<!-- 등록 확인 — **등록은 되돌릴 수 없다.** 보낼 몸통을 먼저 보여주고 한 번 더 누르게 한다. -->
+<div id="lstSubmitModal" class="modal hidden">
+  <div class="modal-backdrop" data-close></div>
+  <div class="modal-card modal-xwide">
+    <div class="modal-head">
+      <h3>쿠팡에 등록</h3>
+      <button class="icon-btn" data-close aria-label="닫기">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint-box">보내기 전 마지막 확인입니다.
+        <b>등록은 되돌릴 수 없습니다</b> — 잘못 만든 상품은 WING 목록에 남습니다.</div>
+      <div id="lstSubBody"></div>
+      <div id="lstSubMsg" class="msg hidden"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close>닫기</button>
+      <button id="lstSubGo" class="btn btn-primary">진짜 등록</button>
+    </div>
+  </div>
+</div>
+
 <script src="js/86-listing.js"></script>
 <script src="js/87-listing-price.js"></script>
 <script src="js/88-listing-name.js"></script>
