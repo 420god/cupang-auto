@@ -31,6 +31,7 @@ js/90-listing-image.js 대표이미지 — 후보 업로드·선택·교체 이�
 js/91-listing-catalog.js 카탈로그 매칭 — 확장에 시켜 WING pre-matching 조회 · 정보만 가져옴
 js/92-listing-detail.js 상세페이지 — 세트 단위 후보·순서·교체 이력
 js/93-listing-logistics.js 물류·바코드 — 입고명·규격·바코드 방식·날짜 플래그
+js/94-listing-template.js 뼈대 — 기존 상품에서 뜨기·수정·준비 건에 붙이기
 js/95-boot.js       네비게이션 · 테마 · 시작  ← 항상 마지막
 ```
 
@@ -188,6 +189,32 @@ primary_metrics)`. `product_change_history`(026)와 모양이 같아서 등록 �
 카테고리 메타의 `isExpirationDateRequiredForRocketGrowth` 가 true 면 그 카테고리는
 유통기한이 필수다. 화면이 먼저 말한다. **다만 true 인 카테고리를 아직 못 봤다**
 (받아둔 두 카테고리 모두 false) — 그 분기는 미검증이다.
+
+### 뼈대는 등록에 성공한 상품에서 뜬다 (2026-08-21)
+
+새로 만드는 것보다 확실하다 — **쿠팡이 실제로 받아준 값**이기 때문이다. 뜬 뒤에 고친다.
+
+`listing_templates.payload` 는 두 층이다(실측으로 확정한 키만 담는다):
+```
+product  marketplaceShippingAndReturnInfo(18키) · bundleInfo · registrationType
+         · vendorUserId · requiredDocuments · productGroup · contributorType
+item     taxType · adultOnly · pccNeeded · unitCount · offerCondition · offerDescription
+         · parallelImported · overseasPurchased · maximumBuy*(3) · outboundShippingTime(Day)
+         · sameDayShipping · certifications · notices · attributes
+```
+**목록에 없는 키는 안 담는다.** 상품마다 달라야 하는 값(이름·가격·이미지·바코드)이
+딸려 들어오면 그게 사고다.
+
+**`notices`·`attributes` 는 값이 상품마다 다르다** — 품명은 상품명이고 색상은 옵션명이다.
+뼈대에는 **틀**로 들어가고 등록할 때 준비 건의 값으로 덮어쓴다. 특히 `attributes` 는
+카테고리마다 항목이 달라서, 뼈대 원본과 카테고리가 다르면 안 맞는다 — 등록 시
+`coupang_category_meta` 와 대조해야 한다.
+
+**enum 코드값의 전체 목록을 우리는 모른다**(`CJGLS`·`SEQUENCIAL`·`TAX`·`EVERYONE` …).
+그래서 화면이 select 로 좁히지 않고 텍스트로 둔다 — 모르는 목록을 만들어 넣으면
+쓸 수 있는 값을 막게 된다(R-14).
+
+**쓰고 있는 뼈대는 못 지운다**(그 준비 건의 뼈대가 사라진다). **기본 뼈대는 하나뿐**이다.
 
 ## 등록은 복제가 기본이다
 
