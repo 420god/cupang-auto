@@ -176,3 +176,176 @@ async function renderExperiments(r) {
       + '(마이그레이션 028 미실행일 수 있습니다).</span>';
   }
 }
+
+/* ===================== 신규 상품 등록 (복제 기반) =====================
+   최상위 23키 + 옵션 23키를 사람이 다 채우면 WING에서 하는 것과 다를 게 없다.
+   비슷한 기존 상품을 복제하면 배송·반품지·과세유형·고시정보·필수속성이 그대로
+   따라오고, 사람은 이름·가격·이미지·검색어만 바꾸면 된다.
+   **다품종 소량이라 비슷한 상품이 계속 나오는 구조**에 이게 맞다.
+
+   실제 복제(식별자 제거·이미지 이관)는 워커가 한다 — 웹은 "무엇을 만들지"만 담는다.
+   식별자를 안 지우면 "중복된 바코드가 존재합니다"로 막힌다(정찰에서 실제로 겪음). */
+
+const PN = { rows: 1 };
+
+function pnItemRow(i) {
+  return `<div class="two" data-pn-item="${i}" style="align-items:end">
+    <label class="field"><span>옵션명 ${i}</span>
+      <input class="pn-item-name" type="text" placeholder="예: 딸기, 100g, 1개" /></label>
+    <label class="field"><span>판매가 (원)</span>
+      <input class="pn-item-price" type="number" min="0" step="10" /></label>
+    <label class="field"><span>대표이미지 <span class="muted">비우면 원본 것</span></span>
+      <input class="pn-item-image" type="file" accept="image/*" /></label>
+  </div>`;
+}
+
+function pnRenderItems() {
+  $('#pnItems').innerHTML = Array.from({ length: PN.rows }, (_, i) => pnItemRow(i + 1)).join('');
+}
+
+$('#pnAddItem').onclick = () => { PN.rows++; pnRenderItems(); };
+
+$('#peNewBtn').onclick = () => {
+  /* 복제 원본은 **상품 원문을 이미 받아둔 것만** 고를 수 있다. 원문이 없으면
+     워커가 조회해서 쓰긴 하지만, 사람이 "무엇이 복제되는지" 모르는 채 고르게 된다. */
+  const cands = SKUS.rows.filter((r) => r.reg && r.reg.seller_product_id);
+  const seen = new Set();
+  const opts = [];
+  cands.forEach((r) => {
+    const id = String(r.reg.seller_product_id);
+    if (seen.has(id)) return;
+    seen.add(id);
+    opts.push(`<option value="${esc(id)}">${esc(r.sku.sku_name.slice(0, 50))}</option>`);
+  });
+  $('#pnSource').innerHTML = opts.length
+    ? opts.join('')
+    : '<option value="">복제할 상품이 없습니다</option>';
+
+  ['#pnProductName', '#pnSearchTags', '#pnExpQty', '#pnExpCost', '#pnExpPrice',
+   '#pnExpMargin', '#pnReason'].forEach((id) => { $(id).value = ''; });
+  $('#pnRequested').checked = false;
+  $('#pnDetailImages').value = '';
+  $('#pnDetailPreview').innerHTML = '';
+  $('#pnMsg').textContent = '';
+  PN.rows = 1;
+  pnRenderItems();
+  $('#prodNewModal').classList.remove('hidden');
+};
+
+$$('#prodNewModal [data-close]').forEach((b) => {
+  b.onclick = () => $('#prodNewModal').classList.add('hidden');
+});
+
+$('#pnDetailImages').addEventListener('change', () => {
+  const fs = Array.from($('#pnDetailImages').files || []);
+  $('#pnDetailPreview').innerHTML = fs.length
+    ? `<div class="muted">${fs.length}장으로 상세페이지를 만듭니다 (왼쪽부터 순서)</div>`
+      + fs.map((f, i) => localPreview(f, 70) + `<span class="muted sm">${i + 1}</span>`).join('')
+    : '';
+});
+
+$('#pnSave').onclick = async () => {
+  const src = $('#pnSource').value;
+  const name = ($('#pnProductName').value || '').trim();
+  if (!src) { $('#pnMsg').textContent = '복제할 상품을 고르세요.'; return; }
+  if (!name) { $('#pnMsg').textContent = '상품명을 입력하세요.'; return; }
+
+  const rows = $$('#pnItems [data-pn-item]');
+  const items = [];
+  for (const row of rows) {
+    const nm = (row.querySelector('.pn-item-name').value || '').trim();
+    const pr = Number(row.querySelector('.pn-item-price').value);
+    if (!nm) { $('#pnMsg').textContent = '옵션명을 모두 입력하세요.'; return; }
+    if (!Number.isFinite(pr) || pr <= 0) { $('#pnMsg').textContent = '판매가를 모두 입력하세요.'; return; }
+    items.push({ el: row, itemName: nm, salePrice: Math.round(pr) });
+  }
+
+  /* 되돌리기 어려운 일이라 한 번 더 묻는다. 등록되면 지우기가 까다롭다. */
+  if (!confirm(`"${name}" 을(를) 옵션 ${items.length}개로 등록합니다.\n`
+      + `등록은 되돌리기 어렵습니다. 진행할까요?`)) return;
+
+  const btn = $('#pnSave');
+  btn.disabled = true;
+  $('#pnMsg').textContent = '이미지를 올리는 중…';
+  try {
+    const tags = ($('#pnSearchTags').value || '').split(',')
+      .map((t) => t.trim()).filter(Boolean);
+
+    /* 이미지는 웹이 올린다 — 쿠팡은 공개 URL을 받아 스스로 내려받는다(정찰 확인).
+       워커가 올리게 하면 파일을 큐에 실어 보내야 해서 훨씬 복잡해진다. */
+    const detailFiles = Array.from($('#pnDetailImages').files || []);
+    let contents;
+    if (detailFiles.length) {
+      const urls = [];
+      /* 두 번째 인자는 Storage 경로의 폴더다. 신규 등록은 아직 SKU가 없으므로
+             'new/날짜' 로 모아둔다 — 나중에 어느 등록 건의 이미지인지 찾을 수 있다. */
+          const folder = 'new/' + kstDateStr(new Date());
+          for (const f of detailFiles) urls.push(await uploadProductImage(f, folder));
+      contents = urls.map((u) => ({
+        contentsType: 'IMAGE_NO_SPACE',
+        contentDetails: [{ content: u, detailType: 'IMAGE' }]
+      }));
+    }
+
+    const payloadItems = [];
+    for (const it of items) {
+      const f = it.el.querySelector('.pn-item-image').files[0];
+      const one = { itemName: it.itemName, salePrice: it.salePrice };
+      if (tags.length) one.searchTags = tags;
+      if (f) {
+        const u = await uploadProductImage(f, 'new/' + kstDateStr(new Date()));
+        one.images = [{ imageOrder: 0, imageType: 'REPRESENTATION', vendorPath: u }];
+      }
+      if (contents) one.contents = contents;
+      payloadItems.push(one);
+    }
+
+    $('#pnMsg').textContent = '등록 요청을 넣는 중…';
+
+    /* **판단을 먼저 남긴다.** 등록이 실패해도 "이걸 하려 했다"는 기록은 남아야 한다.
+       성공하면 워커가 seller_product_id 를 채워 판단과 상품을 잇는다. */
+    let decisionId = null;
+    const anyExpected = ['#pnExpQty', '#pnExpCost', '#pnExpPrice', '#pnExpMargin', '#pnReason']
+      .some((id) => ($(id).value || '').trim() !== '');
+    if (anyExpected) {
+      try {
+        const num = (id) => { const v = ($(id).value || '').trim(); return v === '' ? null : Number(v); };
+        const made = await api('sourcing_decisions', {
+          method: 'POST',
+          headers: { Prefer: 'return=representation' },
+          body: {
+            method: 'manual_register',
+            expected_monthly_qty: num('#pnExpQty'),
+            expected_unit_cost_krw: num('#pnExpCost'),
+            expected_sell_price: num('#pnExpPrice'),
+            expected_margin_rate: num('#pnExpMargin'),
+            reason_memo: ($('#pnReason').value || '').trim() || null
+          }
+        });
+        if (Array.isArray(made) && made[0]) decisionId = made[0].id;
+      } catch (e) { /* 판단 기록 실패로 등록을 막지 않는다 */ }
+    }
+
+    await api('coupang_write_queue', {
+      method: 'POST',
+      body: {
+        kind: 'product_create',
+        payload: {
+          source_seller_product_id: src,
+          product: { sellerProductName: name, displayProductName: name },
+          items: payloadItems,
+          requested: $('#pnRequested').checked === true,
+          sourcing_decision_id: decisionId
+        },
+        requested_by: AUTH.userId || null
+      }
+    });
+
+    $('#pnMsg').textContent = '등록을 요청했습니다 — VPS가 쿠팡에 올립니다(보통 몇 초).';
+    setTimeout(() => $('#prodNewModal').classList.add('hidden'), 2500);
+  } catch (e) {
+    $('#pnMsg').textContent = `실패: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+};

@@ -20,7 +20,7 @@ js/50-purchase.js   발주 · 예치금
 js/60-inbound.js    입고 · 재고/재발주 · 제트 작업비 파서
 js/70-outbound.js   출고
 js/80-products.js   상품원장(공급처·발주 파라미터) + 가격/상품정보 편집 로직
-js/85-product-edit.js 상품수정 화면 — 편집 UI와 실험 기록(v_product_experiments)
+js/85-product-edit.js 상품수정 화면 — 편집 UI · 실험 기록 · 신규 등록(복제)
 js/90-boot.js       네비게이션 · 테마 · 시작
 ```
 

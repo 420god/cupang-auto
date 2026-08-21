@@ -42,7 +42,8 @@ const DRY = process.argv.includes('--dry-run');
 /* 판매중지·재개는 **아직 실물로 확인 안 됐다.** 실패하면 실제로 상품이 내려가서
    정찰 때 일부러 시험을 미뤘다. 확인 전까지 워커가 거부한다 — 큐에 들어와도 실행하지 않고
    failed로 남기며 이유를 적는다. 확인되면 이 집합에서 빼면 된다. */
-const VERIFIED_KINDS = new Set(['price', 'price_sync', 'product_update', 'product_fetch']);
+const VERIFIED_KINDS = new Set(['price', 'price_sync', 'product_update', 'product_fetch',
+                                'product_create', 'category_meta']);
 
 /* 로켓그로스 상품 수정에 반드시 들어가야 하는 쓰기 전용 값(2026-08-20 실물 확인).
    **조회 응답에는 안 나온다** — 그래서 "조회한 걸 그대로 되보내면 된다"가 성립하지 않는다.
@@ -522,6 +523,223 @@ async function handleProductUpdate(row) {
   }
 }
 
+
+/* ── 복제할 때 지워야 하는 것들 ─────────────────────────────────────────────
+   **정찰이 이걸 알려줬다.** 조회한 몸통을 그대로 보냈더니
+   "중복된 바코드가 존재합니다"가 나왔다 — 식별자가 원본 것 그대로 붙어 있어서다.
+   새 상품은 쿠팡이 새 식별자를 발급하므로 우리가 보내면 안 된다.
+
+   지우는 것과 남기는 것을 나누는 기준: **쿠팡이 발급하는 것은 지우고,
+   우리가 정하는 것은 남긴다.** 배송·반품지·과세유형·고시정보·필수속성은
+   우리가 정한 값이라 그대로 따라가야 한다 — 그게 복제의 이유다. */
+const CLONE_STRIP_TOP = [
+  'sellerProductId',      // 쿠팡이 발급하는 상품ID
+  'productId',            // 소비자 페이지 상품ID
+  'statusName',           // 승인 상태. 새 상품은 쿠팡이 정한다
+  'createdAt', 'modifiedAt'
+];
+const CLONE_STRIP_ITEM = [
+  'sellerProductItemId', 'vendorItemId', 'itemId', 'barcode',
+  'inventoryId', 'externalVendorSkuCode'
+];
+
+/* 옵션 안의 rocketGrowthItemData / marketplaceItemData 안에도 식별자가 들어 있다.
+   **철자가 엔드포인트마다 다르므로 세 가지를 다 훑는다**
+   (docs/api/coupang-open-api.md "대소문자가 다르다"). */
+function stripItemIdentifiers(item) {
+  CLONE_STRIP_ITEM.forEach((k) => { delete item[k]; });
+  ['rocketGrowthItemData', 'marketplaceItemData', 'marketPlaceItemData'].forEach((k) => {
+    if (!item[k]) return;
+    CLONE_STRIP_ITEM.forEach((f) => { delete item[k][f]; });
+  });
+  /* 이미지의 cdnPath 는 **쿠팡이 저장한 결과값**이지 우리가 주는 값이 아니다.
+     새 상품에 원본의 cdnPath 를 주면 어떻게 되는지 확인된 바 없다 — 그래서
+     복제할 때 이미지는 아래 resolveCloneImages()가 공개 URL로 바꿔 넣는다. */
+  return item;
+}
+
+/* 복제 원본의 이미지를 **우리 Storage 공개 URL로 바꾼다.**
+   쿠팡은 vendorPath 에 http 로 시작하는 URL을 주면 내려받는다(문서·실측).
+   원본의 cdnPath 를 그대로 주는 건 미검증이라 하지 않는다 — 이미 검증된
+   경로(CDN에서 받아 Storage에 올린 뒤 그 URL)를 재사용한다. */
+async function resolveCloneImages(item, tagPrefix) {
+  const out = [];
+  for (let i = 0; i < (item.images || []).length; i++) {
+    const im = item.images[i];
+    const src = im.cdnPath || im.vendorPath;
+    if (!src) continue;
+    const a = await archived(src, tagPrefix, `img${i + 1}`);
+    if (!a || !a.archived_url) {
+      throw new Error(`복제할 이미지를 옮기지 못했습니다: ${src}`);
+    }
+    out.push({ imageOrder: im.imageOrder, imageType: im.imageType, vendorPath: a.archived_url });
+  }
+  item.images = out;
+
+  for (const c of (item.contents || [])) {
+    for (let j = 0; j < (c.contentDetails || []).length; j++) {
+      const d = c.contentDetails[j];
+      if (d.detailType !== 'IMAGE' || !d.content) continue;
+      const a = await archived(d.content, tagPrefix, `detail${j + 1}`);
+      if (!a || !a.archived_url) {
+        throw new Error(`복제할 상세페이지 이미지를 옮기지 못했습니다: ${d.content}`);
+      }
+      d.content = a.archived_url;
+    }
+  }
+  return item;
+}
+
+/* ── 신규 등록 ─────────────────────────────────────────────────────────────
+   payload:
+     { source_seller_product_id, product: {최상위 덮어쓸 값},
+       items: [{ itemName, salePrice, originalPrice, searchTags, images, contents }],
+       requested, sourcing_decision_id }
+
+   **되돌릴 수 없는 작업이다.** 등록되면 지우기 어렵다. 그래서
+   ① 필수값을 워커가 다시 확인하고 ② 보낸 몸통을 통째로 남긴다. */
+async function handleProductCreate(row) {
+  const payload = row.payload || {};
+  const srcId = payload.source_seller_product_id;
+  if (!srcId) {
+    await finish(row.id, { status: 'failed',
+      response_body: '복제 원본(source_seller_product_id)이 없습니다. 빈 양식 등록은 아직 지원하지 않습니다.' });
+    return;
+  }
+
+  const src = await fetchProduct(srcId);
+  if (!src) {
+    await finish(row.id, { status: 'failed', response_body: `복제 원본 조회 실패: ${srcId}` });
+    return;
+  }
+
+  /* 깊은 복사. 원본 객체를 그대로 고치면 재시도할 때 이미 지워진 상태로 시작한다. */
+  const product = JSON.parse(JSON.stringify(src));
+  CLONE_STRIP_TOP.forEach((k) => { delete product[k]; });
+
+  const wanted = payload.items || [];
+  if (!wanted.length) {
+    await finish(row.id, { status: 'failed', response_body: '등록할 옵션이 없습니다.' });
+    return;
+  }
+
+  /* 옵션은 **payload가 준 개수만큼** 만든다. 원본 옵션 하나를 틀로 삼아 복제한다 —
+     원본 옵션을 그대로 다 가져오면 안 팔 색상까지 같이 등록된다. */
+  const template = (product.items || [])[0];
+  if (!template) {
+    await finish(row.id, { status: 'failed', response_body: '복제 원본에 옵션이 없습니다.' });
+    return;
+  }
+
+  const items = [];
+  for (let i = 0; i < wanted.length; i++) {
+    const w = wanted[i];
+    const it = stripItemIdentifiers(JSON.parse(JSON.stringify(template)));
+    if (w.itemName !== undefined) it.itemName = w.itemName;
+    if (w.searchTags !== undefined) it.searchTags = w.searchTags;
+    if (w.images !== undefined) it.images = w.images;         // 새로 올린 이미지
+    if (w.contents !== undefined) it.contents = w.contents;
+    /* 가격은 옵션 안의 두 곳(로켓그로스/마켓플레이스)에 들어 있다. 둘 다 맞춘다 —
+       한쪽만 바꾸면 화면에 보이는 값과 실제가 갈린다(가격이 두 벌인 구조, 정찰 확인). */
+    if (w.salePrice !== undefined || w.originalPrice !== undefined) {
+      ['rocketGrowthItemData', 'marketplaceItemData', 'marketPlaceItemData'].forEach((k) => {
+        if (!it[k] || !it[k].priceData) return;
+        if (w.salePrice !== undefined) it[k].priceData.salePrice = Number(w.salePrice);
+        if (w.originalPrice !== undefined) it[k].priceData.originalPrice = Number(w.originalPrice);
+      });
+    }
+    /* 이미지를 새로 안 올렸으면 원본 것을 우리 Storage로 옮겨서 URL로 준다. */
+    if (w.images === undefined || w.contents === undefined) {
+      await resolveCloneImages(it, `new-${row.id}-${i + 1}`);
+    }
+    items.push(it);
+  }
+  product.items = items;
+
+  if (payload.product) {
+    Object.keys(payload.product).forEach((k) => { product[k] = payload.product[k]; });
+  }
+  product.requested = payload.requested === true;
+
+  /* 쓰기 전용 필드. 없으면 "입고 불가 조건에 동의해주세요"로 막힌다. */
+  product.rocketGrowthAdditionalInformation =
+    Object.assign({}, product.rocketGrowthAdditionalInformation || {},
+      { legalAgreement: RG_LEGAL_AGREEMENT });
+
+  const apiPath = '/v2/providers/seller_api/apis/api/v1/marketplace/seller-products';
+  if (DRY) {
+    log(`[dry-run] POST ${apiPath} (복제 원본 ${srcId}, 옵션 ${items.length}개)`);
+    await finish(row.id, { status: 'queued', started_at: null, sent_body: product });
+    return;
+  }
+
+  const r = await coupang('POST', apiPath, product);
+  const ok = r.status === 200 && r.json && r.json.code === 'SUCCESS';
+  /* 새 sellerProductId 는 data 에 온다. 형태를 단정하지 않고 숫자만 뽑는다 —
+     문자열일 수도 객체일 수도 있어서 확인 전엔 가정하지 않는다(R-12). */
+  let newId = null;
+  if (ok && r.json) {
+    const d = r.json.data;
+    if (typeof d === 'number' || typeof d === 'string') newId = String(d);
+    else if (d && d.sellerProductId != null) newId = String(d.sellerProductId);
+  }
+  log(`${ok ? '성공' : '실패'} 상품등록 (복제 ${srcId}) HTTP ${r.status} newId=${newId} ${r.text.slice(0, 200)}`);
+
+  await finish(row.id, {
+    status: ok ? 'done' : 'failed',
+    http_status: r.status,
+    response_body: r.text.slice(0, 2000),
+    created_seller_product_id: newId,
+    sent_body: product
+  });
+
+  /* 판단과 결과를 잇는다. 등록이 실패해도 판단은 남아 있고(웹이 먼저 넣는다),
+     성공했을 때만 "이 판단으로 만든 상품이 저것"이 확정된다. */
+  if (ok && newId && payload.sourcing_decision_id) {
+    try {
+      await sb('PATCH', `sourcing_decisions?id=eq.${payload.sourcing_decision_id}`,
+        { seller_product_id: newId });
+    } catch (e) { log(`소싱 판단 연결 실패(등록 자체는 성공): ${e.message}`); }
+  }
+
+  /* 등록된 상품을 바로 읽어 레지스트리에 넣는다 — 화면이 곧바로 볼 수 있게. */
+  if (ok && newId) {
+    await new Promise((s) => setTimeout(s, 1500));
+    try {
+      const fresh = await fetchProduct(newId);
+      if (fresh) await storeProductJson(newId, fresh);
+    } catch (e) { log(`등록 후 재조회 실패(등록 자체는 성공): ${e.message}`); }
+  }
+}
+
+/* ── 카테고리 메타 (빈 양식 등록용) ────────────────────────────────────────
+   웹은 쿠팡을 직접 못 부르므로 워커가 가져와 저장한다. 읽기 전용이라 안전하다. */
+async function handleCategoryMeta(row) {
+  const code = row.display_category_code;
+  const r = await coupang('GET',
+    `/v2/providers/seller_api/apis/api/v1/marketplace/meta/category-related-metas/display-category-codes/${code}`);
+  if (r.status !== 200 || !r.json || !r.json.data) {
+    await finish(row.id, { status: 'failed', http_status: r.status,
+      response_body: r.text.slice(0, 1000) });
+    return;
+  }
+  let path = null;
+  try {
+    const p = await coupang('GET',
+      `/v2/providers/seller_api/apis/api/v1/marketplace/meta/display-categories/${code}`);
+    if (p.status === 200 && p.json && p.json.data) {
+      path = p.json.data.categoryPath || p.json.data.name || null;
+    }
+  } catch (e) { /* 경로는 없어도 된다 */ }
+
+  await sb('POST', 'coupang_category_meta?on_conflict=display_category_code',
+    [{ display_category_code: String(code), category_path: path,
+       raw: r.json.data, fetched_at: new Date().toISOString() }],
+    'resolution=merge-duplicates,return=minimal');
+  await finish(row.id, { status: 'done', http_status: 200,
+    response_body: `카테고리 ${code} 메타 저장` });
+}
+
 /* ── 한 건 처리 ────────────────────────────────────────────────────────── */
 async function handle(row) {
   if (!VERIFIED_KINDS.has(row.kind)) {
@@ -552,6 +770,10 @@ async function handle(row) {
   }
 
   if (row.kind === 'product_fetch')  { await handleProductFetch(row);  return; }
+  if (row.kind === 'category_meta') { await handleCategoryMeta(row); return; }
+  /* 등록은 **되돌릴 수 없다.** 실패해도 재시도하지 않는다 —
+     쿠팡이 SUCCESS를 늦게 주거나 우리가 응답을 놓친 경우 두 번 등록될 수 있다. */
+  if (row.kind === 'product_create') { await handleProductCreate(row); return; }
   if (row.kind === 'product_update') { await handleProductUpdate(row); return; }
 
   const before = await readCurrentPrice(row.vendor_item_id);
