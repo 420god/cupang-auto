@@ -1,40 +1,53 @@
 /* ============================================================
-   94-listing-template.js — 뼈대 (배송·반품지·과세·고시정보·인증)
+   94-listing-template.js — 뼈대 (두 그룹)
    ------------------------------------------------------------
-   **이미 등록에 성공한 상품에서 뜬다.** 새로 만드는 것보다 확실하다 —
-   쿠팡이 받아준 실제 값이기 때문이다. 뜬 뒤에 고칠 수 있다(사용자 요청 2026-08-21).
+   035 로 뼈대가 두 종류가 됐다(사용자 결정 2026-08-21):
+     shipping  배송 · 반품/교환            계정 공통에 가깝다. 한 벌이면 된다
+     notice    상품정보제공고시 · 상품주요정보  상품군마다 다르다. 여러 벌이 생긴다
 
-   실측(2026-08-21)으로 확인한 뼈대의 구성:
-     상품 단위  marketplaceShippingAndReturnInfo (18키) · bundleInfo ·
-                registrationType · vendorUserId · requiredDocuments
-     옵션 단위  taxType · adultOnly · pccNeeded · unitCount · offerCondition ·
-                parallelImported · overseasPurchased · maximumBuy* ·
-                outboundShippingTime(Day) · sameDayShipping · certifications ·
-                notices(고시정보) · attributes(필수속성)
+   나눈 이유: 하나로 묶으면 고시정보만 다른 상품군을 추가할 때 배송·반품지까지
+   복사된다. 그러면 반품지가 바뀔 때 여러 벌을 다 고쳐야 한다.
 
-   **notices/attributes 는 값이 상품마다 다르다** — 품명은 상품명이고 색상은 옵션명이다.
-   그래서 뼈대에는 **틀**로 들어가고, 등록할 때 준비 건의 값으로 덮어쓴다.
-   여기서는 그 틀을 보고 고칠 수 있게만 한다.
+   **WING 화면(2026-08-21 캡처)의 칸을 그대로 연다.** 화면 ↔ API 대응:
+     제조사            → 상품 단위 manufacture (준비 건에 있다. 여기 아님)
+     상품 구성          → bundleInfo.bundleType        (실측 SINGLE)
+     인증정보           → certifications[]             (실측 PRESENTED_IN_DETAIL_PAGE)
+     병행수입           → parallelImported             (실측 NOT_PARALLEL_IMPORTED)
+     구매 연령          → adultOnly                    (실측 EVERYONE)
+     인당 최대구매수량   → maximumBuyForPerson(+Period)  (실측 0 / 1)
+     판매기간           → saleStartedAt · saleEndedAt
+     부가세            → taxType                      (실측 TAX)
+     고시정보 표        → notices[{noticeCategoryName, noticeCategoryDetailName, content}]
+     "상품 상세페이지 참조" 체크 → content 를 "상품 상세페이지 참조" 로 넣는다
+        ↑ 추측이 아니다. 실측 상품의 '인증/허가 사항' 값이 정확히 그 문자열이었다.
 
-   enum 코드값(CJGLS · SEQUENCIAL · TAX …)은 **우리가 목록을 모른다.** 그래서 select 로
-   좁히지 않고 텍스트로 둔다 — 모르는 목록을 만들어 넣으면 쓸 수 있는 값을 막게 된다(R-14).
+   **반대쪽 코드값(면세·성인전용·병행수입·혼합구성)은 실물을 못 봤다.** 우리 상품이
+   전부 한쪽이라 확인할 방법이 없었다. 그래서 추정값을 넣되 **고칠 수 있는 칸**으로
+   두고 "미검증"이라고 적는다 — 목록을 지어내 select 로 막으면 못 쓰는 값이 생긴다(R-14).
 
    파일 순서 주의(D-17): 86 뒤, 95-boot 앞.
    ============================================================ */
 
-const LT = { list: [], cur: null, sources: [] };
+const LT = { list: [], kind: 'shipping', cur: {}, sources: [], noticeCats: {} };
 
-/* 뼈대로 가져올 키 목록. **여기 없는 키는 템플릿에 안 담긴다** —
-   상품마다 달라야 하는 값(이름·가격·이미지·바코드)이 딸려 들어오면 사고가 난다. */
-const LT_PRODUCT_KEYS = ['marketplaceShippingAndReturnInfo', 'bundleInfo', 'registrationType',
-                         'vendorUserId', 'requiredDocuments', 'productGroup', 'contributorType'];
-const LT_ITEM_KEYS = ['taxType', 'adultOnly', 'pccNeeded', 'unitCount', 'offerCondition',
-                      'offerDescription', 'parallelImported', 'overseasPurchased',
-                      'maximumBuyCount', 'maximumBuyForPerson', 'maximumBuyForPersonPeriod',
-                      'outboundShippingTime', 'outboundShippingTimeDay', 'sameDayShipping',
-                      'certifications', 'notices', 'attributes'];
+const LT_KIND_LABEL = { shipping: '배송 · 반품/교환', notice: '고시정보 · 상품주요정보' };
 
-/* 폼으로 열어줄 것들. 나머지는 아래 [원문 편집]에서 고친다. */
+/* 어느 키가 어느 그룹으로 가는가. **목록에 없는 키는 안 담는다** —
+   상품마다 달라야 하는 값(이름·가격·이미지·바코드)이 딸려 오면 그게 사고다. */
+const LT_KEYS = {
+  shipping: {
+    product: ['marketplaceShippingAndReturnInfo', 'registrationType', 'vendorUserId', 'requiredDocuments'],
+    item: ['outboundShippingTime', 'outboundShippingTimeDay', 'sameDayShipping']
+  },
+  notice: {
+    product: ['bundleInfo', 'productGroup', 'contributorType', 'saleStartedAt', 'saleEndedAt'],
+    item: ['taxType', 'adultOnly', 'pccNeeded', 'unitCount', 'offerCondition', 'offerDescription',
+           'parallelImported', 'overseasPurchased', 'maximumBuyCount', 'maximumBuyForPerson',
+           'maximumBuyForPersonPeriod', 'certifications', 'notices', 'attributes']
+  }
+};
+
+/* 배송·반품 폼. 실측 18키 중 화면에서 고칠 만한 것들 — 나머지는 원문 편집에서. */
 const LT_SHIP_FIELDS = [
   ['deliveryCompanyCode', '택배사 코드', 'text'],
   ['deliveryMethod', '배송 방법', 'text'],
@@ -51,33 +64,27 @@ const LT_SHIP_FIELDS = [
   ['returnZipCode', '반품지 우편번호', 'text'],
   ['returnAddress', '반품지 주소', 'text'],
   ['returnAddressDetail', '반품지 상세주소', 'text'],
-  ['companyContactNumber', '연락처', 'text']
+  ['companyContactNumber', '연락처', 'text'],
+  ['afterServiceInformation', 'A/S 안내', 'text'],
+  ['afterServiceContactNumber', 'A/S 전화번호', 'text']
 ];
-const LT_ITEM_FIELDS = [
-  ['taxType', '과세 유형', 'text'],
-  ['adultOnly', '성인 전용', 'text'],
-  ['offerCondition', '상품 상태', 'text'],
-  ['unitCount', '수량(단위)', 'number'],
-  ['outboundShippingTimeDay', '출고 소요일', 'number'],
-  ['maximumBuyCount', '최대 구매수량', 'number'],
-  ['maximumBuyForPerson', '1인 최대 구매', 'number'],
-  ['maximumBuyForPersonPeriod', '1인 제한 기간(일)', 'number'],
-  ['parallelImported', '병행수입', 'text'],
-  ['overseasPurchased', '해외구매대행', 'text']
-];
+
+const LT_DETAIL_REF = '상품 상세페이지 참조';
 
 async function loadListingTemplate() {
   try {
-    LT.list = await api('listing_templates?select=*&order=is_default.desc,updated_at.desc') || [];
+    LT.list = await api('listing_templates?select=*&order=kind.asc,is_default.desc,updated_at.desc') || [];
   } catch (e) {
     const miss = /PGRST205|does not exist|Not Found|404/i.test(e.message);
+    const kindMiss = /kind/.test(e.message);
     $('#ltList').innerHTML = `<p class="muted">${miss
       ? '아직 <b>db/migrations/031</b> 을 실행하지 않았습니다.'
-      : '불러오지 못했습니다: ' + esc(e.message)}</p>`;
+      : (kindMiss ? '아직 <b>db/migrations/035_template_kinds.sql</b> 을 실행하지 않았습니다.'
+                  : '불러오지 못했습니다: ' + esc(e.message))}</p>`;
     return;
   }
 
-  /* 뼈대를 뜰 수 있는 상품 = 원문을 받아둔 상품. 안 받아둔 건 고를 수 없다(R-15). */
+  /* 뼈대를 뜰 수 있는 상품 = 원문을 받아둔 상품 */
   try {
     const regs = await api('rocket_growth_product_registry?select=seller_product_id,product_json'
       + '&product_json=not.is.null') || [];
@@ -94,29 +101,60 @@ async function loadListingTemplate() {
         esc((r.product_json.sellerProductName || r.seller_product_id).slice(0, 40))}</option>`).join('')
     : '<option value="">원문을 받아둔 상품이 없습니다</option>';
 
-  ltRenderList();
-  /* 고른 게 있으면 그걸, 없으면 첫 번째를 연다. **다시 불러온 뒤에도 열려 있어야 한다** —
-     저장하고 나면 편집칸이 사라지는 것처럼 보인다. */
-  const keep = LT.list.some((t) => t.id === LT.cur) ? LT.cur : (LT.list[0] && LT.list[0].id);
-  if (keep) ltOpen(keep);
-  else {
-    LT.cur = null;
-    $('#ltEdit').innerHTML =
-      '<p class="muted">아직 뼈대가 없습니다. 위에서 기존 상품을 고르고 [이 상품에서 뼈대 뜨기]를 누르세요.</p>';
-  }
+  /* 고시 종류 목록은 카테고리마다 다르다. 받아둔 카테고리 메타에서 모아 쓴다. */
+  try {
+    const metas = await api('coupang_category_meta?select=display_category_code,raw') || [];
+    LT.noticeCats = {};
+    metas.forEach((m) => {
+      ((m.raw || {}).noticeCategories || []).forEach((nc) => {
+        LT.noticeCats[nc.noticeCategoryName] =
+          (nc.noticeCategoryDetailNames || []).map((d) => d.noticeCategoryDetailName);
+      });
+    });
+  } catch (e) { LT.noticeCats = {}; }
 
-  /* 지금 작업 중인 준비 건에 어떤 뼈대가 붙어 있는지 */
+  ltRenderTabs();
+  ltRenderList();
+  ltOpenCurrent();
   await ltRenderTarget();
 }
 
-function ltRenderList() {
-  $('#ltList').innerHTML = LT.list.length
-    ? LT.list.map((t) => `<button class="btn btn-sm lt-open ${LT.cur === t.id ? 'btn-primary' : ''}"
-        data-id="${esc(t.id)}">${esc(t.name)}${t.is_default ? ' ★' : ''}</button>`).join(' ')
-    : '<span class="muted sm">뼈대 없음</span>';
+function ltRenderTabs() {
+  $$('#ltTabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.kind === LT.kind));
 }
 
-/* ---------- 뼈대 뜨기 ---------- */
+function ltOfKind() { return LT.list.filter((t) => t.kind === LT.kind); }
+
+function ltRenderList() {
+  const rows = ltOfKind();
+  $('#ltList').innerHTML = rows.length
+    ? rows.map((t) => `<button class="btn btn-sm lt-open ${LT.cur[LT.kind] === t.id ? 'btn-primary' : ''}"
+        data-id="${esc(t.id)}">${esc(t.name)}${t.is_default ? ' ★' : ''}</button>`).join(' ')
+    : '<span class="muted sm">이 그룹의 뼈대가 없습니다</span>';
+}
+
+function ltOpenCurrent() {
+  const rows = ltOfKind();
+  const keep = rows.some((t) => t.id === LT.cur[LT.kind]) ? LT.cur[LT.kind] : (rows[0] && rows[0].id);
+  if (keep) { LT.cur[LT.kind] = keep; ltOpen(keep); }
+  else {
+    LT.cur[LT.kind] = null;
+    $('#ltEdit').innerHTML = '<p class="muted">이 그룹의 뼈대가 없습니다. '
+      + '위에서 기존 상품을 고르고 [이 상품에서 뼈대 뜨기]를 누르면 <b>두 그룹이 한 번에</b> 만들어집니다.</p>';
+  }
+}
+
+$('#ltTabs').addEventListener('click', (ev) => {
+  const t = ev.target.closest('.tab');
+  if (!t) return;
+  LT.kind = t.dataset.kind;
+  ltRenderTabs();
+  ltRenderList();
+  ltOpenCurrent();
+  ltRenderTarget();
+});
+
+/* ---------- 뼈대 뜨기 — 한 번에 두 그룹 ---------- */
 $('#ltMake').onclick = async () => {
   const spid = $('#ltSource').value;
   if (!spid) return;
@@ -124,24 +162,26 @@ $('#ltMake').onclick = async () => {
   if (!src) return;
   const pj = src.product_json;
   const it = (pj.items || [])[0] || {};
+  const base = ($('#ltName').value || '').trim() || (pj.sellerProductName || '').slice(0, 16);
 
-  const payload = { product: {}, item: {} };
-  LT_PRODUCT_KEYS.forEach((k) => { if (pj[k] !== undefined) payload.product[k] = pj[k]; });
-  LT_ITEM_KEYS.forEach((k) => { if (it[k] !== undefined) payload.item[k] = it[k]; });
-
-  const name = ($('#ltName').value || '').trim()
-    || `${(pj.sellerProductName || '').slice(0, 16)} 뼈대`;
   const btn = $('#ltMake');
   btn.disabled = true;
   try {
-    const [made] = await api('listing_templates', {
-      method: 'POST', headers: { prefer: 'return=representation' },
-      body: { name, source_seller_product_id: String(spid), payload,
-              is_default: LT.list.length === 0, created_by: AUTH.userId || null }
-    });
+    for (const kind of ['shipping', 'notice']) {
+      const payload = { product: {}, item: {} };
+      LT_KEYS[kind].product.forEach((k) => { if (pj[k] !== undefined) payload.product[k] = pj[k]; });
+      LT_KEYS[kind].item.forEach((k) => { if (it[k] !== undefined) payload.item[k] = it[k]; });
+      const already = LT.list.filter((t) => t.kind === kind).length;
+      const [made] = await api('listing_templates', {
+        method: 'POST', headers: { prefer: 'return=representation' },
+        body: { name: `${base} · ${kind === 'shipping' ? '배송' : '고시'}`,
+                kind, source_seller_product_id: String(spid), payload,
+                is_default: already === 0, created_by: AUTH.userId || null }
+      });
+      LT.cur[kind] = made.id;
+    }
     $('#ltName').value = '';
-    toast('뼈대를 떴습니다 — 값을 확인하고 고치세요');
-    LT.cur = made.id;
+    toast('두 그룹을 떴습니다 — 값을 확인하고 고치세요');
     await loadListingTemplate();
   } catch (e) {
     toast('만들지 못했습니다: ' + e.message);
@@ -150,86 +190,296 @@ $('#ltMake').onclick = async () => {
 
 $('#ltList').addEventListener('click', (ev) => {
   const b = ev.target.closest('.lt-open');
-  if (b) ltOpen(b.dataset.id);
+  if (!b) return;
+  LT.cur[LT.kind] = b.dataset.id;
+  ltRenderList();
+  ltOpen(b.dataset.id);
+  ltRenderTarget();
 });
 
+/* ---------- 편집 ---------- */
 function ltOpen(id) {
-  LT.cur = id;
-  ltRenderList();
   const t = LT.list.find((x) => x.id === id);
   if (!t) return;
-  const ship = (t.payload.product || {}).marketplaceShippingAndReturnInfo || {};
-  const item = t.payload.item || {};
-  const notices = item.notices || [];
-  const certs = item.certifications || [];
-  const attrs = item.attributes || [];
+  const head = `<div class="lp-card">
+    <div class="lp-card-head">
+      <input id="ltRename" type="text" value="${esc(t.name)}" style="flex:1;font-weight:600" />
+      <label class="chk"><input type="checkbox" id="ltDefault" ${t.is_default ? 'checked' : ''} />
+        <span>기본</span></label>
+      <button id="ltSave" class="btn btn-sm btn-primary">저장</button>
+      <button id="ltDelete" class="btn btn-sm btn-ghost">삭제</button>
+    </div>
+    <p class="muted sm">${esc(LT_KIND_LABEL[t.kind])} · 출처 상품 ${esc(t.source_seller_product_id || '—')}
+      · ${esc(String(t.created_at).slice(0, 10))}</p>`;
 
-  const field = (obj, [k, label, type]) => `<label class="field"><span>${esc(label)}
-      <span class="muted xs">${esc(k)}</span></span>
-      <input class="lt-f" data-scope="${obj}" data-key="${esc(k)}" type="${type}"
-             value="${obj === 'ship' ? esc(ship[k] == null ? '' : ship[k]) : esc(item[k] == null ? '' : item[k])}" /></label>`;
+  const body = t.kind === 'shipping' ? ltShippingForm(t) : ltNoticeForm(t);
 
-  $('#ltEdit').innerHTML = `
-    <div class="lp-card">
-      <div class="lp-card-head">
-        <input id="ltRename" class="lt-name" type="text" value="${esc(t.name)}" style="flex:1;font-weight:600" />
-        <label class="chk"><input type="checkbox" id="ltDefault" ${t.is_default ? 'checked' : ''} />
-          <span>기본 뼈대</span></label>
-        <button id="ltSave" class="btn btn-sm btn-primary">저장</button>
-        <button id="ltDelete" class="btn btn-sm btn-ghost">삭제</button>
-      </div>
-      <p class="muted sm">출처: 상품 ${esc(t.source_seller_product_id || '—')} ·
-        만든 날 ${esc(String(t.created_at).slice(0, 10))}</p>
+  const tail = `<details style="margin-top:12px">
+      <summary class="muted sm">원문 편집 (고급) — 폼에 없는 필드까지 전부</summary>
+      <textarea id="ltRaw" rows="14" style="width:100%;font-family:monospace;font-size:12px">${
+        esc(JSON.stringify(t.payload, null, 1))}</textarea>
+      <p class="muted sm">여기서 고치면 <b>원문이 폼보다 우선</b>합니다. JSON이 깨져 있으면 저장하지 않습니다.</p>
+    </details>
+    <div id="ltMsg" class="msg hidden"></div></div>`;
 
-      <h4 class="sku-sec">배송 · 반품지</h4>
-      <div class="two">${LT_SHIP_FIELDS.map((f) => field('ship', f)).join('')}</div>
-
-      <h4 class="sku-sec">옵션 공통</h4>
-      <div class="two">${LT_ITEM_FIELDS.map((f) => field('item', f)).join('')}</div>
-      <p class="muted sm">코드값(<code>CJGLS</code> · <code>SEQUENCIAL</code> · <code>TAX</code> …)은
-        쿠팡이 정한 것입니다. <b>우리가 전체 목록을 모르니 모르면 그대로 두세요.</b></p>
-
-      <h4 class="sku-sec">고시정보 <span class="muted sm">${esc((notices[0] || {}).noticeCategoryName || '')}</span></h4>
-      ${notices.length ? notices.map((n, i) => `<label class="field">
-          <span>${esc(n.noticeCategoryDetailName)}</span>
-          <input class="lt-notice" data-i="${i}" type="text" value="${esc(n.content || '')}" /></label>`).join('')
-        : '<p class="muted sm">고시정보가 비어 있습니다.</p>'}
-      <p class="muted sm">품명·제조국·제조자는 <b>등록할 때 준비 건의 값으로 덮어씁니다</b> —
-        여기 값은 다른 항목(소비자상담 전화번호 등)의 기본값으로만 씁니다.</p>
-
-      <h4 class="sku-sec">인증</h4>
-      ${certs.length ? certs.map((c, i) => `<label class="field">
-          <span>인증 종류 <span class="muted xs">certificationType</span></span>
-          <input class="lt-cert" data-i="${i}" type="text" value="${esc(c.certificationType || '')}" /></label>`).join('')
-        : '<p class="muted sm">인증 정보가 없습니다.</p>'}
-
-      <h4 class="sku-sec">필수속성 <span class="muted sm">${attrs.length}개</span></h4>
-      <p class="muted sm"><b>필수속성은 카테고리마다 다릅니다.</b> 이 뼈대는 원본 상품의
-        카테고리 기준이라, 카테고리가 다르면 안 맞습니다 — 등록할 때 카테고리 메타로 대조합니다.</p>
-      <div class="kv-grid">${attrs.slice(0, 12).map((a) => `<span class="kv">
-        <span class="kv-k">${esc(a.attributeTypeName)}</span>
-        <span class="kv-v">${esc(a.attributeValueName || '—')}</span></span>`).join('')}</div>
-
-      <details style="margin-top:12px">
-        <summary class="muted sm">원문 편집 (고급) — 위 폼에 없는 필드까지 전부</summary>
-        <textarea id="ltRaw" rows="14" style="width:100%;font-family:monospace;font-size:12px">${
-          esc(JSON.stringify(t.payload, null, 1))}</textarea>
-        <p class="muted sm">여기서 고치고 [저장]을 누르면 <b>원문이 폼보다 우선</b>합니다.
-          JSON이 깨져 있으면 저장하지 않습니다.</p>
-      </details>
-      <div id="ltMsg" class="msg hidden"></div>
-    </div>`;
-
+  $('#ltEdit').innerHTML = head + body + tail;
   $('#ltSave').onclick = () => ltSave(t);
   $('#ltDelete').onclick = () => ltDelete(t);
+  if (t.kind === 'notice') ltBindNotice(t);
 }
 
+function ltShippingForm(t) {
+  const ship = (t.payload.product || {}).marketplaceShippingAndReturnInfo || {};
+  const item = t.payload.item || {};
+  return `<h4 class="sku-sec">배송 · 반품/교환</h4>
+    <div class="two">${LT_SHIP_FIELDS.map(([k, label, type]) => `<label class="field">
+      <span>${esc(label)} <span class="muted xs">${esc(k)}</span></span>
+      <input class="lt-f" data-scope="ship" data-key="${esc(k)}" type="${type}"
+             value="${esc(ship[k] == null ? '' : ship[k])}" /></label>`).join('')}</div>
+    <h4 class="sku-sec">출고</h4>
+    <div class="two">
+      <label class="field"><span>출고 소요일 <span class="muted xs">outboundShippingTimeDay</span></span>
+        <input class="lt-f" data-scope="item" data-key="outboundShippingTimeDay" type="number"
+               value="${esc(item.outboundShippingTimeDay == null ? '' : item.outboundShippingTimeDay)}" /></label>
+      <label class="field"><span>출고 소요시간 <span class="muted xs">outboundShippingTime</span></span>
+        <input class="lt-f" data-scope="item" data-key="outboundShippingTime" type="number"
+               value="${esc(item.outboundShippingTime == null ? '' : item.outboundShippingTime)}" /></label>
+    </div>
+    <p class="muted sm">코드값(<code>CJGLS</code>·<code>SEQUENCIAL</code>·<code>NOT_FREE</code>…)은
+      쿠팡이 정한 것입니다. <b>전체 목록을 모르니 모르면 그대로 두세요.</b></p>`;
+}
+
+/* WING '상품 주요 정보' + '상품정보제공고시' 화면 그대로 */
+function ltNoticeForm(t) {
+  const item = t.payload.item || {};
+  const prod = t.payload.product || {};
+  const bundle = (prod.bundleInfo || {}).bundleType || 'SINGLE';
+  const certs = item.certifications || [];
+  const notices = item.notices || [];
+  const noticeCat = (notices[0] || {}).noticeCategoryName || '';
+  const perPerson = Number(item.maximumBuyForPerson || 0) > 0;
+  const salePeriod = !!(prod.saleStartedAt || prod.saleEndedAt);
+
+  /* 인증 방식은 certifications 의 내용으로 되읽는다.
+     NOT_REQUIRED / PRESENTED_IN_DETAIL_PAGE 는 카테고리 메타의 목록에 있는 실제 값이다. */
+  const certMode = !certs.length ? 'NOT_REQUIRED'
+    : (certs.length === 1 && certs[0].certificationType === 'PRESENTED_IN_DETAIL_PAGE') ? 'PRESENTED_IN_DETAIL_PAGE'
+    : (certs.length === 1 && certs[0].certificationType === 'NOT_REQUIRED') ? 'NOT_REQUIRED'
+    : 'TARGET';
+
+  const certOptions = ltCertOptions();
+
+  return `<h4 class="sku-sec">상품 주요 정보</h4>
+
+    <label class="field"><span>상품 구성 <span class="muted xs">bundleInfo.bundleType</span></span>
+      <div class="range">
+        <label class="chk"><input type="radio" name="lt-bundle" class="lt-bundle" value="SINGLE"
+          ${bundle === 'SINGLE' ? 'checked' : ''} /><span>동일한 상품으로 구성됨</span></label>
+        <label class="chk"><input type="radio" name="lt-bundle" class="lt-bundle" value="OTHER"
+          ${bundle !== 'SINGLE' ? 'checked' : ''} /><span>다양한 상품이 혼합되어 구성됨</span></label>
+        <input id="ltBundleCode" type="text" class="${bundle === 'SINGLE' ? 'hidden' : ''}"
+               value="${esc(bundle === 'SINGLE' ? '' : bundle)}" placeholder="혼합 구성의 코드값" style="width:180px" />
+      </div></label>
+    <p class="muted sm">혼합 구성의 코드값은 <b>실물로 확인 못 했습니다</b> — 우리 상품이 전부
+      <code>SINGLE</code>입니다. 쓰시려면 코드를 직접 넣어야 합니다.</p>
+
+    <label class="field"><span>인증정보 <span class="muted xs">certifications</span></span>
+      <div>
+        <label class="chk"><input type="radio" name="lt-cert" class="lt-certmode" value="TARGET"
+          ${certMode === 'TARGET' ? 'checked' : ''} /><span>인증·신고 대상</span></label>
+        <label class="chk"><input type="radio" name="lt-cert" class="lt-certmode" value="PRESENTED_IN_DETAIL_PAGE"
+          ${certMode === 'PRESENTED_IN_DETAIL_PAGE' ? 'checked' : ''} /><span>상세페이지 별도표기</span></label>
+        <label class="chk"><input type="radio" name="lt-cert" class="lt-certmode" value="NOT_REQUIRED"
+          ${certMode === 'NOT_REQUIRED' ? 'checked' : ''} /><span>인증·신고 대상 아님</span></label>
+      </div></label>
+    <div id="ltCertRows" class="${certMode === 'TARGET' ? '' : 'hidden'}">
+      ${(certMode === 'TARGET' ? certs : []).map((c, i) => ltCertRow(c, i, certOptions)).join('')
+        || ltCertRow({}, 0, certOptions)}
+      <button id="ltCertAdd" class="btn btn-sm">+ 인증 추가</button>
+      <p class="muted sm">종류 목록은 <b>받아둔 카테고리 메타에서</b> 가져옵니다
+        (${certOptions.length}개). 카테고리를 정하고 필수속성을 받아두면 더 정확해집니다.</p>
+    </div>
+
+    ${ltRadioPair('병행수입', 'parallelImported', item.parallelImported || 'NOT_PARALLEL_IMPORTED',
+      'NOT_PARALLEL_IMPORTED', '병행수입 아님', 'PARALLEL_IMPORTED', '병행수입', true)}
+    ${ltRadioPair('구매 연령', 'adultOnly', item.adultOnly || 'EVERYONE',
+      'EVERYONE', '전체 연령', 'ADULT_ONLY', '성인 전용(19세 이상)', false)}
+    ${ltRadioPair('부가세', 'taxType', item.taxType || 'TAX',
+      'TAX', '과세', 'FREE', '면세', false)}
+
+    <label class="field"><span>인당 최대구매수량</span>
+      <div class="range">
+        <label class="chk"><input type="radio" name="lt-pp" class="lt-pp" value="off"
+          ${perPerson ? '' : 'checked'} /><span>설정안함</span></label>
+        <label class="chk"><input type="radio" name="lt-pp" class="lt-pp" value="on"
+          ${perPerson ? 'checked' : ''} /><span>설정함</span></label>
+        <input id="ltPpCount" type="number" min="0" placeholder="수량" style="width:100px"
+               class="${perPerson ? '' : 'hidden'}" value="${esc(item.maximumBuyForPerson || '')}" />
+        <input id="ltPpDays" type="number" min="1" placeholder="기간(일)" style="width:110px"
+               class="${perPerson ? '' : 'hidden'}" value="${esc(item.maximumBuyForPersonPeriod || 1)}" />
+      </div></label>
+
+    <label class="field"><span>판매기간 <span class="muted xs">saleStartedAt · saleEndedAt</span></span>
+      <div class="range">
+        <label class="chk"><input type="radio" name="lt-sp" class="lt-sp" value="off"
+          ${salePeriod ? '' : 'checked'} /><span>설정안함</span></label>
+        <label class="chk"><input type="radio" name="lt-sp" class="lt-sp" value="on"
+          ${salePeriod ? 'checked' : ''} /><span>설정함</span></label>
+        <input id="ltSaleFrom" type="text" placeholder="시작 (원문 형식 그대로)" style="width:200px"
+               class="${salePeriod ? '' : 'hidden'}" value="${esc(prod.saleStartedAt || '')}" />
+        <input id="ltSaleTo" type="text" placeholder="종료" style="width:200px"
+               class="${salePeriod ? '' : 'hidden'}" value="${esc(prod.saleEndedAt || '')}" />
+      </div></label>
+
+    <h4 class="sku-sec">상품정보제공고시</h4>
+    <div class="range" style="margin-bottom:8px">
+      <select id="ltNoticeCat" style="max-width:280px">
+        ${ltNoticeCatOptions(noticeCat)}
+      </select>
+      <label class="chk"><input type="checkbox" id="ltNoticeAllRef" />
+        <span>전체 상품 상세페이지 참조</span></label>
+    </div>
+    <div class="table-wrap"><table class="grid"><thead><tr>
+      <th style="width:200px">고시정보 명</th><th>내용</th><th style="width:150px">상세페이지 참조</th>
+    </tr></thead><tbody id="ltNoticeRows">${ltNoticeRows(notices)}</tbody></table></div>
+    <p class="muted sm"><b>품명 및 모델명은 상품명이 자동으로 들어갑니다</b> —
+      여기 값은 쓰지 않습니다(사용자 결정 2026-08-21).
+      "상세페이지 참조"를 켜면 내용이 <code>${esc(LT_DETAIL_REF)}</code> 로 들어갑니다.</p>
+
+    <h4 class="sku-sec">필수속성 <span class="muted sm">${(item.attributes || []).length}개</span></h4>
+    <p class="muted sm"><b>카테고리마다 다릅니다.</b> 이 뼈대는 원본 상품의 카테고리 기준이라
+      카테고리가 다르면 안 맞습니다 — 등록할 때 카테고리 메타로 대조합니다.</p>
+    <div class="kv-grid">${(item.attributes || []).slice(0, 12).map((a) => `<span class="kv">
+      <span class="kv-k">${esc(a.attributeTypeName)}</span>
+      <span class="kv-v">${esc(a.attributeValueName || '—')}</span></span>`).join('')}</div>`;
+}
+
+/* 실측된 쪽을 왼쪽에 두고, 반대쪽은 **미검증**이라고 적는다 */
+function ltRadioPair(label, key, cur, vA, lA, vB, lB, bVerified) {
+  return `<label class="field"><span>${esc(label)} <span class="muted xs">${esc(key)}</span></span>
+    <div class="range">
+      <label class="chk"><input type="radio" name="lt-${key}" class="lt-enum" data-key="${key}"
+        value="${vA}" ${cur === vA ? 'checked' : ''} /><span>${esc(lA)}</span></label>
+      <label class="chk"><input type="radio" name="lt-${key}" class="lt-enum" data-key="${key}"
+        value="${vB}" ${cur === vB ? 'checked' : ''} /><span>${esc(lB)}${
+          bVerified ? '' : ' <span class="muted">(코드 미검증)</span>'}</span></label>
+      <input class="lt-enum-code" data-key="${key}" type="text" style="width:190px"
+             placeholder="코드를 직접 넣으려면" value="${
+               (cur !== vA && cur !== vB) ? esc(cur) : ''}" />
+    </div></label>`;
+}
+
+function ltCertOptions() {
+  const set = new Set();
+  Object.keys(LT.noticeCats); // (고시 목록과 별개 — 인증은 아래에서 모은다)
+  return LT._certTypes || [];
+}
+
+function ltNoticeCatOptions(cur) {
+  const names = Object.keys(LT.noticeCats);
+  if (cur && names.indexOf(cur) === -1) names.unshift(cur);
+  return names.length
+    ? names.map((n) => `<option ${n === cur ? 'selected' : ''}>${esc(n)}</option>`).join('')
+    : `<option selected>${esc(cur || '(카테고리 메타를 받아야 목록이 나옵니다)')}</option>`;
+}
+
+function ltNoticeRows(notices) {
+  if (!notices.length) return '<tr><td colspan="3" class="muted">고시정보가 없습니다 — 위에서 종류를 고르세요.</td></tr>';
+  return notices.map((n, i) => {
+    const auto = /품명/.test(n.noticeCategoryDetailName || '');
+    const ref = (n.content || '') === LT_DETAIL_REF;
+    return `<tr data-lt-n="${i}">
+      <td>${esc(n.noticeCategoryDetailName)}</td>
+      <td>${auto
+        ? '<span class="muted">상품명이 자동으로 들어갑니다</span>'
+        : `<textarea class="lt-nc" rows="2" style="width:100%">${esc(n.content || '')}</textarea>`}</td>
+      <td>${auto ? '' : `<label class="chk"><input type="checkbox" class="lt-nref" ${ref ? 'checked' : ''} />
+        <span>상세페이지 참조</span></label>`}</td>
+    </tr>`;
+  }).join('');
+}
+
+function ltCertRow(c, i, options) {
+  return `<div class="range lt-cert-row" style="margin-bottom:6px">
+    <input class="lt-ct" type="text" list="ltCertList" style="flex:1"
+           placeholder="인증 종류 코드" value="${esc(c.certificationType || '')}" />
+    <input class="lt-cc" type="text" placeholder="인증번호" style="width:200px"
+           value="${esc(c.certificationCode || '')}" />
+    <button class="btn btn-sm btn-ghost lt-cert-del">✕</button>
+  </div>`;
+}
+
+/* 고시 종류를 바꾸면 항목이 통째로 달라진다 — 그때 표를 다시 그린다 */
+function ltBindNotice(t) {
+  /* 인증 종류 목록: 받아둔 카테고리 메타의 certifications 를 모은다 */
+  api('coupang_category_meta?select=raw').then((metas) => {
+    const set = new Set();
+    (metas || []).forEach((m) => ((m.raw || {}).certifications || []).forEach((c) => {
+      set.add(typeof c === 'string' ? c : (c.certificationType || c.name));
+    }));
+    LT._certTypes = [...set].filter(Boolean);
+    const dl = $('#ltCertList');
+    if (dl) dl.innerHTML = LT._certTypes.map((c) => `<option value="${esc(c)}"></option>`).join('');
+  }).catch(() => {});
+
+  const sel = $('#ltNoticeCat');
+  if (sel) sel.onchange = () => {
+    const names = LT.noticeCats[sel.value] || [];
+    if (!names.length) { toast('그 고시 종류의 항목 목록이 없습니다 — 카테고리 메타를 먼저 받으세요'); return; }
+    const notices = names.map((d) => ({ noticeCategoryName: sel.value, noticeCategoryDetailName: d, content: '' }));
+    $('#ltNoticeRows').innerHTML = ltNoticeRows(notices);
+    LT._noticeDraft = notices;
+  };
+
+  const all = $('#ltNoticeAllRef');
+  if (all) all.onchange = () => {
+    $$('#ltNoticeRows .lt-nref').forEach((cb) => { cb.checked = all.checked; });
+    $$('#ltNoticeRows tr[data-lt-n]').forEach((tr) => {
+      const ta = tr.querySelector('.lt-nc');
+      if (ta && all.checked) ta.value = LT_DETAIL_REF;
+    });
+  };
+
+  $('#ltNoticeRows').addEventListener('change', (ev) => {
+    if (!ev.target.matches('.lt-nref')) return;
+    const ta = ev.target.closest('tr').querySelector('.lt-nc');
+    if (ta && ev.target.checked) ta.value = LT_DETAIL_REF;
+  });
+
+  /* 라디오에 딸린 입력칸 켜고 끄기 */
+  $('#ltEdit').addEventListener('change', (ev) => {
+    if (ev.target.matches('.lt-bundle')) {
+      $('#ltBundleCode').classList.toggle('hidden', ev.target.value === 'SINGLE');
+    }
+    if (ev.target.matches('.lt-certmode')) {
+      $('#ltCertRows').classList.toggle('hidden', ev.target.value !== 'TARGET');
+    }
+    if (ev.target.matches('.lt-pp')) {
+      const on = ev.target.value === 'on';
+      $('#ltPpCount').classList.toggle('hidden', !on);
+      $('#ltPpDays').classList.toggle('hidden', !on);
+    }
+    if (ev.target.matches('.lt-sp')) {
+      const on = ev.target.value === 'on';
+      $('#ltSaleFrom').classList.toggle('hidden', !on);
+      $('#ltSaleTo').classList.toggle('hidden', !on);
+    }
+  });
+
+  $('#ltEdit').addEventListener('click', (ev) => {
+    if (ev.target.id === 'ltCertAdd') {
+      $('#ltCertAdd').insertAdjacentHTML('beforebegin', ltCertRow({}, 0, LT._certTypes || []));
+    }
+    if (ev.target.matches('.lt-cert-del')) ev.target.closest('.lt-cert-row').remove();
+  });
+}
+
+/* ---------- 저장 ---------- */
 async function ltSave(t) {
   const msg = $('#ltMsg');
   msg.classList.remove('hidden');
   msg.textContent = '저장 중…';
   try {
-    /* 원문을 건드렸으면 그걸 쓴다 — 폼은 일부만 열어놨으므로 원문이 더 넓다. */
     let payload;
     const raw = ($('#ltRaw').value || '').trim();
     const original = JSON.stringify(t.payload, null, 1);
@@ -240,33 +490,78 @@ async function ltSave(t) {
       payload = JSON.parse(JSON.stringify(t.payload));
       payload.product = payload.product || {};
       payload.item = payload.item || {};
-      payload.product.marketplaceShippingAndReturnInfo =
-        payload.product.marketplaceShippingAndReturnInfo || {};
 
-      $$('#ltEdit .lt-f').forEach((el) => {
-        const target = el.dataset.scope === 'ship'
-          ? payload.product.marketplaceShippingAndReturnInfo : payload.item;
-        const v = el.value;
-        /* 빈칸은 null 로 둔다 — 빈 문자열과 null 을 섞으면 쿠팡이 다르게 받는다 */
-        target[el.dataset.key] = (v === '') ? null : (el.type === 'number' ? Number(v) : v);
-      });
-      $$('#ltEdit .lt-notice').forEach((el) => {
-        const i = Number(el.dataset.i);
-        if (payload.item.notices && payload.item.notices[i]) payload.item.notices[i].content = el.value;
-      });
-      $$('#ltEdit .lt-cert').forEach((el) => {
-        const i = Number(el.dataset.i);
-        if (payload.item.certifications && payload.item.certifications[i]) {
-          payload.item.certifications[i].certificationType = el.value;
+      if (t.kind === 'shipping') {
+        payload.product.marketplaceShippingAndReturnInfo =
+          payload.product.marketplaceShippingAndReturnInfo || {};
+        $$('#ltEdit .lt-f').forEach((el) => {
+          const target = el.dataset.scope === 'ship'
+            ? payload.product.marketplaceShippingAndReturnInfo : payload.item;
+          const v = el.value;
+          target[el.dataset.key] = (v === '') ? null : (el.type === 'number' ? Number(v) : v);
+        });
+      } else {
+        /* 상품 구성 */
+        const bundleSel = $$('#ltEdit .lt-bundle').find((r) => r.checked);
+        const bundleVal = (bundleSel && bundleSel.value === 'SINGLE')
+          ? 'SINGLE' : (($('#ltBundleCode').value || '').trim() || null);
+        payload.product.bundleInfo = Object.assign({}, payload.product.bundleInfo, { bundleType: bundleVal });
+
+        /* 라디오 3쌍 (직접 넣은 코드가 있으면 그게 이긴다) */
+        $$('#ltEdit .lt-enum-code').forEach((el) => {
+          const key = el.dataset.key;
+          const typed = (el.value || '').trim();
+          if (typed) { payload.item[key] = typed; return; }
+          const sel = $$(`#ltEdit .lt-enum[data-key="${key}"]`).find((r) => r.checked);
+          if (sel) payload.item[key] = sel.value;
+        });
+
+        /* 인당 최대구매수량 */
+        const ppOn = ($$('#ltEdit .lt-pp').find((r) => r.checked) || {}).value === 'on';
+        payload.item.maximumBuyForPerson = ppOn ? Number($('#ltPpCount').value || 0) : 0;
+        payload.item.maximumBuyForPersonPeriod = ppOn ? Number($('#ltPpDays').value || 1) : 1;
+
+        /* 판매기간 */
+        const spOn = ($$('#ltEdit .lt-sp').find((r) => r.checked) || {}).value === 'on';
+        payload.product.saleStartedAt = spOn ? (($('#ltSaleFrom').value || '').trim() || null) : null;
+        payload.product.saleEndedAt = spOn ? (($('#ltSaleTo').value || '').trim() || null) : null;
+
+        /* 인증 */
+        const mode = ($$('#ltEdit .lt-certmode').find((r) => r.checked) || {}).value;
+        if (mode === 'TARGET') {
+          payload.item.certifications = $$('#ltEdit .lt-cert-row').map((row) => ({
+            certificationType: (row.querySelector('.lt-ct').value || '').trim(),
+            certificationCode: (row.querySelector('.lt-cc').value || '').trim(),
+            certificationAttachments: []
+          })).filter((c) => c.certificationType);
+        } else {
+          payload.item.certifications = [{ certificationType: mode, certificationCode: '', certificationAttachments: [] }];
         }
-      });
+
+        /* 고시정보 — 화면에 그려진 행을 그대로 읽는다 */
+        const catName = $('#ltNoticeCat').value;
+        const base = LT._noticeDraft || payload.item.notices || [];
+        const rows = $$('#ltNoticeRows tr[data-lt-n]');
+        if (rows.length) {
+          payload.item.notices = rows.map((tr) => {
+            const i = Number(tr.dataset.ltN);
+            const src = base[i] || {};
+            const ta = tr.querySelector('.lt-nc');
+            return {
+              noticeCategoryName: catName || src.noticeCategoryName,
+              noticeCategoryDetailName: src.noticeCategoryDetailName,
+              /* 품명 행은 등록할 때 상품명으로 채운다 — 여기선 빈 값으로 둔다 */
+              content: ta ? ta.value : ''
+            };
+          });
+        }
+      }
     }
 
     const isDefault = $('#ltDefault').checked;
-    /* 기본은 하나뿐이어야 한다 — 둘이면 어느 게 붙는지 사람이 모른다 */
     if (isDefault) {
       for (const other of LT.list) {
-        if (other.id !== t.id && other.is_default) {
+        if (other.id !== t.id && other.kind === t.kind && other.is_default) {
           await api(`listing_templates?id=eq.${other.id}`, {
             method: 'PATCH', headers: { prefer: 'return=minimal' }, body: { is_default: false } });
         }
@@ -276,6 +571,7 @@ async function ltSave(t) {
       method: 'PATCH', headers: { prefer: 'return=minimal' },
       body: { name: ($('#ltRename').value || '').trim() || t.name, payload, is_default: isDefault }
     });
+    LT._noticeDraft = null;
     msg.textContent = '저장했습니다.';
     toast('저장했습니다');
     await loadListingTemplate();
@@ -285,15 +581,15 @@ async function ltSave(t) {
 }
 
 async function ltDelete(t) {
-  /* 쓰고 있는 준비 건이 있으면 못 지운다 — 지우면 그 준비 건의 뼈대가 사라진다 */
-  const used = await api(`listing_projects?select=id,product_name&template_id=eq.${t.id}&limit=5`) || [];
+  const col = t.kind === 'shipping' ? 'shipping_template_id' : 'notice_template_id';
+  const used = await api(`listing_projects?select=id&${col}=eq.${t.id}&limit=5`) || [];
   if (used.length) {
     toast(`이 뼈대를 쓰는 준비 건이 ${used.length}건 있어 지울 수 없습니다`);
     return;
   }
   if (!confirm(`뼈대 "${t.name}"를 지울까요?`)) return;
   await api(`listing_templates?id=eq.${t.id}`, { method: 'DELETE', headers: { prefer: 'return=minimal' } });
-  LT.cur = null;
+  LT.cur[t.kind] = null;
   toast('지웠습니다');
   await loadListingTemplate();
 }
@@ -305,29 +601,31 @@ async function ltRenderTarget() {
   if (!id) { box.innerHTML = '<p class="muted sm">작업 중인 준비 건이 없습니다.</p>'; return; }
   const { p } = await lstFetchOne(id);
   if (!p) { box.innerHTML = ''; return; }
-  const cur = LT.list.find((t) => t.id === p.template_id);
+  const ship = LT.list.find((t) => t.id === p.shipping_template_id);
+  const note = LT.list.find((t) => t.id === p.notice_template_id);
   box.innerHTML = `<div class="kv-grid">
       <span class="kv"><span class="kv-k">작업 중인 준비 건</span>
         <span class="kv-v">${esc(p.product_name || '(이름 미정)')}</span></span>
-      <span class="kv"><span class="kv-k">지금 붙은 뼈대</span>
-        <span class="kv-v">${cur ? esc(cur.name)
-          : (p.clone_seller_product_id ? `복제 원본 ${esc(p.clone_seller_product_id)}`
-            : '<span class="neg">없음</span>')}</span></span>
+      <span class="kv"><span class="kv-k">배송·반품</span>
+        <span class="kv-v">${ship ? esc(ship.name) : '<span class="neg">없음</span>'}</span></span>
+      <span class="kv"><span class="kv-k">고시·주요정보</span>
+        <span class="kv-v">${note ? esc(note.name) : '<span class="neg">없음</span>'}</span></span>
     </div>
-    ${LT.cur ? `<button id="ltApply" class="btn btn-sm btn-primary" style="margin-top:8px">
-      고른 뼈대를 이 준비 건에 쓰기</button>` : ''}`;
+    ${LT.cur[LT.kind] ? `<button id="ltApply" class="btn btn-sm btn-primary" style="margin-top:8px">
+      고른 [${esc(LT_KIND_LABEL[LT.kind])}] 뼈대를 이 준비 건에 쓰기</button>` : ''}`;
 
   const btn = $('#ltApply');
   if (btn) btn.onclick = async () => {
     btn.disabled = true;
     try {
-      const t = LT.list.find((x) => x.id === LT.cur);
+      const t = LT.list.find((x) => x.id === LT.cur[LT.kind]);
+      const body = {};
+      body[LT.kind === 'shipping' ? 'shipping_template_id' : 'notice_template_id'] = t.id;
+      if (t.source_seller_product_id) body.clone_seller_product_id = t.source_seller_product_id;
       await api(`listing_projects?id=eq.${id}`, {
-        method: 'PATCH', headers: { prefer: 'return=minimal' },
-        body: { template_id: LT.cur, clone_seller_product_id: t ? t.source_seller_product_id : null }
-      });
-      await lstAddNote(id, 'skeleton', `뼈대 "${t ? t.name : ''}" 적용`
-        + (t && t.source_seller_product_id ? ` (출처 상품 ${t.source_seller_product_id})` : ''));
+        method: 'PATCH', headers: { prefer: 'return=minimal' }, body });
+      await lstAddNote(id, 'skeleton', `[${LT_KIND_LABEL[t.kind]}] 뼈대 "${t.name}" 적용`
+        + (t.source_seller_product_id ? ` (출처 상품 ${t.source_seller_product_id})` : ''));
       toast('뼈대를 붙였습니다');
       await ltRenderTarget();
     } catch (e) {

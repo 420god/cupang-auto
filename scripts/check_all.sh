@@ -29,8 +29,11 @@ for pair in [("extension/popup.html", ["extension/popup.js"]),
 
     # q,tb는 동적 생성 HTML 내부용. metrics*·lc*는 JS가 만들어 붙이는 것이라
     # index.html에 없다(web/js/95-boot.js autoSyncMetrics).
-    missing = ids_js - ids_html - {"q", "tb", "metricsBanner", "metricsOpenWing", "metricsRetry",
-                                  "lcMetaFetch", "lcMetaState"}
+    # 화면이 JS로 직접 그려 넣는 id는 index.html에 없다(뼈대 편집칸·지표 배너 등).
+    dynamic = {"q", "tb", "metricsBanner", "metricsOpenWing", "metricsRetry",
+               "lcMetaFetch", "lcMetaState"}
+    dynamic |= {i for i in ids_js if i.startswith("lt") and i not in ids_html}
+    missing = ids_js - ids_html - dynamic
     status = "OK" if not missing else "FAIL"
     print(f"  {status}  {js_path} -> {html_path}"
           + (f"  누락: {sorted(missing)}" if missing else ""))

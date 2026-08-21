@@ -830,9 +830,15 @@
           </div>
         </div>
 
-        <div id="ltList" class="lst-chips" style="margin-bottom:12px"></div>
+        <div class="tabs" id="ltTabs">
+          <button class="tab active" data-kind="shipping">배송 · 반품/교환</button>
+          <button class="tab" data-kind="notice">고시정보 · 상품주요정보</button>
+        </div>
+
+        <div id="ltList" class="lst-chips" style="margin:10px 0 12px"></div>
         <div id="ltTarget" class="filter-panel"></div>
         <div id="ltEdit"></div>
+        <datalist id="ltCertList"></datalist>
       </section>
 
       <!-- ── 카테고리 ── -->
