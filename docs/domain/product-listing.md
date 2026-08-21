@@ -25,6 +25,7 @@ js/85-product-edit.js 상품수정 화면 — 편집 UI · 실험 기록 · 신�
 js/86-listing.js    상품등록 — 등록 준비 건 목록 · 진행 배지 · 즐겨찾기에서 승격
                     + 작업 화면 공용 헬퍼(lstFetchOne · lstStepBar · lstAddNote)
 js/87-listing-price.js 옵션·가격 — 옵션 구성 · 판매가 · 1688 추정 단가 · 예상 마진
+js/88-listing-name.js  상품명·검색어 — 이름 · 노출명 · 브랜드 · 검색어(칩·중복 정리)
 js/90-boot.js       네비게이션 · 테마 · 시작
 ```
 
@@ -98,6 +99,17 @@ js/90-boot.js       네비게이션 · 테마 · 시작
 **단계마다 근거를 행으로 남긴다** — `listing_step_notes(step, note, hypothesis,
 primary_metrics)`. `product_change_history`(026)와 모양이 같아서 등록 전 판단과
 등록 후 수정이 한 줄로 이어진다.
+
+`primary_metrics`는 **화면이 자동으로 박는다**(`LISTING_STEP_METRICS`, 86-listing.js).
+낱말을 워커의 `PRIMARY_METRICS`와 **똑같이** 쓴다(`views`·`visitors`·`conversion_rate`·
+`cart_adds`·`item_winner_rate`) — 다른 어휘를 쓰면 등록 전 근거와 등록 후 이력이
+서로 다른 말이 되어 한 줄로 못 잇는다.
+
+| 단계 | 봐야 할 지표 |
+|---|---|
+| 상품명 · 검색어 · 카테고리 · 대표이미지 | `views` · `visitors` (유입이 움직여야 맞다) |
+| 상세페이지 | `conversion_rate` · `cart_adds` (조회는 안 변해야 정상) |
+| 가격 | `conversion_rate` · `item_winner_rate` |
 
 **이미지는 후보를 다 남긴다** — 고른 것만 남기면 "무엇 대신 무엇을 골랐나"가 사라진다.
 `listing_assets.is_selected` + `selected_at`/`unselected_at`이 교체 이력이다.

@@ -113,6 +113,10 @@
         <svg viewBox="0 0 24 24"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
         <span>옵션·가격</span>
         </button>
+        <button class="nav-item" data-page="listing-name">
+        <svg viewBox="0 0 24 24"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg>
+        <span>상품명·검색어</span>
+        </button>
       </div>
       <div class="nav-group">
         <div class="nav-group-label">상품</div>
@@ -504,6 +508,59 @@
         </label>
         <p class="muted sm" id="lpNoteLast"></p>
         <div id="lpMsg" class="msg hidden"></div>
+      </section>
+
+      <!-- ── 상품명·검색어 ──
+           둘 다 유입(조회·방문자)을 노리는 같은 종류의 작업이라 한 화면에 둔다.
+           등록 후 판정할 때도 같은 지표를 본다(026 PRIMARY_METRICS). -->
+      <section id="page-listing-name" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>상품명·검색어</h2>
+            <p class="muted sm">쿠팡에 노출될 이름을 짓는 자리입니다</p>
+          </div>
+          <div class="page-actions">
+            <select id="lnPicker" class="ship-filter"></select>
+            <button id="lnSave" class="btn btn-sm btn-primary">저장</button>
+          </div>
+        </div>
+
+        <div class="lst-chips" id="lnSteps" style="margin-bottom:10px"></div>
+
+        <p id="lnEmpty" class="muted hidden">준비 중인 상품이 없습니다 —
+          소싱 → 즐겨찾기에서 [등록 준비]를 누르거나, 상품등록 화면에서 새로 만드세요.</p>
+
+        <div id="lnBody">
+          <div class="filter-panel" id="lnRef"></div>
+
+          <label class="field"><span>상품명 <span class="muted sm" id="lnNameCount"></span></span>
+            <input id="lnName" type="text" placeholder="예: 덴넬 수제 딸기 슬라임 250g" /></label>
+
+          <div class="two">
+            <label class="field"><span>노출 상품명 <span class="muted">비우면 상품명을 그대로 씁니다</span></span>
+              <input id="lnDisplayName" type="text" /></label>
+            <label class="field"><span>브랜드 <span class="muted">없으면 비움</span></span>
+              <input id="lnBrand" type="text" /></label>
+          </div>
+
+          <label class="field"><span>검색어 <span class="muted">쉼표로 구분</span></span>
+            <input id="lnTags" type="text" placeholder="슬라임, 말랑이, 수제슬라임, 촉감놀이" /></label>
+          <div class="lst-chips" id="lnTagChips" style="margin-bottom:6px"></div>
+          <p class="muted sm" id="lnTagNote"></p>
+
+          <div class="hint-box">
+            상품명·검색어를 바꾸면 <b>조회·방문자</b>가 움직여야 맞습니다 (검색 노출 → 유입).
+            등록한 뒤 이 지표로 판정합니다.
+          </div>
+
+          <label class="field" style="margin-top:12px">
+            <span>왜 이 이름·이 검색어인가 <span class="muted sm">— 등록 후 판정의 근거가 됩니다</span></span>
+            <textarea id="lnNote" rows="2"
+              placeholder="예: '수제'를 앞에 뺀 이유는 경쟁 3곳이 모두 '수제'로 시작해서. 촉감놀이는 부모 검색어로 넣음"></textarea>
+          </label>
+          <p class="muted sm" id="lnNoteLast"></p>
+          <div id="lnMsg" class="msg hidden"></div>
+        </div>
       </section>
 
       <!-- ── 카테고리 ── -->
@@ -1413,6 +1470,7 @@
 <script src="js/85-product-edit.js"></script>
 <script src="js/86-listing.js"></script>
 <script src="js/87-listing-price.js"></script>
+<script src="js/88-listing-name.js"></script>
 <script src="js/90-boot.js"></script>
 </body>
 </html>

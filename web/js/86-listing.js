@@ -322,9 +322,23 @@ function lstStepBar(prog, activeKey) {
   }).join('');
 }
 
+/* 단계마다 **봐야 할 지표가 다르다.** 등록 후 이 상품을 판정할 때 무엇을 볼지
+   지금 박아둬야 AI가 매번 추측하지 않는다(026·D-18과 같은 생각).
+   **키 이름을 워커의 PRIMARY_METRICS와 똑같이 쓴다** — 다른 낱말을 쓰면
+   등록 전 근거와 등록 후 변경 이력이 서로 다른 어휘가 되어 한 줄로 못 잇는다. */
+const LISTING_STEP_METRICS = {
+  name:      ['views', 'visitors'],
+  category:  ['views', 'visitors'],
+  rep_image: ['views', 'visitors'],
+  detail:    ['conversion_rate', 'cart_adds'],
+  price:     ['conversion_rate', 'item_winner_rate']
+};
+
 /* 단계별 근거를 남긴다. append-only 라 고칠 때마다 행이 쌓이고 최신이 지금 생각이다. */
 async function lstAddNote(projectId, step, note, extra) {
   const body = { project_id: projectId, step, note, created_by: AUTH.userId || null };
+  const pm = LISTING_STEP_METRICS[step];
+  if (pm) body.primary_metrics = pm;
   if (extra) body.extra = extra;
   await api('listing_step_notes', { method: 'POST', body });
 }
