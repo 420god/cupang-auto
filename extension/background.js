@@ -765,7 +765,6 @@ async function syncMetricsBackfill(maxDays) {
 async function pageCatalogSearchBg(keyword) {
   try {
     const tpl = sessionStorage.getItem('__cwc_prematch_body');
-    if (!tpl) return { ok: false, error: '카탈로그 매칭 요청이 아직 캡처되지 않았습니다.' };
 
     let savedHeaders = {};
     try {
@@ -778,23 +777,36 @@ async function pageCatalogSearchBg(keyword) {
       return m ? decodeURIComponent(m[1]) : null;
     }
 
+    /* 몸통은 2026-08-21 실물로 확인했다:
+       {"keyword":"...","excludedProductIds":[],"searchPage":0,
+        "searchOrder":"DEFAULT","sortType":"DEFAULT"}
+       그래서 캡처가 없어도 직접 만들 수 있다 — 추측이 아니라 캡처해서 본 모양이다.
+       캡처가 있으면 그쪽을 먼저 쓴다(쿠팡이 필드를 늘렸을 때 자동으로 따라간다). */
     const KEY_NAMES = ['keyword', 'query', 'searchWord', 'searchKeyword', 'term',
                        'productName', 'text', 'word', 'q'];
     const replaced = [];
-    const root = JSON.parse(tpl);
-    (function walk(node, path) {
-      if (Array.isArray(node)) { node.forEach((v, i) => walk(v, path + '[' + i + ']')); return; }
-      if (node && typeof node === 'object') {
-        Object.keys(node).forEach((k) => {
-          if (typeof node[k] === 'string' && KEY_NAMES.indexOf(k) !== -1) {
-            node[k] = String(keyword);
-            replaced.push(path + '.' + k);
-          } else {
-            walk(node[k], path + '.' + k);
-          }
-        });
-      }
-    })(root, '');
+    let root;
+    if (tpl) {
+      root = JSON.parse(tpl);
+      (function walk(node, path) {
+        if (Array.isArray(node)) { node.forEach((v, i) => walk(v, path + '[' + i + ']')); return; }
+        if (node && typeof node === 'object') {
+          Object.keys(node).forEach((k) => {
+            if (typeof node[k] === 'string' && KEY_NAMES.indexOf(k) !== -1) {
+              node[k] = String(keyword);
+              replaced.push(path + '.' + k);
+            } else {
+              walk(node[k], path + '.' + k);
+            }
+          });
+        }
+      })(root, '');
+      if (!replaced.length) { root.keyword = String(keyword); replaced.push('.keyword(강제)'); }
+    } else {
+      root = { keyword: String(keyword), excludedProductIds: [], searchPage: 0,
+               searchOrder: 'DEFAULT', sortType: 'DEFAULT' };
+      replaced.push('(캡처 없음 — 실측 몸통으로 구성)');
+    }
 
     const headers = Object.assign({}, savedHeaders, {
       'content-type': 'application/json',

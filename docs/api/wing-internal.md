@@ -144,3 +144,36 @@
 
 **호출은 사람이 누를 때 1회씩만.** 배치·반복 호출을 하지 않는 게 차단을 피하는 유일한 방법이다
 (소싱 수집이 이미 훨씬 무거운 호출을 하고 있어서, 준비 건당 1~2회는 증가분이 사실상 없다).
+
+### 카탈로그 매칭 실측 (2026-08-21)
+
+```
+POST /tenants/seller-web/pre-matching/search
+요청  {"keyword":"9671949069","excludedProductIds":[],"searchPage":0,
+       "searchOrder":"DEFAULT","sortType":"DEFAULT"}
+```
+`keyword` 하나만 바꾸면 된다. 상품명·상품번호·URL 다 받는다.
+
+```json
+{"nextSearchPage":1,"hasNext":false,"result":[{
+  "productId":9671949069, "productName":"루모아 무중력 박사 퍼티 슬라임 말랑이",
+  "brandName":null, "itemId":28918717061, "itemName":"1개 42g 오로라펄",
+  "displayCategoryInfo":[{"leafCategoryCode":103112,"rootCategoryCode":102984,
+                          "categoryHierarchy":"완구/취미>…>액체괴물/슬라임(완제품)"}],
+  "manufacture":"루모아", "categoryId":7359, "itemCountOfProduct":12,
+  "imagePath":"vendor_inventory/…png", "salePrice":5800, "vendorItemId":95850422728,
+  "rating":4.0, "ratingCount":14,
+  "pvLast28Day":5877,     // 최근 28일 조회수
+  "salesLast28d":353,     // 최근 28일 판매량  ★ 소싱 판단에 가장 값어치 있다
+  "deliveryMethod":"DOMESTIC", "matchType":null, "matchingResultId":null,
+  "sponsored":null, "attributeTypes":null }]}
+```
+
+**`categoryId`(7359)를 등록 카테고리로 쓰면 안 된다.** 등록에 쓰는 코드는
+`displayCategoryInfo[0].leafCategoryCode`(103112)다. 처음 만든 느슨한 파서가
+`categoryId` 를 집었는데, 그대로 뒀으면 **엉뚱한 카테고리로 등록될 뻔했다.**
+필드 이름이 비슷하다고 같은 뜻이 아니다 — displayItemCategoryId 함정과 같은 종류다.
+
+**조회수·판매량이 같이 온다.** 이건 소싱 판단 시점에만 볼 수 있는 값이라
+`listing_projects.catalog_snapshot` 에 응답 원문을 통째로 박아둔다(R-04).
+나중에 "28일 조회 5,877 · 판매 353짜리를 보고 골랐는데 결과가 어땠나"를 계산할 수 있다.

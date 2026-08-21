@@ -4634,7 +4634,6 @@ function pageReadPreMatch() {
 async function pageCatalogSearch(keyword) {
   try {
     const tpl = sessionStorage.getItem('__cwc_prematch_body');
-    if (!tpl) return { ok: false, error: '카탈로그 매칭 요청이 아직 캡처되지 않았습니다.' };
 
     let savedHeaders = {};
     try {
@@ -4647,23 +4646,35 @@ async function pageCatalogSearch(keyword) {
       return m ? decodeURIComponent(m[1]) : null;
     }
 
+    /* 몸통은 2026-08-21 실물 확인:
+       {"keyword":"...","excludedProductIds":[],"searchPage":0,
+        "searchOrder":"DEFAULT","sortType":"DEFAULT"}
+       캡처가 없어도 이 모양으로 만들 수 있다. background.js 의 같은 함수와 한 벌이다. */
     const KEY_NAMES = ['keyword', 'query', 'searchWord', 'searchKeyword', 'term',
                        'productName', 'text', 'word', 'q'];
     const replaced = [];
-    const root = JSON.parse(tpl);
-    (function walk(node, path) {
-      if (Array.isArray(node)) { node.forEach((v, i) => walk(v, path + '[' + i + ']')); return; }
-      if (node && typeof node === 'object') {
-        Object.keys(node).forEach((k) => {
-          if (typeof node[k] === 'string' && KEY_NAMES.indexOf(k) !== -1) {
-            node[k] = String(keyword);
-            replaced.push(path + '.' + k);
-          } else {
-            walk(node[k], path + '.' + k);
-          }
-        });
-      }
-    })(root, '');
+    let root;
+    if (tpl) {
+      root = JSON.parse(tpl);
+      (function walk(node, path) {
+        if (Array.isArray(node)) { node.forEach((v, i) => walk(v, path + '[' + i + ']')); return; }
+        if (node && typeof node === 'object') {
+          Object.keys(node).forEach((k) => {
+            if (typeof node[k] === 'string' && KEY_NAMES.indexOf(k) !== -1) {
+              node[k] = String(keyword);
+              replaced.push(path + '.' + k);
+            } else {
+              walk(node[k], path + '.' + k);
+            }
+          });
+        }
+      })(root, '');
+      if (!replaced.length) { root.keyword = String(keyword); replaced.push('.keyword(강제)'); }
+    } else {
+      root = { keyword: String(keyword), excludedProductIds: [], searchPage: 0,
+               searchOrder: 'DEFAULT', sortType: 'DEFAULT' };
+      replaced.push('(캡처 없음 — 실측 몸통으로 구성)');
+    }
 
     const headers = Object.assign({}, savedHeaders, {
       'content-type': 'application/json',
@@ -4702,15 +4713,18 @@ if (catalogBtn) {
 
       const found = await runInAllFrames(tab.id, pageReadPreMatch);
       const hit = found.find((f) => f && f.result && f.result.ok);
-      if (!hit) {
+
+      if (!hit && !kw) {
         setStatus('카탈로그 매칭 요청이 아직 캡처되지 않았습니다.\n\n'
-          + '1) WING 상품등록 페이지를 **새로 여세요** (수집기는 페이지가 열릴 때 붙습니다)\n'
-          + '2) [카탈로그 매칭하기]에서 아무 상품이나 한 번 검색하세요\n'
-          + '3) 그 다음 이 버튼을 누르세요', true);
+          + '캡처 없이도 검색은 됩니다 — 위 칸에 검색어를 넣고 다시 누르세요.\n'
+          + '(몸통 모양은 2026-08-21에 실물로 확인했습니다)\n\n'
+          + '캡처까지 받아두려면:\n'
+          + '1) WING 상품등록 페이지를 **새로 열고**\n'
+          + '2) [카탈로그 매칭하기]에서 한 번 검색하세요', true);
         return;
       }
 
-      if (!kw) {
+      if (hit && !kw) {
         const r = hit.result;
         setStatus('카탈로그 매칭 캡처됨 (' + new Date(r.at).toLocaleString() + ')\n\n'
           + '[요청 몸통]\n' + r.body.slice(0, 1500)
@@ -4720,12 +4734,14 @@ if (catalogBtn) {
       }
 
       setStatus('카탈로그 매칭 검색 중… (' + kw + ')');
-      const [res] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id, frameIds: [hit.frameId] },
-        func: pageCatalogSearch,
-        args: [kw]
-      });
-      const r = res && res.result;
+      /* 캡처된 프레임이 있으면 그 프레임에서(헤더까지 그대로 재사용),
+         없으면 전체 프레임에 시도해서 성공한 것을 쓴다. */
+      const results = hit
+        ? await chrome.scripting.executeScript({
+            target: { tabId: tab.id, frameIds: [hit.frameId] }, func: pageCatalogSearch, args: [kw] })
+        : await runInAllFrames(tab.id, pageCatalogSearch, [kw]);
+      const okHit = results.find((x) => x && x.result && x.result.ok);
+      const r = okHit ? okHit.result : (results[0] && results[0].result);
       if (!r || !r.ok) {
         setStatus('검색 실패: ' + ((r && r.error) || '알 수 없는 오류'), true);
         return;

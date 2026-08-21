@@ -104,65 +104,53 @@ $('#lkSearchBtn').onclick = async () => {
 
 $('#lkQuery').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('#lkSearchBtn').click(); });
 
-/* 응답에서 후보를 뽑아낸다. **필드 이름을 단정하지 않는다** —
-   상품명처럼 보이는 키를 가진 객체 배열을 찾아서 아는 이름들을 긁는다.
-   못 찾으면 빈 배열을 주고, 화면이 원문을 보여준다. */
+/* 응답 구조 — 2026-08-21 실물 확인. 추측이 아니라 캡처한 원문 그대로다.
+   {
+     nextSearchPage, hasNext,
+     result: [{
+       productId, productName, brandName(null 가능), itemId, itemName,
+       displayCategoryInfo: [{ leafCategoryCode, rootCategoryCode, categoryHierarchy }],
+       manufacture, categoryId, itemCountOfProduct, imagePath,
+       salePrice, vendorItemId, rating, ratingCount,
+       pvLast28Day,      // 최근 28일 조회수
+       salesLast28d,     // 최근 28일 판매량  ← 소싱 판단에 가장 값어치 있는 값
+       deliveryMethod, matchType, matchingResultId, sponsored, attributeTypes
+     }]
+   }
+
+   **`categoryId`(7359)를 카테고리 코드로 쓰면 안 된다.** 등록에 쓰는 코드는
+   `displayCategoryInfo[0].leafCategoryCode`(103112)다. 처음 쓴 느슨한 파서가
+   categoryId 를 집었는데, 그대로 뒀으면 엉뚱한 카테고리로 등록될 뻔했다.
+   (103112 는 우리 문서에 이미 있는 값이다 — 필수속성이 색상·개당중량·수량인 그 카테고리) */
 function catExtract(json) {
   if (!json || typeof json !== 'object') return [];
-  const NAME_KEYS = ['productName', 'name', 'title', 'itemName'];
-  const found = [];
-
-  (function walk(node, depth) {
-    if (depth > 8 || !node || typeof node !== 'object') return;
-    if (Array.isArray(node)) {
-      const objs = node.filter((x) => x && typeof x === 'object' && !Array.isArray(x));
-      const looksLikeRows = objs.length && objs.some((o) => NAME_KEYS.some((k) => typeof o[k] === 'string'));
-      if (looksLikeRows) objs.forEach((o) => found.push(catRow(o)));
-      node.forEach((x) => walk(x, depth + 1));
-      return;
-    }
-    Object.keys(node).forEach((k) => walk(node[k], depth + 1));
-  })(json, 0);
-
-  /* 같은 상품이 여러 번 잡힐 수 있다(중첩 구조). 이름+ID로 한 번 걸러낸다. */
-  const seen = {};
-  return found.filter((r) => {
-    const key = (r.productId || '') + '|' + (r.name || '');
-    if (!r.name || seen[key]) return false;
-    seen[key] = 1;
-    return true;
-  }).slice(0, 20);
+  const rows = Array.isArray(json.result) ? json.result
+    : (Array.isArray(json.results) ? json.results : null);
+  if (!rows) return [];
+  return rows.filter((o) => o && typeof o === 'object').map(catRow).slice(0, 20);
 }
 
 function catRow(o) {
-  const pick = (...keys) => {
-    for (const k of keys) {
-      if (o[k] != null && o[k] !== '') return o[k];
-    }
-    return null;
-  };
-  /* 카테고리는 문자열 경로('A>B>C')로 오거나 객체 배열로 온다. 둘 다 본다. */
-  let path = pick('categoryHierarchy', 'categoryPath', 'displayCategoryName', 'categoryName');
-  let code = pick('displayCategoryCode', 'categoryCode', 'displayCategoryId', 'categoryId');
-  const infos = o.displayCategoryInfos || o.categoryInfos;
-  if (Array.isArray(infos) && infos[0]) {
-    path = path || infos[0].categoryHierarchy || infos[0].categoryPath || infos[0].categoryName;
-    code = code || infos[0].displayCategoryCode || infos[0].categoryCode || infos[0].categoryId;
-  }
-  const pvLow = pick('lowerPvLast28d');
-  const pvHigh = pick('upperPvLast28d');
+  const info = (Array.isArray(o.displayCategoryInfo) && o.displayCategoryInfo[0]) || {};
   return {
-    name: pick('productName', 'name', 'title', 'itemName'),
-    productId: pick('productId', 'coupangProductId', 'id'),
-    brand: pick('brandName', 'brand'),
-    manufacture: pick('manufacture', 'manufacturer', 'manufactureName'),
-    categoryPath: path,
-    categoryCode: code != null ? String(code) : null,
-    image: pick('imagePath', 'imageUrl', 'thumbnailUrl', 'image'),
-    rating: pick('rating', 'ratingAverage'),
-    ratingCount: pick('ratingCount', 'reviewCount'),
-    pv: pick('pvLast28d', 'viewCount', 'pv'),
-    pvRange: (pvLow != null && pvHigh != null) ? `${pvLow}~${pvHigh}` : null,
+    name: o.productName || null,
+    productId: o.productId != null ? String(o.productId) : null,
+    itemId: o.itemId != null ? String(o.itemId) : null,
+    vendorItemId: o.vendorItemId != null ? String(o.vendorItemId) : null,
+    itemName: o.itemName || null,
+    brand: o.brandName || null,
+    manufacture: o.manufacture || null,
+    /* 등록에 쓰는 코드는 leafCategoryCode 다. categoryId 는 다른 체계다(쓰지 말 것). */
+    categoryCode: info.leafCategoryCode != null ? String(info.leafCategoryCode) : null,
+    rootCategoryCode: info.rootCategoryCode != null ? String(info.rootCategoryCode) : null,
+    categoryPath: info.categoryHierarchy || null,
+    image: o.imagePath || null,
+    rating: o.rating != null ? o.rating : null,
+    ratingCount: o.ratingCount != null ? o.ratingCount : null,
+    pv: o.pvLast28Day != null ? o.pvLast28Day : null,
+    sales: o.salesLast28d != null ? o.salesLast28d : null,
+    salePrice: o.salePrice != null ? o.salePrice : null,
+    itemCount: o.itemCountOfProduct != null ? o.itemCountOfProduct : null,
     raw: o
   };
 }
@@ -193,10 +181,19 @@ function lkRenderResults(r) {
               ${c.productId ? `<span class="kv"><span class="kv-k">쿠팡상품ID</span><span class="kv-v">${esc(c.productId)}</span></span>` : ''}
               ${c.brand ? `<span class="kv"><span class="kv-k">브랜드</span><span class="kv-v">${esc(c.brand)}</span></span>` : ''}
               ${c.manufacture ? `<span class="kv"><span class="kv-k">제조사</span><span class="kv-v">${esc(c.manufacture)}</span></span>` : ''}
-              ${(c.pv || c.pvRange) ? `<span class="kv"><span class="kv-k">조회수</span><span class="kv-v">${esc(c.pvRange || c.pv)}</span></span>` : ''}
+              ${c.salePrice != null ? `<span class="kv"><span class="kv-k">현재가</span><span class="kv-v">${won(c.salePrice)}</span></span>` : ''}
+              ${c.itemCount != null ? `<span class="kv"><span class="kv-k">옵션</span><span class="kv-v">${esc(c.itemCount)}개</span></span>` : ''}
+            </div>
+            <!-- 조회수·판매량은 **그때만 볼 수 있는 값**이다. 이 줄이 소싱 판단의 근거가 된다. -->
+            <div class="kv-grid" style="margin-top:4px">
+              ${c.pv != null ? `<span class="kv"><span class="kv-k">28일 조회</span><span class="kv-v">${cnt(c.pv)}</span></span>` : ''}
+              ${c.sales != null ? `<span class="kv"><span class="kv-k">28일 판매</span><span class="kv-v pos">${cnt(c.sales)}</span></span>` : ''}
+              ${(c.pv && c.sales != null) ? `<span class="kv"><span class="kv-k">전환</span>
+                <span class="kv-v">${Math.round(c.sales / c.pv * 1000) / 10}%</span></span>` : ''}
               ${c.rating ? `<span class="kv"><span class="kv-k">별점</span><span class="kv-v">${esc(c.rating)} (${esc(c.ratingCount || 0)})</span></span>` : ''}
             </div>
-            <div class="psub">${esc(c.categoryPath || '카테고리 정보 없음')}</div>
+            <div class="psub">${esc(c.categoryPath || '카테고리 정보 없음')}${
+              c.categoryCode ? ` <span class="muted">(${esc(c.categoryCode)})</span>` : ''}</div>
           </div>
           <button class="btn btn-sm btn-primary lk-use" data-i="${i}">이 정보 쓰기</button>
         </div>
@@ -254,7 +251,9 @@ $('#lkResults').addEventListener('click', async (ev) => {
       + (c.productId ? ` (상품ID ${c.productId})` : '')
       + (c.brand ? ` · 브랜드 ${c.brand}` : '')
       + (c.manufacture ? ` · 제조사 ${c.manufacture}` : '')
-      + ((c.pvRange || c.pv) ? ` · 그때 조회수 ${c.pvRange || c.pv}` : ''),
+      + (c.pv != null ? ` · 그때 28일 조회 ${c.pv}` : '')
+      + (c.sales != null ? ` · 28일 판매 ${c.sales}` : '')
+      + (c.salePrice != null ? ` · 그때 가격 ${c.salePrice}원` : ''),
       { source: 'pre-matching', catalog: c.raw });
 
     toast('가져왔습니다' + (catMsg ? ' —' + catMsg : ''));
