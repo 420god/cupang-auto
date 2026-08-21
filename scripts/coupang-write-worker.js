@@ -639,15 +639,18 @@ async function handleProductCreate(row) {
     if (w.searchTags !== undefined) it.searchTags = w.searchTags;
     if (w.images !== undefined) it.images = w.images;         // 새로 올린 이미지
     if (w.contents !== undefined) it.contents = w.contents;
-    /* 가격은 옵션 안의 두 곳(로켓그로스/마켓플레이스)에 들어 있다. 둘 다 맞춘다 —
-       한쪽만 바꾸면 화면에 보이는 값과 실제가 갈린다(가격이 두 벌인 구조, 정찰 확인). */
-    if (w.salePrice !== undefined || w.originalPrice !== undefined) {
-      ['rocketGrowthItemData', 'marketplaceItemData', 'marketPlaceItemData'].forEach((k) => {
-        if (!it[k] || !it[k].priceData) return;
-        if (w.salePrice !== undefined) it[k].priceData.salePrice = Number(w.salePrice);
-        if (w.originalPrice !== undefined) it[k].priceData.originalPrice = Number(w.originalPrice);
-      });
-    }
+    /* 가격은 옵션 안에 **두 벌**이다 — 로켓그로스와 마켓플레이스(판매자배송).
+       이 계정은 둘을 일부러 다르게 운영한다(실측 원본: 7,500 / 13,000).
+       그래서 같은 값을 양쪽에 넣으면 안 된다 — 채널별로 받은 값을 각각 넣는다.
+       값을 안 준 쪽은 건드리지 않는다(복제 원본 값이 그대로 남는다). */
+    const setPrice = (k, sale, orig) => {
+      if (!it[k] || !it[k].priceData) return;
+      if (sale !== undefined && sale !== null) it[k].priceData.salePrice = Number(sale);
+      if (orig !== undefined && orig !== null) it[k].priceData.originalPrice = Number(orig);
+    };
+    setPrice('rocketGrowthItemData', w.salePrice, w.originalPrice);
+    setPrice('marketplaceItemData', w.marketplaceSalePrice, w.marketplaceOriginalPrice);
+    setPrice('marketPlaceItemData', w.marketplaceSalePrice, w.marketplaceOriginalPrice);
     /* 이미지를 새로 안 올렸으면 원본 것을 우리 Storage로 옮겨서 URL로 준다. */
     if (w.images === undefined || w.contents === undefined) {
       await resolveCloneImages(it, `new-${row.id}-${i + 1}`);
@@ -661,14 +664,19 @@ async function handleProductCreate(row) {
   }
   product.requested = payload.requested === true;
 
-  /* 쓰기 전용 필드. 없으면 "입고 불가 조건에 동의해주세요"로 막힌다. */
-  product.rocketGrowthAdditionalInformation =
-    Object.assign({}, product.rocketGrowthAdditionalInformation || {},
-      { legalAgreement: RG_LEGAL_AGREEMENT });
+  /* 로켓그로스 전용 정보. legalAgreement 는 쓰기 전용 필수값이다.
+     **rfmInboundName 은 입고 시 표기되는 이름이라 반드시 새 상품명으로 바꾼다** —
+     복제하면 원본 상품명이 그대로 따라와서, 창고에 다른 상품 이름표가 붙는다.
+     (2026-08-20 사용자 지적으로 발견) */
+  const rgInfo = Object.assign({}, product.rocketGrowthAdditionalInformation || {},
+    { legalAgreement: RG_LEGAL_AGREEMENT });
+  const newName = (payload.product && payload.product.sellerProductName) || null;
+  if (newName) rgInfo.rfmInboundName = newName;
+  product.rocketGrowthAdditionalInformation = rgInfo;
 
   const apiPath = '/v2/providers/seller_api/apis/api/v1/marketplace/seller-products';
   if (DRY) {
-    log(`[dry-run] POST ${apiPath} (복제 원본 ${srcId}, 옵션 ${items.length}개)`);
+    log(`[dry-run] POST ${apiPath} (복제 원본 ${srcId}, 옵션 ${items.length}개, 입고명 ${rgInfo.rfmInboundName})`);
     await finish(row.id, { status: 'queued', started_at: null, sent_body: product });
     return;
   }

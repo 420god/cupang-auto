@@ -188,15 +188,49 @@ async function renderExperiments(r) {
 
 const PN = { rows: 1 };
 
+/* **가격 칸이 둘이다.** 이 계정의 상품은 로켓그로스와 판매자배송을 동시에 운영하고,
+   두 채널의 가격이 일부러 다르다(실측 원본: 로켓그로스 7,500 / 판매자배송 13,000).
+   한 칸만 받아 양쪽에 같은 값을 넣으면 판매자배송 가격이 의도와 다르게 등록된다. */
 function pnItemRow(i) {
-  return `<div class="two" data-pn-item="${i}" style="align-items:end">
+  return `<div data-pn-item="${i}" style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px">
     <label class="field"><span>옵션명 ${i}</span>
       <input class="pn-item-name" type="text" placeholder="예: 딸기, 100g, 1개" /></label>
-    <label class="field"><span>판매가 (원)</span>
-      <input class="pn-item-price" type="number" min="0" step="10" /></label>
-    <label class="field"><span>대표이미지 <span class="muted">비우면 원본 것</span></span>
+    <div class="two">
+      <label class="field"><span>로켓그로스 판매가 (원)</span>
+        <input class="pn-item-price" type="number" min="0" step="10" /></label>
+      <label class="field"><span>판매자배송 판매가 (원)</span>
+        <input class="pn-item-mprice" type="number" min="0" step="10" /></label>
+    </div>
+    <label class="field"><span>대표이미지 <span class="muted">비우면 복제 원본 것을 씁니다</span></span>
       <input class="pn-item-image" type="file" accept="image/*" /></label>
   </div>`;
+}
+
+/* 복제 원본의 두 가격 비율을 참고값으로 제안한다. **자동으로 확정하지 않고
+   칸에 채워 넣어 사람이 보게 한다** — 가격은 매출에 직결되므로 눈으로 확인해야 한다. */
+function pnSourcePriceRatio() {
+  const src = $('#pnSource').value;
+  if (!src) return null;
+  const row = SKUS.rows.find((r) => r.reg && String(r.reg.seller_product_id) === String(src)
+    && r.reg.product_json);
+  const it = row && (row.reg.product_json.items || [])[0];
+  if (!it) return null;
+  const rg = it.rocketGrowthItemData && it.rocketGrowthItemData.priceData;
+  const mp = it.marketplaceItemData && it.marketplaceItemData.priceData;
+  if (!rg || !mp || !(Number(rg.salePrice) > 0) || !(Number(mp.salePrice) > 0)) return null;
+  return { ratio: Number(mp.salePrice) / Number(rg.salePrice),
+           rg: Number(rg.salePrice), mp: Number(mp.salePrice) };
+}
+
+/* 로켓그로스 가격을 치면 판매자배송 칸을 원본 비율로 채워준다.
+   **이미 사람이 손댄 칸은 건드리지 않는다** — 제안이지 강제가 아니다. */
+function pnSuggestMarketPrice(row) {
+  const r = pnSourcePriceRatio();
+  const mEl = row.querySelector('.pn-item-mprice');
+  if (!r || mEl.dataset.touched === '1') return;
+  const rg = Number(row.querySelector('.pn-item-price').value);
+  if (!Number.isFinite(rg) || rg <= 0) { mEl.value = ''; return; }
+  mEl.value = Math.round(rg * r.ratio / 10) * 10;
 }
 
 function pnRenderItems() {
@@ -204,6 +238,23 @@ function pnRenderItems() {
 }
 
 $('#pnAddItem').onclick = () => { PN.rows++; pnRenderItems(); };
+
+$('#pnItems').addEventListener('input', (ev) => {
+  const row = ev.target.closest('[data-pn-item]');
+  if (!row) return;
+  if (ev.target.classList.contains('pn-item-mprice')) ev.target.dataset.touched = '1';
+  if (ev.target.classList.contains('pn-item-price')) pnSuggestMarketPrice(row);
+});
+
+/* 복제 원본을 바꾸면 비율이 달라진다 — 사람이 안 건드린 칸을 다시 제안한다. */
+$('#pnSource').addEventListener('change', () => {
+  const r = pnSourcePriceRatio();
+  $('#pnSourceHint').textContent = r
+    ? `이 상품은 로켓그로스 ${r.rg.toLocaleString()}원 · 판매자배송 ${r.mp.toLocaleString()}원으로 운영 중입니다`
+      + ` (${r.ratio.toFixed(2)}배). 아래 판매자배송 칸을 이 비율로 채워드립니다 — 확인하고 고치세요.`
+    : '이 상품의 가격 정보를 아직 못 읽었습니다. 판매자배송 가격을 직접 입력하세요.';
+  $$('#pnItems [data-pn-item]').forEach((row) => pnSuggestMarketPrice(row));
+});
 
 $('#peNewBtn').onclick = () => {
   /* 복제 원본은 **상품 원문을 이미 받아둔 것만** 고를 수 있다. 원문이 없으면
@@ -255,13 +306,18 @@ $('#pnSave').onclick = async () => {
   for (const row of rows) {
     const nm = (row.querySelector('.pn-item-name').value || '').trim();
     const pr = Number(row.querySelector('.pn-item-price').value);
+    const mp = Number(row.querySelector('.pn-item-mprice').value);
     if (!nm) { $('#pnMsg').textContent = '옵션명을 모두 입력하세요.'; return; }
-    if (!Number.isFinite(pr) || pr <= 0) { $('#pnMsg').textContent = '판매가를 모두 입력하세요.'; return; }
-    items.push({ el: row, itemName: nm, salePrice: Math.round(pr) });
+    if (!Number.isFinite(pr) || pr <= 0) { $('#pnMsg').textContent = '로켓그로스 판매가를 모두 입력하세요.'; return; }
+    if (!Number.isFinite(mp) || mp <= 0) { $('#pnMsg').textContent = '판매자배송 판매가를 모두 입력하세요.'; return; }
+    items.push({ el: row, itemName: nm, salePrice: Math.round(pr), marketplaceSalePrice: Math.round(mp) });
   }
 
   /* 되돌리기 어려운 일이라 한 번 더 묻는다. 등록되면 지우기가 까다롭다. */
-  if (!confirm(`"${name}" 을(를) 옵션 ${items.length}개로 등록합니다.\n`
+  const summary = items.map((it) =>
+    `  · ${it.itemName} — 로켓그로스 ${it.salePrice.toLocaleString()}원 / 판매자배송 ${it.marketplaceSalePrice.toLocaleString()}원`
+  ).join('\n');
+  if (!confirm(`"${name}" 을(를) 아래 ${items.length}개 옵션으로 등록합니다.\n\n${summary}\n\n`
       + `등록은 되돌리기 어렵습니다. 진행할까요?`)) return;
 
   const btn = $('#pnSave');
@@ -290,7 +346,8 @@ $('#pnSave').onclick = async () => {
     const payloadItems = [];
     for (const it of items) {
       const f = it.el.querySelector('.pn-item-image').files[0];
-      const one = { itemName: it.itemName, salePrice: it.salePrice };
+      const one = { itemName: it.itemName, salePrice: it.salePrice,
+                    marketplaceSalePrice: it.marketplaceSalePrice };
       if (tags.length) one.searchTags = tags;
       if (f) {
         const u = await uploadProductImage(f, 'new/' + kstDateStr(new Date()));

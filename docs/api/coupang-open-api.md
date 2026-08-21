@@ -206,3 +206,20 @@ GET .../meta/category-related-metas/display-category-codes/{displayCategoryCode}
 고시정보 `기타 재화` 5개 항목은 `my_skus`의 `label_*` 컬럼과 거의 그대로 맞물린다
 (품명·제조국·제조자). **소비자상담 전화번호만 우리 쪽에 없다.**
 
+## 로켓그로스 물류·바코드는 상품 등록에 안 들어간다 (2026-08-20)
+
+**바코드는 쿠팡이 발급한다.** 우리가 넣는 값이 아니다 —
+`S00` + `rocketGrowthItemData.sellerProductItemId` 규칙이고, 등록 후 동기화가 가져온다
+(`db/migrations/015` my_skus.barcode 주석: "쿠팡 발급. 실무 조인키").
+
+**박스 규격·무게 같은 물류 값은 상품 응답 어디에도 없다.** 최상위 23키와 옵션 23키를
+전부 확인했다. 로켓그로스 전용은 `rocketGrowthAdditionalInformation` 하나뿐이고
+그 안에 `rfmInboundName`(입고 시 표기명)과 쓰기 전용 `legalAgreement`가 있다.
+
+→ **입고 규격은 상품 등록이 아니라 별도 입고 신청 단계의 일로 보인다**(미확인).
+   상품 등록 = 카탈로그에 올리는 것, 입고 신청 = 물건을 물류센터로 보내는 것으로 갈린다.
+   확인이 필요하면 WING 입고 신청 화면의 API를 확장프로그램으로 캡처하면 된다.
+
+**복제할 때 rfmInboundName 을 반드시 새 상품명으로 바꾼다** — 안 바꾸면 창고에
+원본 상품의 이름표가 붙는다. 조회 응답에 들어 있어서 그대로 복제되기 쉬운 함정이다.
+
