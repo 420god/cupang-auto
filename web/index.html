@@ -117,6 +117,10 @@
         <svg viewBox="0 0 24 24"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg>
         <span>상품명·검색어</span>
         </button>
+        <button class="nav-item" data-page="listing-category">
+        <svg viewBox="0 0 24 24"><path d="M3 5h8v6H3zM13 5h8v6h-8zM3 13h8v6H3zM13 13h8v6h-8z"/></svg>
+        <span>카테고리</span>
+        </button>
       </div>
       <div class="nav-group">
         <div class="nav-group-label">상품</div>
@@ -560,6 +564,56 @@
           </label>
           <p class="muted sm" id="lnNoteLast"></p>
           <div id="lnMsg" class="msg hidden"></div>
+        </div>
+      </section>
+
+      <!-- ── 등록 카테고리 ──
+           소싱 탭의 '카테고리'(수집 대상 고르기)와 다른 화면이다. 여기서 고른 코드가
+           쿠팡 등록 몸통의 displayCategoryCode 가 된다.
+           같은 코드 체계임을 실물로 확인함(2026-08-21, 표본 1건). -->
+      <section id="page-listing-category" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>카테고리</h2>
+            <p class="muted sm">수수료·입출고비·필수속성이 여기서 정해집니다</p>
+          </div>
+          <div class="page-actions">
+            <select id="lcPicker" class="ship-filter"></select>
+          </div>
+        </div>
+
+        <div class="lst-chips" id="lcSteps" style="margin-bottom:10px"></div>
+
+        <p id="lcEmpty" class="muted hidden">준비 중인 상품이 없습니다 —
+          소싱 → 즐겨찾기에서 [등록 준비]를 누르거나, 상품등록 화면에서 새로 만드세요.</p>
+
+        <div id="lcBody">
+          <div class="filter-panel" id="lcCurrent"></div>
+
+          <div class="filter-panel">
+            <div class="two">
+              <label class="field"><span>카테고리 검색 <span class="muted">이름 또는 경로</span></span>
+                <div class="range">
+                  <input id="lcQuery" type="search" placeholder="예: 슬라임 / 파우치 / 액체괴물" />
+                  <button id="lcSearchBtn" class="btn btn-sm">검색</button>
+                </div></label>
+              <label class="field"><span>코드 직접 입력 <span class="muted">WING에서 본 코드</span></span>
+                <div class="range">
+                  <input id="lcCode" type="text" inputmode="numeric" placeholder="예: 62902" />
+                  <button id="lcCodeBtn" class="btn btn-sm">조회</button>
+                </div></label>
+            </div>
+          </div>
+
+          <div id="lcResults"></div>
+
+          <label class="field" style="margin-top:16px">
+            <span>왜 이 카테고리인가 <span class="muted sm">— 경쟁 상품이 어디에 있었는지 등</span></span>
+            <textarea id="lcNote" rows="2"
+              placeholder="예: 경쟁 3곳 모두 '액체괴물/슬라임(완제품)'에 있었음. 수수료 10.5%"></textarea>
+          </label>
+          <button id="lcNoteSave" class="btn btn-sm">메모 남기기</button>
+          <p class="muted sm" id="lcNoteLast"></p>
         </div>
       </section>
 
@@ -1471,6 +1525,7 @@
 <script src="js/86-listing.js"></script>
 <script src="js/87-listing-price.js"></script>
 <script src="js/88-listing-name.js"></script>
+<script src="js/89-listing-category.js"></script>
 <script src="js/90-boot.js"></script>
 </body>
 </html>

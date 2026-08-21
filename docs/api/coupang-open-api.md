@@ -203,6 +203,29 @@ GET .../meta/category-related-metas/display-category-codes/{displayCategoryCode}
 `attributes`(필수/선택), `noticeCategories`(고시정보 4종 택1), `certifications`,
 `requiredDocumentNames`를 준다. 실측 카테고리 103112의 필수 속성은 색상·개당 중량·수량.
 
+### 실제로 받아본 응답 (2026-08-21, 카테고리 103353 · 액체괴물/슬라임)
+
+`category_meta` 큐가 **처음으로 실제 동작했다**(그전까진 표와 큐 종류만 있었다).
+웹에서 요청 → 워커가 4초 만에 처리 → `coupang_category_meta`에 저장까지 확인.
+
+최상위 키 7개:
+```
+attributes  certifications  noticeCategories  isAllowSingleItem
+requiredDocumentNames  allowedOfferConditions  isExpirationDateRequiredForRocketGrowth
+```
+
+| 무엇 | 실측값 |
+|---|---|
+| `attributes` | 19개. 필수는 `수량`(NUMBER·개), `색상`(STRING). 나머지는 OPTIONAL |
+| `noticeCategories` | 5종 중 택1 — 화장품 · 가공식품 · 어린이제품 · 기타 재화 · 생활화학제품 |
+| 고시정보 항목 | 종류마다 다르다. '화장품'은 11항목(용량·사용기한·전성분·소비자상담 전화번호 …) |
+| `certifications` | 27종 목록. `NOT_REQUIRED`부터 `KC_KID_*`까지 **고르는 값**이다 |
+| `requiredDocumentNames` | 조건부 필수(`MANDATORY_PARALLEL_IMPORTED`, `MANDATORY_BATTERY_UN_TEST` …) |
+| `isExpirationDateRequiredForRocketGrowth` | **물류 단계와 직결** — 이 값이 true면 유통기한 입력이 필수다 |
+
+`required` 값이 `MANDATORY`/`OPTIONAL` 문자열이다(불리언이 아니다).
+카테고리를 바꾸면 필수 속성이 통째로 달라지므로 **카테고리 확정 뒤에 속성 칸을 그린다.**
+
 고시정보 `기타 재화` 5개 항목은 `my_skus`의 `label_*` 컬럼과 거의 그대로 맞물린다
 (품명·제조국·제조자). **소비자상담 전화번호만 우리 쪽에 없다.**
 

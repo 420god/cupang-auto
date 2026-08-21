@@ -26,6 +26,7 @@ js/86-listing.js    상품등록 — 등록 준비 건 목록 · 진행 배지 �
                     + 작업 화면 공용 헬퍼(lstFetchOne · lstStepBar · lstAddNote)
 js/87-listing-price.js 옵션·가격 — 옵션 구성 · 판매가 · 1688 추정 단가 · 예상 마진
 js/88-listing-name.js  상품명·검색어 — 이름 · 노출명 · 브랜드 · 검색어(칩·중복 정리)
+js/89-listing-category.js 카테고리 — 검색·코드 입력 · 수수료/요금표 확인 · 필수속성 받기
 js/90-boot.js       네비게이션 · 테마 · 시작
 ```
 
@@ -116,6 +117,15 @@ primary_metrics)`. `product_change_history`(026)와 모양이 같아서 등록 �
 
 **옵션별로 갈리는 건 둘뿐이다**(사용자 확인 2026-08-21): 대표이미지 · 물류 입고 정보.
 나머지는 상품 단위라 `listing_projects`에 둔다.
+
+**카테고리 코드는 소싱 수집용과 등록용이 같은 체계다**(2026-08-21 실물 확인, 표본 1건):
+등록된 상품의 `product_json.displayCategoryCode=62902` ↔ `categories.category_code='62902'`.
+그래서 등록 카테고리 화면이 우리가 이미 가진 8,156행을 그대로 검색한다.
+**어긋나는 사례가 나오면 여기를 가장 먼저 의심할 것.**
+
+카테고리를 정하면 화면이 `category_meta` 큐를 자동으로 넣는다. 그 응답에
+필수속성·고시정보·인증·`isExpirationDateRequiredForRocketGrowth`가 들어 있고,
+뼈대·물류 단계가 그걸 읽는다 → 실측 구조는 `../api/coupang-open-api.md`.
 
 **원가는 추정이다.** 옵션·가격 화면에 적는 1688 단가·개당 원가는 소싱 시점의 감이고,
 확정 원가는 발주 후 청구서에서 `inventory_lots`로 들어온다. **확정이 나와도 추정을
