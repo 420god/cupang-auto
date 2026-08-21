@@ -47,28 +47,6 @@ const LT_KEYS = {
   }
 };
 
-/* 배송·반품 폼. 실측 18키 중 화면에서 고칠 만한 것들 — 나머지는 원문 편집에서. */
-const LT_SHIP_FIELDS = [
-  ['deliveryCompanyCode', '택배사 코드', 'text'],
-  ['deliveryMethod', '배송 방법', 'text'],
-  ['deliveryChargeType', '배송비 종류', 'text'],
-  ['deliveryCharge', '배송비', 'number'],
-  ['freeShipOverAmount', '무료배송 기준액', 'number'],
-  ['deliveryChargeOnReturn', '반품 시 배송비', 'number'],
-  ['returnCharge', '반품비', 'number'],
-  ['remoteAreaDeliverable', '도서산간 배송', 'text'],
-  ['unionDeliveryType', '묶음배송', 'text'],
-  ['outboundShippingPlaceCode', '출고지 코드', 'number'],
-  ['returnCenterCode', '반품지 코드', 'text'],
-  ['returnChargeName', '반품지 이름', 'text'],
-  ['returnZipCode', '반품지 우편번호', 'text'],
-  ['returnAddress', '반품지 주소', 'text'],
-  ['returnAddressDetail', '반품지 상세주소', 'text'],
-  ['companyContactNumber', '연락처', 'text'],
-  ['afterServiceInformation', 'A/S 안내', 'text'],
-  ['afterServiceContactNumber', 'A/S 전화번호', 'text']
-];
-
 const LT_DETAIL_REF = '상품 상세페이지 참조';
 
 async function loadListingTemplate() {
@@ -226,27 +204,124 @@ function ltOpen(id) {
   $('#ltSave').onclick = () => ltSave(t);
   $('#ltDelete').onclick = () => ltDelete(t);
   if (t.kind === 'notice') ltBindNotice(t);
+  else ltBindShipping();
 }
 
+/* 라디오를 누르면 옆의 코드칸을 채운다. 저장은 코드칸만 읽으므로
+   **화면과 저장되는 값이 갈릴 일이 없다.** */
+function ltBindShipping() {
+  $('#ltEdit').addEventListener('change', (ev) => {
+    if (!ev.target.matches('.lt-sr')) return;
+    const key = ev.target.dataset.target;
+    const box = $$(`#ltEdit .lt-f[data-key="${key}"]`)[0];
+    if (box) box.value = ev.target.value;
+  });
+}
+
+/* 라디오 + 코드칸을 같이 보여준다. 라디오를 누르면 코드칸이 채워지고, 코드칸을 직접
+   고칠 수도 있다 — **우리가 모르는 코드값이 있을 수 있어서** 라디오만 두면 막힌다. */
+function ltShipRadio(label, key, cur, opts, note) {
+  return `<label class="field"><span>${esc(label)} <span class="muted xs">${esc(key)}</span></span>
+    <div class="range">
+      ${opts.map(([v, l]) => `<label class="chk"><input type="radio" name="lt-s-${key}"
+        class="lt-sr" data-target="${key}" value="${esc(v)}" ${cur === v ? 'checked' : ''} />
+        <span>${esc(l)}</span></label>`).join('')}
+      <input class="lt-f" data-scope="ship" data-key="${esc(key)}" type="text" style="width:190px"
+             value="${esc(cur == null ? '' : cur)}" />
+    </div>
+    ${note ? `<span class="muted sm">${note}</span>` : ''}</label>`;
+}
+
+/* WING '배송' + '반품/교환' 화면(2026-08-21 캡처) 그대로.
+   화면 ↔ 코드 대응은 우리가 이미 가진 상품 원문으로 대부분 확인됐다:
+     제주/도서산간 불가능 = N · 택배사 CJ대한통운 = CJGLS · 일반배송 = SEQUENCIAL
+     묶음배송 불가능 = NOT_UNION_DELIVERY · 유료배송 = NOT_FREE · 기본배송비 = deliveryCharge
+     반품배송비(편도) = returnCharge
+   **반대쪽 코드(가능·무료배송·묶음가능)는 실물을 못 봤다.** 그래서 라디오 옆에
+   코드칸을 같이 두고 고칠 수 있게 한다(R-14). */
 function ltShippingForm(t) {
   const ship = (t.payload.product || {}).marketplaceShippingAndReturnInfo || {};
   const item = t.payload.item || {};
-  return `<h4 class="sku-sec">배송 · 반품/교환</h4>
-    <div class="two">${LT_SHIP_FIELDS.map(([k, label, type]) => `<label class="field">
-      <span>${esc(label)} <span class="muted xs">${esc(k)}</span></span>
-      <input class="lt-f" data-scope="ship" data-key="${esc(k)}" type="${type}"
-             value="${esc(ship[k] == null ? '' : ship[k])}" /></label>`).join('')}</div>
-    <h4 class="sku-sec">출고</h4>
+  const sameDay = (item.sameDayShipping || {}).active === true;
+  const num = (k, label) => `<label class="field"><span>${esc(label)}
+      <span class="muted xs">${esc(k)}</span></span>
+      <input class="lt-f" data-scope="ship" data-key="${esc(k)}" type="number"
+             value="${esc(ship[k] == null ? '' : ship[k])}" /></label>`;
+  const txt = (k, label, ph) => `<label class="field"><span>${esc(label)}
+      <span class="muted xs">${esc(k)}</span></span>
+      <input class="lt-f" data-scope="ship" data-key="${esc(k)}" type="text"
+             placeholder="${esc(ph || '')}" value="${esc(ship[k] == null ? '' : ship[k])}" /></label>`;
+
+  return `<h4 class="sku-sec">배송</h4>
+
+    <div class="filter-panel" style="margin-bottom:12px">
+      <b class="sm">상품출고지</b>
+      <div class="sm">[출고지] ${esc(ship.returnAddress ? '' : '')}
+        <span class="muted">코드로 지정합니다 — WING 주소록의 출고지 코드입니다</span></div>
+      <label class="field" style="margin-top:8px"><span>출고지 코드
+        <span class="muted xs">outboundShippingPlaceCode</span></span>
+        <input class="lt-f" data-scope="ship" data-key="outboundShippingPlaceCode" type="number"
+               value="${esc(ship.outboundShippingPlaceCode == null ? '' : ship.outboundShippingPlaceCode)}" /></label>
+    </div>
+
+    ${ltShipRadio('제주/도서산간 배송여부', 'remoteAreaDeliverable', ship.remoteAreaDeliverable,
+      [['Y', '가능'], ['N', '불가능']], '불가능 = <code>N</code> 은 실측 확인. 가능 = <code>Y</code> 는 추정입니다.')}
+
+    ${ltShipRadio('택배사', 'deliveryCompanyCode', ship.deliveryCompanyCode,
+      [['CJGLS', 'CJ대한통운']], '다른 택배사의 코드는 <b>목록을 모릅니다</b> — 오른쪽 칸에 직접 넣으세요.')}
+
+    ${ltShipRadio('배송방법', 'deliveryMethod', ship.deliveryMethod,
+      [['SEQUENCIAL', '일반배송']], '다른 배송방법 코드는 미확인입니다.')}
+
+    ${ltShipRadio('묶음배송', 'unionDeliveryType', ship.unionDeliveryType,
+      [['UNION_DELIVERY', '가능'], ['NOT_UNION_DELIVERY', '불가능']],
+      '불가능 = <code>NOT_UNION_DELIVERY</code> 는 실측. 가능 쪽 코드는 <b>추정</b>입니다.')}
+
+    ${ltShipRadio('배송비 종류', 'deliveryChargeType', ship.deliveryChargeType,
+      [['FREE', '무료배송'], ['NOT_FREE', '유료배송'], ['CONDITIONAL_FREE', '조건부 무료']],
+      '유료배송 = <code>NOT_FREE</code> 만 실측 확인. 나머지 둘은 <b>추정</b>입니다.')}
+
     <div class="two">
-      <label class="field"><span>출고 소요일 <span class="muted xs">outboundShippingTimeDay</span></span>
+      ${num('deliveryCharge', '기본배송비')}
+      ${num('freeShipOverAmount', '무료배송 기준액')}
+    </div>
+
+    <h4 class="sku-sec">출고 소요일</h4>
+    <div class="range">
+      <label class="field" style="max-width:200px"><span>일 <span class="muted xs">outboundShippingTimeDay</span></span>
         <input class="lt-f" data-scope="item" data-key="outboundShippingTimeDay" type="number"
                value="${esc(item.outboundShippingTimeDay == null ? '' : item.outboundShippingTimeDay)}" /></label>
-      <label class="field"><span>출고 소요시간 <span class="muted xs">outboundShippingTime</span></span>
-        <input class="lt-f" data-scope="item" data-key="outboundShippingTime" type="number"
-               value="${esc(item.outboundShippingTime == null ? '' : item.outboundShippingTime)}" /></label>
+      <label class="chk"><input type="checkbox" id="ltSameDay" ${sameDay ? 'checked' : ''} />
+        <span>당일출고 <span class="muted xs">sameDayShipping.active</span></span></label>
     </div>
-    <p class="muted sm">코드값(<code>CJGLS</code>·<code>SEQUENCIAL</code>·<code>NOT_FREE</code>…)은
-      쿠팡이 정한 것입니다. <b>전체 목록을 모르니 모르면 그대로 두세요.</b></p>`;
+    <p class="muted sm">화면의 [구매 옵션별로 입력]은 옵션마다 출고일이 다를 때 씁니다 —
+      지금은 <b>기본 입력만</b> 지원합니다. 필요해지면 옵션 표에 칸을 답니다.</p>
+
+    <h4 class="sku-sec">반품 / 교환</h4>
+    <div class="filter-panel" style="margin-bottom:12px">
+      <b class="sm">반품/교환지</b>
+      <div class="muted sm">코드로 지정하고, 주소는 표시용으로 같이 담습니다.</div>
+    </div>
+    <div class="two">
+      ${txt('returnCenterCode', '반품지 코드')}
+      ${txt('returnChargeName', '반품지 이름')}
+    </div>
+    <div class="two">
+      ${txt('returnZipCode', '반품지 우편번호')}
+      ${txt('companyContactNumber', '연락처')}
+    </div>
+    ${txt('returnAddress', '반품지 주소')}
+    ${txt('returnAddressDetail', '반품지 상세주소')}
+    <div class="two">
+      ${num('returnCharge', '반품배송비(편도)')}
+      ${num('deliveryChargeOnReturn', '반품 시 배송비')}
+    </div>
+
+    <h4 class="sku-sec">A/S <span class="muted sm">화면에는 없지만 응답에 있는 칸</span></h4>
+    <div class="two">
+      ${txt('afterServiceInformation', 'A/S 안내')}
+      ${txt('afterServiceContactNumber', 'A/S 전화번호')}
+    </div>`;
 }
 
 /* WING '상품 주요 정보' + '상품정보제공고시' 화면 그대로 */
@@ -500,6 +575,18 @@ async function ltSave(t) {
           const v = el.value;
           target[el.dataset.key] = (v === '') ? null : (el.type === 'number' ? Number(v) : v);
         });
+        /* 당일출고. **객체를 통째로 갈아끼우지 않는다** — cutOffTime* 같은 항목이
+           같이 지워지면 등록 때 빈 값이 나간다. */
+        const sd = $('#ltSameDay');
+        if (sd) {
+          payload.item.sameDayShipping = Object.assign(
+            { cutOffTimeHour: null, cutOffTimeZone: null, cutOffTimeMinute: null },
+            payload.item.sameDayShipping, { active: sd.checked });
+        }
+        /* 출고 소요시간(시간 단위)은 화면에서 안 받는다 — 일수에서 만든다.
+           실측이 7일=168시간이라 24배다. 둘이 어긋나면 어느 쪽이 쓰일지 모른다. */
+        const day = Number(payload.item.outboundShippingTimeDay);
+        if (Number.isFinite(day) && day > 0) payload.item.outboundShippingTime = day * 24;
       } else {
         /* 상품 구성 */
         const bundleSel = $$('#ltEdit .lt-bundle').find((r) => r.checked);

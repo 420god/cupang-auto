@@ -221,6 +221,30 @@ primary_metrics)`. `product_change_history`(026)와 모양이 같아서 등록 �
 
 마지막 줄은 추측이 아니다 — 실측 상품의 '인증/허가 사항' 값이 정확히 그 문자열이었다.
 
+**배송 · 반품/교환 화면 ↔ API**(2026-08-21 캡처 + 실측으로 대조):
+
+| 화면 | 필드 | 확인 |
+|---|---|---|
+| 출고지 | `outboundShippingPlaceCode` (23735889) | ✅ |
+| 제주/도서산간 불가능 | `remoteAreaDeliverable = "N"` | ✅ (가능=`Y`는 추정) |
+| 택배사 CJ대한통운 | `deliveryCompanyCode = "CJGLS"` | ✅ (다른 택배사 코드는 목록 모름) |
+| 배송방법 일반배송 | `deliveryMethod = "SEQUENCIAL"` | ✅ |
+| 묶음배송 불가능 | `unionDeliveryType = "NOT_UNION_DELIVERY"` | ✅ (가능 쪽은 추정) |
+| 배송비 종류 유료배송 | `deliveryChargeType = "NOT_FREE"` | ✅ (무료·조건부무료는 추정) |
+| 기본배송비 5,000 | `deliveryCharge` | ✅ |
+| 출고 소요일 + 당일출고 | `outboundShippingTimeDay` + `sameDayShipping.active` | ✅ |
+| 반품/교환지 | `returnCenterCode` + 주소 3칸 + `companyContactNumber` | ✅ |
+| 반품배송비(편도) 5,000 | `returnCharge` | ✅ |
+
+**`outboundShippingTime`(시간)은 화면에서 안 받는다** — 일수 × 24로 만든다(실측 7일=168시간).
+둘을 따로 받으면 어긋났을 때 어느 쪽이 쓰이는지 모른다.
+
+**`sameDayShipping` 객체는 통째로 갈아끼우지 않는다** — `cutOffTime*` 이 같이 지워지면
+등록 때 빈 값이 나간다. `active` 만 덮어쓴다.
+
+화면의 [구매 옵션별로 입력](출고 소요일)은 **미지원**이다. 옵션마다 출고일이 다른 상품이
+생기면 옵션 표에 칸을 단다.
+
 **품명 및 모델명은 상품명이 자동으로 들어간다**(사용자 결정). 뼈대의 그 칸은 안 쓴다.
 
 **반대쪽 코드값(면세·성인전용·병행수입·혼합구성)은 실물을 못 봤다** — 우리 상품이 전부
