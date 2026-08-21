@@ -121,6 +121,10 @@
         <svg viewBox="0 0 24 24"><path d="M3 5h8v6H3zM13 5h8v6h-8zM3 13h8v6H3zM13 13h8v6h-8z"/></svg>
         <span>카테고리</span>
         </button>
+        <button class="nav-item" data-page="listing-catalog">
+        <svg viewBox="0 0 24 24"><path d="M11 4a7 7 0 100 14 7 7 0 000-14zM16 16l5 5"/></svg>
+        <span>카탈로그 매칭</span>
+        </button>
         <button class="nav-item" data-page="listing-image">
         <svg viewBox="0 0 24 24"><path d="M3 5h18v14H3zM3 15l5-5 4 4 3-3 6 6"/></svg>
         <span>대표이미지</span>
@@ -656,6 +660,44 @@
           </label>
           <button id="liNoteSave" class="btn btn-sm">메모 남기기</button>
           <p class="muted sm" id="liNoteLast"></p>
+        </div>
+      </section>
+
+      <!-- ── 카탈로그 매칭 ──
+           WING 상품등록의 '카탈로그 매칭하기'와 같은 것. **정보만 가져온다** —
+           카탈로그에 결합해달라고 신청하는 게 아니다(등록 몸통에 그런 필드가 없다).
+           웹은 WING을 직접 못 부르므로 확장프로그램에 시킨다. -->
+      <section id="page-listing-catalog" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>카탈로그 매칭</h2>
+            <p class="muted sm">브랜드 · 제조사 · 카테고리 · 조회수를 가져옵니다</p>
+          </div>
+          <div class="page-actions">
+            <select id="lkPicker" class="ship-filter"></select>
+          </div>
+        </div>
+
+        <div class="lst-chips" id="lkSteps" style="margin-bottom:10px"></div>
+
+        <p id="lkEmpty" class="muted hidden">준비 중인 상품이 없습니다 —
+          소싱 → 즐겨찾기에서 [등록 준비]를 누르거나, 상품등록 화면에서 새로 만드세요.</p>
+
+        <div id="lkBody">
+          <div class="filter-panel" id="lkCurrent"></div>
+
+          <div class="filter-panel">
+            <label class="field"><span>상품명 · 쿠팡 상품번호 · 상품 URL 중 하나</span>
+              <div class="range">
+                <input id="lkQuery" type="search" placeholder="예: 9664802432 또는 덴넬 수제 밀크 말랑이" />
+                <button id="lkSearchBtn" class="btn btn-sm btn-primary">검색</button>
+              </div></label>
+            <p class="muted sm">확장프로그램이 WING 세션으로 대신 조회합니다.
+              <b>사람이 누를 때만 1회씩</b> 부릅니다 — 자동으로 반복 호출하지 않습니다.</p>
+          </div>
+
+          <div id="lkResults"></div>
+          <div id="lkMsg" class="msg hidden"></div>
         </div>
       </section>
 
@@ -1569,6 +1611,7 @@
 <script src="js/88-listing-name.js"></script>
 <script src="js/89-listing-category.js"></script>
 <script src="js/90-listing-image.js"></script>
+<script src="js/91-listing-catalog.js"></script>
 <script src="js/95-boot.js"></script>
 </body>
 </html>

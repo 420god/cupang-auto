@@ -4605,3 +4605,137 @@ function startKeepAlive() {
     startKeepAlive();
   });
 })();
+
+/* ===================== 카탈로그 상품매칭 (2026-08-21) =====================
+   상품등록 화면의 '카탈로그 매칭하기'가 부르는 요청을 그대로 재사용한다.
+   여기서 얻는 것: **브랜드명 · 제조사 · 카테고리 · 조회수**.
+
+   왜 Open API 가 아닌가: 등록 몸통 23키를 다 열어봤는데 카탈로그를 지정하는 필드가
+   없다(2026-08-21). 조회 응답에도 없다. 즉 공식 API 로는 이 정보를 얻을 방법이 없다.
+
+   **정보만 가져온다.** 카탈로그에 결합해달라고 요청하는 게 아니다 (그런 필드가 없다).
+   호출은 사람이 누를 때 1회씩만 — 배치로 돌리지 않는 게 차단을 피하는 방법이다.
+   ========================================================================= */
+
+/* 페이지 컨텍스트: 캡처된 카탈로그 매칭 요청/응답이 있는지 */
+function pageReadPreMatch() {
+  try {
+    const body = sessionStorage.getItem('__cwc_prematch_body');
+    const resp = sessionStorage.getItem('__cwc_prematch_resp');
+    const at = sessionStorage.getItem('__cwc_prematch_at');
+    if (!body) return { ok: false };
+    return { ok: true, body, resp: resp || null, at: at ? Number(at) : null };
+  } catch (e) { return { ok: false }; }
+}
+
+/* 페이지 컨텍스트: 캡처한 몸통에서 검색어만 바꿔 다시 부른다.
+   **어느 필드가 검색어인지 추측하지 않는다** — 흔한 이름들을 훑어서 바꾸고,
+   무엇을 바꿨는지 같이 돌려준다. 아무것도 못 바꾸면 그 사실을 말한다. */
+async function pageCatalogSearch(keyword) {
+  try {
+    const tpl = sessionStorage.getItem('__cwc_prematch_body');
+    if (!tpl) return { ok: false, error: '카탈로그 매칭 요청이 아직 캡처되지 않았습니다.' };
+
+    let savedHeaders = {};
+    try {
+      const h = sessionStorage.getItem('__cwc_prematch_headers');
+      if (h) savedHeaders = JSON.parse(h) || {};
+    } catch (e) { /* 무시 */ }
+
+    function getCookie(name) {
+      const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+      return m ? decodeURIComponent(m[1]) : null;
+    }
+
+    const KEY_NAMES = ['keyword', 'query', 'searchWord', 'searchKeyword', 'term',
+                       'productName', 'text', 'word', 'q'];
+    const replaced = [];
+    const root = JSON.parse(tpl);
+    (function walk(node, path) {
+      if (Array.isArray(node)) { node.forEach((v, i) => walk(v, path + '[' + i + ']')); return; }
+      if (node && typeof node === 'object') {
+        Object.keys(node).forEach((k) => {
+          if (typeof node[k] === 'string' && KEY_NAMES.indexOf(k) !== -1) {
+            node[k] = String(keyword);
+            replaced.push(path + '.' + k);
+          } else {
+            walk(node[k], path + '.' + k);
+          }
+        });
+      }
+    })(root, '');
+
+    const headers = Object.assign({}, savedHeaders, {
+      'content-type': 'application/json',
+      'accept': 'application/json, text/plain, */*'
+    });
+    const xsrf = getCookie('XSRF-TOKEN');
+    if (xsrf) headers['x-xsrf-token'] = xsrf;
+    ['content-length', 'cookie', 'host', 'sentry-trace', 'baggage'].forEach((h) => delete headers[h]);
+
+    const res = await fetch('https://wing.coupang.com/tenants/seller-web/pre-matching/search', {
+      method: 'POST', credentials: 'include', headers, body: JSON.stringify(root)
+    });
+    const raw = await res.text();
+    return {
+      ok: res.ok,
+      status: res.status,
+      replacedFields: replaced,
+      sentBody: JSON.stringify(root).slice(0, 1200),
+      raw: raw.slice(0, 200000),
+      error: res.ok ? null : `HTTP ${res.status} ${raw.slice(0, 200)}`
+    };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) ? e.message : String(e) };
+  }
+}
+
+/* 팝업 버튼: 캡처 상태를 보여주고, 검색어가 있으면 실제로 한 번 불러본다.
+   응답 원문을 그대로 보여주는 게 목적이다 — 필드 이름을 눈으로 확인한 뒤에
+   웹 화면의 파서를 쓴다(R-12). */
+const catalogBtn = document.getElementById('catalogBtn');
+if (catalogBtn) {
+  catalogBtn.addEventListener('click', async () => {
+    try {
+      const tab = await getWingTab();
+      const kw = (document.getElementById('catalogKeyword').value || '').trim();
+
+      const found = await runInAllFrames(tab.id, pageReadPreMatch);
+      const hit = found.find((f) => f && f.result && f.result.ok);
+      if (!hit) {
+        setStatus('카탈로그 매칭 요청이 아직 캡처되지 않았습니다.\n\n'
+          + '1) WING 상품등록 페이지를 **새로 여세요** (수집기는 페이지가 열릴 때 붙습니다)\n'
+          + '2) [카탈로그 매칭하기]에서 아무 상품이나 한 번 검색하세요\n'
+          + '3) 그 다음 이 버튼을 누르세요', true);
+        return;
+      }
+
+      if (!kw) {
+        const r = hit.result;
+        setStatus('카탈로그 매칭 캡처됨 (' + new Date(r.at).toLocaleString() + ')\n\n'
+          + '[요청 몸통]\n' + r.body.slice(0, 1500)
+          + '\n\n[응답 원문 앞부분]\n' + (r.resp ? r.resp.slice(0, 3000) : '(응답은 아직 없음)')
+          + '\n\n검색어를 넣고 다시 누르면 실제로 한 번 불러봅니다.');
+        return;
+      }
+
+      setStatus('카탈로그 매칭 검색 중… (' + kw + ')');
+      const [res] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, frameIds: [hit.frameId] },
+        func: pageCatalogSearch,
+        args: [kw]
+      });
+      const r = res && res.result;
+      if (!r || !r.ok) {
+        setStatus('검색 실패: ' + ((r && r.error) || '알 수 없는 오류'), true);
+        return;
+      }
+      setStatus('카탈로그 매칭 응답 (HTTP ' + r.status + ')\n'
+        + '바꾼 검색어 필드: ' + (r.replacedFields.join(', ') || '없음 — 검색어 필드를 못 찾았습니다')
+        + '\n\n[보낸 몸통]\n' + r.sentBody
+        + '\n\n[응답 원문]\n' + r.raw.slice(0, 6000));
+    } catch (e) {
+      setStatus('오류: ' + e.message, true);
+    }
+  });
+}

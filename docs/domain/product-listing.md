@@ -28,6 +28,7 @@ js/87-listing-price.js 옵션·가격 — 옵션 구성 · 판매가 · 1688 추
 js/88-listing-name.js  상품명·검색어 — 이름 · 노출명 · 브랜드 · 검색어(칩·중복 정리)
 js/89-listing-category.js 카테고리 — 검색·코드 입력 · 수수료/요금표 확인 · 필수속성 받기
 js/90-listing-image.js 대표이미지 — 후보 업로드·선택·교체 이력 · 모든 옵션에 적용
+js/91-listing-catalog.js 카탈로그 매칭 — 확장에 시켜 WING pre-matching 조회 · 정보만 가져옴
 js/95-boot.js       네비게이션 · 테마 · 시작  ← 항상 마지막
 ```
 

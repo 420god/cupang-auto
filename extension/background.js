@@ -424,6 +424,37 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
     return true;
   }
 
+  /* 카탈로그 상품매칭 — 웹의 등록 준비 화면이 부른다.
+     **정보만 가져온다**(브랜드·제조사·카테고리·조회수). 카탈로그에 결합해달라는
+     요청이 아니다 — Open API 등록 몸통에 그런 필드 자체가 없다(2026-08-21 확인).
+     사람이 누를 때 1회씩만 부른다. 배치로 돌리지 않는다. */
+  if (message.type === 'CATALOG_SEARCH') {
+    (async () => {
+      try {
+        const kw = String(message.keyword || '').trim();
+        if (!kw) throw new Error('검색어가 비었습니다.');
+        const tab = await getOrOpenWingTab();
+        /* 캡처된 템플릿은 요청을 실제로 보낸 프레임의 sessionStorage 에 있다.
+           어느 프레임인지 모르므로 전부에 시도하고 성공한 것만 쓴다. */
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id, allFrames: true },
+          func: pageCatalogSearchBg,
+          args: [kw]
+        });
+        const hit = results.find((r) => r && r.result && r.result.ok);
+        if (!hit) {
+          const why = results.map((r) => r && r.result && r.result.error).filter(Boolean)[0];
+          throw new Error(why || '카탈로그 매칭 요청이 캡처되지 않았습니다. '
+            + 'WING 상품등록 페이지를 새로 열고 카탈로그 매칭을 한 번 검색하세요.');
+        }
+        sendResponse({ ok: true, result: hit.result });
+      } catch (e) {
+        sendResponse({ ok: false, error: (e && e.message) ? e.message : String(e) });
+      }
+    })();
+    return true;
+  }
+
   if (message.type === 'SYNC_ITEM_COSTS') {
     (async () => {
       try {
@@ -723,4 +754,68 @@ async function syncMetricsBackfill(maxDays) {
     await new Promise((r) => setTimeout(r, 800));     // WING에 몰아치지 않는다
   }
   return { done, todo: todo.length, skipped: days.length - todo.length };
+}
+
+/* ===================== 카탈로그 상품매칭 (2026-08-21) =====================
+   페이지(WING) 컨텍스트에서 실행된다. 인터셉터가 캡처해둔 요청 몸통에서
+   **검색어만 바꿔** 다시 부른다 — 몸통 구조를 추측하지 않기 위해서다(R-12).
+   popup.js 의 pageCatalogSearch 와 같은 내용이다. 확장 안에서도 팝업과 배경은
+   스코프가 달라서 함수를 공유할 수 없어 한 벌씩 둔다(고칠 때 둘 다 고칠 것).
+   ========================================================================= */
+async function pageCatalogSearchBg(keyword) {
+  try {
+    const tpl = sessionStorage.getItem('__cwc_prematch_body');
+    if (!tpl) return { ok: false, error: '카탈로그 매칭 요청이 아직 캡처되지 않았습니다.' };
+
+    let savedHeaders = {};
+    try {
+      const h = sessionStorage.getItem('__cwc_prematch_headers');
+      if (h) savedHeaders = JSON.parse(h) || {};
+    } catch (e) { /* 무시 */ }
+
+    function getCookie(name) {
+      const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+      return m ? decodeURIComponent(m[1]) : null;
+    }
+
+    const KEY_NAMES = ['keyword', 'query', 'searchWord', 'searchKeyword', 'term',
+                       'productName', 'text', 'word', 'q'];
+    const replaced = [];
+    const root = JSON.parse(tpl);
+    (function walk(node, path) {
+      if (Array.isArray(node)) { node.forEach((v, i) => walk(v, path + '[' + i + ']')); return; }
+      if (node && typeof node === 'object') {
+        Object.keys(node).forEach((k) => {
+          if (typeof node[k] === 'string' && KEY_NAMES.indexOf(k) !== -1) {
+            node[k] = String(keyword);
+            replaced.push(path + '.' + k);
+          } else {
+            walk(node[k], path + '.' + k);
+          }
+        });
+      }
+    })(root, '');
+
+    const headers = Object.assign({}, savedHeaders, {
+      'content-type': 'application/json',
+      'accept': 'application/json, text/plain, */*'
+    });
+    const xsrf = getCookie('XSRF-TOKEN');
+    if (xsrf) headers['x-xsrf-token'] = xsrf;
+    ['content-length', 'cookie', 'host', 'sentry-trace', 'baggage'].forEach((h) => delete headers[h]);
+
+    const res = await fetch('https://wing.coupang.com/tenants/seller-web/pre-matching/search', {
+      method: 'POST', credentials: 'include', headers, body: JSON.stringify(root)
+    });
+    const raw = await res.text();
+    if (!res.ok) return { ok: false, error: 'HTTP ' + res.status + ' ' + raw.slice(0, 200) };
+
+    /* **원문을 그대로 넘긴다**(R-04). 웹이 파싱하고, 필요하면 통째로 보관한다.
+       여기서 미리 쪼개면 우리가 아직 모르는 필드가 조용히 버려진다. */
+    let json = null;
+    try { json = JSON.parse(raw); } catch (e) { /* 파싱 실패면 raw 로만 넘긴다 */ }
+    return { ok: true, status: res.status, replacedFields: replaced, json, raw: raw.slice(0, 200000) };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) ? e.message : String(e) };
+  }
 }

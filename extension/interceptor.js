@@ -5,6 +5,13 @@
   try { window.__cwc_installed = true; } catch (e) {}
   const SEARCH_PATH = '/tenants/rfm-ss/api/trends/search';
 
+  /* 카탈로그 상품매칭 — 상품등록 화면의 '카탈로그 매칭하기'가 부르는 요청.
+     여기서 브랜드명·제조사·카테고리·조회수를 한 번에 얻는다.
+     **Open API 에는 이 기능이 없다**(등록 몸통 23키에 카탈로그 지정 필드가 없음, 2026-08-21 확인).
+     trends/search 와 같은 방식으로 요청 몸통을 통째로 저장해두고, 나중에 검색어만
+     바꿔 재요청한다 — 구조를 추측하지 않기 위해서다(R-12). */
+  const PREMATCH_PATH = '/tenants/seller-web/pre-matching/search';
+
   /* 요금(입출고비) 관련 API — 요청 바디와 응답을 함께 저장 */
   const FEE_PATHS = [
     '/tenants/rfm/accounting-fee/category/search',
@@ -190,6 +197,27 @@
     console.log('[수집기] 검색 요청 템플릿 캡처 완료');
   }
 
+  /* 카탈로그 매칭 요청/응답을 통째로 저장한다. 응답까지 같이 두는 이유:
+     어떤 필드에 브랜드·제조사·카테고리·조회수가 들어 있는지 실물로 봐야
+     파서를 쓸 수 있다. 추측으로 쓰면 조용히 빈 값이 된다(R-12·R-14). */
+  const K_PRE_BODY = '__cwc_prematch_body';
+  const K_PRE_HEADERS = '__cwc_prematch_headers';
+  const K_PRE_RESP = '__cwc_prematch_resp';
+  const K_PRE_AT = '__cwc_prematch_at';
+
+  function savePreMatchReq(body, headers) {
+    if (typeof body !== 'string' || body.trim() === '') return;
+    ssSet(K_PRE_BODY, body);
+    ssSet(K_PRE_AT, String(Date.now()));
+    if (headers) ssSet(K_PRE_HEADERS, JSON.stringify(headers));
+    console.log('[수집기] 카탈로그 매칭 요청 템플릿 캡처 완료');
+  }
+
+  function savePreMatchResp(text) {
+    if (typeof text !== 'string' || text === '') return;
+    ssSet(K_PRE_RESP, text.slice(0, 400000));
+  }
+
   function logRequest(method, url, reqBody) {
     try {
       let log = [];
@@ -295,6 +323,9 @@
       if (url.indexOf(SEARCH_PATH) !== -1 && reqBody) {
         saveTemplate(reqBody, headersToObject(init && init.headers));
       }
+      if (url.indexOf(PREMATCH_PATH) !== -1 && reqBody) {
+        savePreMatchReq(reqBody, headersToObject(init && init.headers));
+      }
       if (isWingUrl(url)) logRequest(method, url, reqBody);
 
       if (feePathOf(url)) {
@@ -319,6 +350,15 @@
             res.clone().text()
               .then((t) => { maybeSaveCategoryPayload(url, t); maybeSaveProductPayload(url, t); })
               .catch(() => {});
+          } catch (e) { /* 무시 */ }
+        }).catch(() => {});
+      }
+
+      // 카탈로그 매칭도 응답까지 저장 (필드 구조를 실물로 봐야 파서를 쓴다)
+      if (String(url).indexOf(PREMATCH_PATH) !== -1) {
+        p.then((res) => {
+          try {
+            res.clone().text().then((t) => savePreMatchResp(t)).catch(() => {});
           } catch (e) { /* 무시 */ }
         }).catch(() => {});
       }
@@ -390,6 +430,9 @@
       if (url && String(url).indexOf(SEARCH_PATH) !== -1 && typeof body === 'string') {
         saveTemplate(body, this.__cwc_headers);
       }
+      if (url && String(url).indexOf(PREMATCH_PATH) !== -1 && typeof body === 'string') {
+        savePreMatchReq(body, this.__cwc_headers);
+      }
       if (isWingUrl(url)) {
         logRequest(method, url, typeof body === 'string' ? body : null);
       }
@@ -405,6 +448,7 @@
           if (t) {
             maybeSaveCategoryPayload(url, t);
             maybeSaveProductPayload(url, t);
+            if (String(url).indexOf(PREMATCH_PATH) !== -1) savePreMatchResp(t);
             if (feePathOf(url)) saveFeeCapture(url, method, typeof body === 'string' ? body : null, t, this.__cwc_headers);
             if (salesPathOf(url)) saveSalesCapture(url, method, typeof body === 'string' ? body : null, t, this.__cwc_headers);
             if (insightPathOf(url)) saveInsightCapture(url, method, typeof body === 'string' ? body : null, t, this.__cwc_headers);
