@@ -37,7 +37,7 @@
 - **R-10** 애매하면 묻는다 (위 참조)
 - **R-11** 작업·결정 턴 끝에 `확인 필요` / `가정 없음`
 - **R-12** 외부 파일·API 구조는 **실물을 확인한 뒤** 코드를 쓴다 (청구서 3회 오판)
-- **R-13** 화면에 내놓기 전 **브라우저에서 실제로 돌려본다** (조용한 버그 3개를 잡았다)
+- **R-13** 내놓기 전에 **실제로 돌려본다** — 화면은 브라우저, 서버 코드는 `scripts/jscheck.py`
 - **R-14** 구조를 가정하지 말고 **검산에 기댄다**
 - **R-15** 파생 화면은 원본이 없을 때 **그 사실을 말한다**
 - **R-16** 알게 된 즉시 기록한다 — 몰아서 하지 않는다
@@ -47,7 +47,7 @@
 
 ```
 extension/  크롬 확장프로그램 (수집·WING 동기화)   → 폴더 CLAUDE.md
-web/        웹사이트 (11개 화면)                   → 폴더 CLAUDE.md
+web/        웹사이트 (12개 화면)                   → 폴더 CLAUDE.md
 db/         Supabase 스키마                        → 폴더 CLAUDE.md
 scripts/    VPS 동기화 · 점검 스크립트
 docs/       모든 상세 문서                         → docs/INDEX.md
@@ -67,6 +67,7 @@ extension/supabase.js buildSupabasePayload()  →  db/migrations/*.sql  →  web
 | 무엇이 어디 있는지 · 키워드 색인 | `docs/INDEX.md` |
 | 원가·이익 계산 | `docs/domain/cost-model.md` |
 | 발주·입고·출고 수량 흐름 | `docs/domain/inventory-flow.md` |
+| 쿠팡 상품 등록·수정·실험 기록 | `docs/domain/product-listing.md` |
 | 청구서 인식 | `docs/domain/invoice-parsing.md` |
 | 판매현황 계산 | `docs/domain/sales-profit.md` |
 | API 스펙·함정 | `docs/api/` |

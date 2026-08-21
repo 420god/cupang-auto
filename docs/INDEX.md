@@ -1,7 +1,7 @@
 # 문서 지도
 
 > **언제 읽나**: 무언가를 찾을 때 **가장 먼저**. 어느 문서를 열지 여기서 정한다.
-> **최종 갱신**: 2026-08-19
+> **최종 갱신**: 2026-08-21
 
 ## 먼저 읽을 것
 
@@ -23,6 +23,7 @@
 | `domain/sales-profit.md` | 판매현황 숫자가 WING과 다를 때 |
 | `domain/reorder.md` | 재발주 제안 수량이 감과 다를 때 |
 | `domain/sourcing.md` | 소싱 탭·카테고리 수집을 건드릴 때 |
+| `domain/product-listing.md` | 상품 등록·수정 화면을 고칠 때. "바꿨더니 어떻게 됐나"를 볼 때 |
 
 ## API
 
@@ -58,6 +59,10 @@
 | 청구서가 이상하게 인식됨 | `domain/invoice-parsing.md` |
 | 배송비 배분·재배분 | `domain/cost-model.md` · D-11 |
 | 불량, 취소, 예치금 환불 | `domain/inventory-flow.md` |
+| 쿠팡에 쓰기가 안 나감 (가격·상품수정·등록) | `domain/product-listing.md` |
+| 상품 복제할 때 뭘 지우나 | `domain/product-listing.md` · D-19 |
+| 노출·클릭 지표는 어디서 오나 | `api/wing-internal.md` · D-20 |
+| 실험 전후 비교가 "판단 불가"로 나옴 | `domain/product-listing.md` |
 | 도착 대기에 아무것도 안 나옴 | `domain/inventory-flow.md` (SKU 미연결) |
 | 부가세 공식 | `domain/sales-profit.md` |
 | 보관비를 왜 옵션에 안 붙이나 | `domain/sales-profit.md` · D-07 |

@@ -10,19 +10,8 @@ js/         전체 로직. 빌드 없음 — 아래 순서대로 로드된다
 api/        서버리스 함수 — parse-invoice.js(청구서 읽기) 하나뿐
 ```
 
-```
-js/00-core.js       설정·유틸·Supabase 호출·calcMargin·로그인·앱 진입
-js/10-sourcing.js   소싱 목록 · 즐겨찾기 · 카테고리 · 수집 대기열
-js/20-sales.js      판매현황 (loadLotCogs·fetchSalesRange·renderSales)
-js/30-shell.js      필터·검색 · 내보내기 · 설정 모달
-js/40-invoice.js    구매대행 청구서 파서
-js/50-purchase.js   발주 · 예치금
-js/60-inbound.js    입고 · 재고/재발주 · 제트 작업비 파서
-js/70-outbound.js   출고
-js/80-products.js   상품원장(공급처·발주 파라미터) + 가격/상품정보 편집 로직
-js/85-product-edit.js 상품수정 화면 — 편집 UI · 실험 기록 · 신규 등록(복제)
-js/90-boot.js       네비게이션 · 테마 · 시작
-```
+`js/` 안의 **파일명 앞 숫자가 로드 순서**다. 어느 화면이 어느 파일인지는
+`docs/domain/product-listing.md` 또는 각 파일 머리 주석 참조.
 
 ## 절대 바꾸지 말 것
 
@@ -40,11 +29,8 @@ js/90-boot.js       네비게이션 · 테마 · 시작
 
 ## 알아둘 것
 
-- `calcMargin()`은 `commission`이 null이면 통째로 null을 반환한다 → 호출 전에 null 체크하고
-  "수수료 정보 없음"을 보여준다. `costKrw`가 있으면 실제 매입원가를 쓰고, 없을 때만 `costCny`로 떨어진다
-- `state.readyForMargins`에 **새 비동기 로딩을 추가하면 반드시 여기에도 넣는다** —
-  안 넣으면 잘못된 "정보 없음"이 캐시에 영구히 굳는다
 - 표에 컬럼을 추가·삭제하면 `index.html`의 `<th>` 수와 해당 화면 파일의 `colspan`을 **둘 다** 고친다
+- `calcMargin()` null 처리와 `state.readyForMargins` 함정 → `../docs/domain/sales-profit.md`
 
 ## 상세
 
