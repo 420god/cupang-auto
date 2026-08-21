@@ -61,6 +61,8 @@
 | 불량, 취소, 예치금 환불 | `domain/inventory-flow.md` |
 | 쿠팡에 쓰기가 안 나감 (가격·상품수정·등록) | `domain/product-listing.md` |
 | 상품 복제할 때 뭘 지우나 | `domain/product-listing.md` · D-19 |
+| 등록 준비 배지가 안 채워짐 · 등록 버튼이 비활성 | `domain/product-listing.md` (등록 파이프라인) · D-21 |
+| 바코드를 쿠팡이 발급하나 우리가 넣나 | `domain/product-listing.md` · D-02 |
 | 노출·클릭 지표는 어디서 오나 | `api/wing-internal.md` · D-20 |
 | 실험 전후 비교가 "판단 불가"로 나옴 | `domain/product-listing.md` |
 | 도착 대기에 아무것도 안 나옴 | `domain/inventory-flow.md` (SKU 미연결) |

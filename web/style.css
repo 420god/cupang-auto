@@ -618,3 +618,8 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 .sidebar.collapsed .nav-group-label { display: none; }
 .sidebar.collapsed .nav-group + .nav-group { margin-top: 8px; padding-top: 8px; }
 .dep-amt { width: 96px; }
+
+/* ---------- 등록 준비 (031) ---------- */
+/* 단계 배지는 .prog 를 그대로 쓴다 — 줄 단위 진행 상태와 같은 뜻이라 모양도 같아야 한다 */
+.lst-chips { display: flex; flex-wrap: wrap; gap: 4px; max-width: 420px; }
+.fav-tools .fav-listing { flex-shrink: 0; }

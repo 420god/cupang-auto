@@ -21,7 +21,8 @@ js/50-purchase.js   발주 · 예치금
 js/60-inbound.js    입고 · 재고/재발주 · 제트 작업비 파서
 js/70-outbound.js   출고
 js/80-products.js   상품원장(공급처·발주 파라미터) + 가격/상품정보 편집 로직
-js/85-product-edit.js 상품수정 화면 — 편집 UI · 실험 기록 · 신규 등록(복제)
+js/85-product-edit.js 상품수정 화면 — 편집 UI · 실험 기록 · 신규 등록(복제, D-21로 이관 예정)
+js/86-listing.js    상품등록 — 등록 준비 건 목록 · 진행 배지 · 즐겨찾기에서 승격
 js/90-boot.js       네비게이션 · 테마 · 시작
 ```
 
@@ -67,6 +68,45 @@ js/90-boot.js       네비게이션 · 테마 · 시작
 
 보낸 몸통은 `sent_body`에 통째로 남긴다. 전체 PUT이라 **무엇을 덮어썼는지가 사고 조사의
 전부**가 된다.
+
+## 등록 파이프라인 — 소싱한 상품에 데이터를 쌓아 올린다 (2026-08-21 재편, D-21)
+
+**아래 "등록은 복제가 기본이다" 절은 여전히 맞다. 다만 복제의 범위가 뼈대로 좁아졌다.**
+
+```
+소싱 즐겨찾기 → [등록 준비] → listing_projects 1건 + 옵션 1행
+   ├ 뼈대        복제 원본 또는 listing_templates  (배송·반품지·과세·필수속성·고시정보)
+   ├ 카테고리    display_category_code
+   ├ 상품명·검색어
+   ├ 대표이미지  listing_assets(kind='rep')     ← 옵션별
+   ├ 상세페이지  listing_assets(kind='detail')  ← 상품 단위
+   ├ 물류·바코드 listing_project_items          ← 옵션별
+   └ 가격        listing_project_items
+              ↓ 다 찼으면 (v_listing_ready.all_done)
+   상품등록 화면에서 payload 빌드 → coupang_write_queue(product_create)
+```
+
+**등록 화면은 값을 받지 않는다.** 상품명을 고치려면 상품명 화면에서 고친다. 이유는
+등록 직전에 한꺼번에 받으면 판단이 뭉치기 때문이다 — 썸네일의 근거와 가격의 근거가
+한 칸에 섞이면 나중에 어느 쪽도 판정할 수 없다(D-18과 같은 문제).
+
+**진행 판정은 화면이 하지 않는다.** `v_listing_ready`가 한다. 화면과 에이전트가
+같은 기준을 봐야 해서다.
+
+**단계마다 근거를 행으로 남긴다** — `listing_step_notes(step, note, hypothesis,
+primary_metrics)`. `product_change_history`(026)와 모양이 같아서 등록 전 판단과
+등록 후 수정이 한 줄로 이어진다.
+
+**이미지는 후보를 다 남긴다** — 고른 것만 남기면 "무엇 대신 무엇을 골랐나"가 사라진다.
+`listing_assets.is_selected` + `selected_at`/`unselected_at`이 교체 이력이다.
+
+**옵션별로 갈리는 건 둘뿐이다**(사용자 확인 2026-08-21): 대표이미지 · 물류 입고 정보.
+나머지는 상품 단위라 `listing_projects`에 둔다.
+
+**바코드**: 기본은 쿠팡 발급(`barcode_mode='coupang'` = WING의 "상품 바코드가 없어요").
+자체 바코드를 넣으면 이 시스템의 조인키가 두 벌이 된다(D-02).
+→ 이 선택이 API의 어느 필드로 나가는지는 **아직 실물 미확인**(`skuInfo.originalBarcode` 추정).
+   기존 상품들의 값을 먼저 조회해서 확인한 뒤 코드를 쓴다(R-12).
 
 ## 등록은 복제가 기본이다
 

@@ -24,6 +24,7 @@ $$('.nav-item').forEach((btn) => {
     if (page === 'ship')       loadShip();
     if (page === 'skus')       loadSkus();
     if (page === 'product-edit') loadProductEdit();
+    if (page === 'listing')    loadListing();
     if (page === 'sales')      loadSales();
     if (page === 'favorites')  loadFavorites();
     if (page === 'categories') loadCategories();

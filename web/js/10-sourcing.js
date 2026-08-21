@@ -506,6 +506,8 @@ async function loadFavorites() {
           `<option${s === (r.status || '검토중') ? ' selected' : ''}>${s}</option>`).join('')}
       </select>
       <textarea class="fav-memo" placeholder="메모">${esc(r.memo || '')}</textarea>
+      <!-- 등록 준비로 승격. 동작은 86-listing.js 에 있다(이 파일이 먼저 로드된다, D-17) -->
+      <button class="btn btn-sm fav-listing">등록 준비</button>
       <button class="btn btn-sm btn-ghost fav-remove">해제</button>
     </div>
   </div>

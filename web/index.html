@@ -101,6 +101,15 @@
         <span>즐겨찾기</span>
         </button>
       </div>
+      <!-- 등록 — 소싱에서 넘어온 상품을 단계별로 채워 쿠팡에 올리는 묶음.
+           채우는 화면들은 다음 단계에서 이 그룹에 함께 들어온다. -->
+      <div class="nav-group">
+        <div class="nav-group-label">등록</div>
+        <button class="nav-item" data-page="listing">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        <span>상품등록</span>
+        </button>
+      </div>
       <div class="nav-group">
         <div class="nav-group-label">상품</div>
         <button class="nav-item" data-page="skus">
@@ -402,6 +411,64 @@
 
         <div id="favList" class="fav-list"></div>
         <div id="favEmpty" class="empty hidden"><p>즐겨찾기한 상품이 없습니다</p></div>
+      </section>
+
+      <!-- ── 상품등록 ──
+           **쏘기만 하는 자리다.** 값은 각 작업 화면(대표이미지·상세페이지·상품명·
+           카테고리·물류)에서 채우고, 여기서는 다 찼는지 보고 등록을 진행한다.
+           진행 판정은 화면이 아니라 db/migrations/031 의 v_listing_ready 가 한다. -->
+      <section id="page-listing" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>상품등록</h2>
+            <p class="muted sm" id="lstSummary">—</p>
+          </div>
+          <div class="page-actions">
+            <button id="lstNewBtn" class="btn btn-sm">+ 새 준비 건</button>
+            <button id="lstRefresh" class="btn btn-sm">새로고침</button>
+          </div>
+        </div>
+
+        <div class="hint-box">
+          소싱 → <b>즐겨찾기</b>에서 [등록 준비]를 누르면 이 목록에 들어옵니다.
+          상품명 · 카테고리 · 대표이미지 · 상세페이지 · 물류/바코드를 각 화면에서 채우면
+          배지가 채워지고, 전부 채워졌을 때만 [등록]을 누를 수 있습니다.
+        </div>
+
+        <div id="lstNewBox" class="filter-panel hidden">
+          <div class="two">
+            <label class="field"><span>상품명 <span class="muted">나중에 상품명 화면에서 바꿔도 됩니다</span></span>
+              <input id="lstNewName" type="text" placeholder="예: 덴넬 수제 딸기 슬라임" /></label>
+            <label class="field"><span>참고 링크 <span class="muted">1688 오퍼 등</span></span>
+              <input id="lstNewUrl" type="url" placeholder="https://detail.1688.com/offer/..." /></label>
+          </div>
+          <div class="filter-foot">
+            <button id="lstNewCreate" class="btn btn-sm btn-primary">준비 건 만들기</button>
+          </div>
+        </div>
+
+        <div class="tabs" id="lstTabs">
+          <button class="tab active" data-status="">진행 중</button>
+          <button class="tab" data-status="preparing">준비중</button>
+          <button class="tab" data-status="registered">등록됨</button>
+          <button class="tab" data-status="discarded">버림</button>
+        </div>
+
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th class="col-img"></th>
+                <th>상품</th>
+                <th class="col-num">옵션</th>
+                <th>진행</th>
+                <th>상태</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="lstRows"></tbody>
+          </table>
+        </div>
       </section>
 
       <!-- ── 카테고리 ── -->
@@ -1309,6 +1376,7 @@
 <script src="js/70-outbound.js"></script>
 <script src="js/80-products.js"></script>
 <script src="js/85-product-edit.js"></script>
+<script src="js/86-listing.js"></script>
 <script src="js/90-boot.js"></script>
 </body>
 </html>
