@@ -257,6 +257,36 @@ requiredDocumentNames  allowedOfferConditions  isExpirationDateRequiredForRocket
 }
 ```
 
+### 정정(2026-08-21): skuInfo 는 15개가 아니라 **22개**다
+
+위 예시는 실물의 일부만 옮긴 것이었다. 상품 13건(옵션 13개)의 원문을 받아 전수 확인했다.
+**`skuInfo`를 주면 그 객체의 모든 항목이 필수**이므로, 빠진 7개를 모르고 보내면 등록이 깨진다.
+
+| 필드 | 실측 13/13 | 비고 |
+|---|---|---|
+| `width` `length` `height` `weight` `netWeight` | 상품마다 다름 | mm · g |
+| `inboundName` | 상품마다 다름 | **옵션 단위** 입고 표기명 |
+| `season` | `"YEAR_ROUND"` | |
+| `quantityPerBox` | `1` | 로켓그로스는 항상 1(문서 명시) |
+| `fragile` `standAlone` | `false` | 깨짐 / 단독 포장 |
+| `expiredAtManaged` | `false` | 소비기한 관리 |
+| `producedAtManaged` `manufacturedAtManaged` | `false` | **둘 다 있다.** WING 화면의 "제조일이 적혀 있나요?"가 어느 쪽인지는 **미확인** |
+| `distributionPeriod` | `0` | 유통기한(일) |
+| `hazardous` `heatSensitive` `heavyBulky` | `null` | |
+| `year` `vendorFlexCode` `rocketInstallation` | `null` | 처음 보는 필드. 용도 미확인 |
+| `originalBarcode` | **`null` 13/13** | ↓ |
+| `originalDimensionInputType` | `"USER_INPUT"` | 규격을 사람이 넣었다는 뜻 |
+
+### 바코드 — "상품 바코드가 없어요"는 `originalBarcode: null` 이다
+
+이 계정 상품 13건이 **전부 `originalBarcode: null`** 이고, 전부 쿠팡 발급 바코드
+(`rocketGrowthItemData.barcode` = `S00…`)를 쓰고 있다. WING에서 "상품 바코드가 없어요"를
+체크한 상태와 일치한다.
+
+**다만 역방향은 확인 못 했다** — 자체 바코드를 넣으면 이 필드에 들어가는지는
+그렇게 등록해본 적이 없어서 모른다. 우리 기본값이 쿠팡 발급(D-02)이라 당장은 상관없지만,
+**자체 바코드 경로는 미검증**이라는 걸 화면이 말해야 한다.
+
 **단위**(문서 확인): `width`·`length`·`height` = mm, `weight`·`netWeight` = g.
 
 **중요한 제약**: skuInfo 는 선택적 객체지만 **주기로 하면 그 객체의 모든 항목이 필수**다.

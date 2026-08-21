@@ -133,6 +133,10 @@
         <svg viewBox="0 0 24 24"><path d="M6 3h12v6H6zM6 11h12v4H6zM6 17h12v4H6z"/></svg>
         <span>상세페이지</span>
         </button>
+        <button class="nav-item" data-page="listing-logistics">
+        <svg viewBox="0 0 24 24"><path d="M3 8l9-5 9 5v8l-9 5-9-5zM3 8l9 5 9-5M12 13v8"/></svg>
+        <span>물류·바코드</span>
+        </button>
       </div>
       <div class="nav-group">
         <div class="nav-group-label">상품</div>
@@ -750,6 +754,46 @@
           </label>
           <button id="ldNoteSave" class="btn btn-sm">메모 남기기</button>
           <p class="muted sm" id="ldNoteLast"></p>
+        </div>
+      </section>
+
+      <!-- ── 물류·바코드 ──
+           skuInfo 는 주면 22개 항목이 전부 필수라(2026-08-21 실측) 빈칸을 남기면
+           등록이 깨진다. 그래서 기본값을 미리 채워둔다. -->
+      <section id="page-listing-logistics" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>물류·바코드</h2>
+            <p class="muted sm">로켓그로스 입고 정보 · 옵션마다 다릅니다</p>
+          </div>
+          <div class="page-actions">
+            <select id="lgPicker" class="ship-filter"></select>
+            <button id="lgSave" class="btn btn-sm btn-primary">저장</button>
+          </div>
+        </div>
+
+        <div class="lst-chips" id="lgSteps" style="margin-bottom:10px"></div>
+
+        <p id="lgEmpty" class="muted hidden">준비 중인 상품이 없습니다 —
+          소싱 → 즐겨찾기에서 [등록 준비]를 누르거나, 상품등록 화면에서 새로 만드세요.</p>
+
+        <div id="lgBody">
+          <div class="hint-box">
+            <div id="lgCatNote"></div>
+            <div class="muted sm" style="margin-top:6px">상품 단위 입고 표기명은
+              상품명을 그대로 씁니다 → <b id="lgRfm">—</b>
+              <br>(따로 받지 않습니다. 사람이 또 적으면 복제 원본 이름이 남는 사고가 반복됩니다)</div>
+          </div>
+
+          <div id="lgItems"></div>
+          <div id="lgMsg" class="msg hidden"></div>
+
+          <label class="field" style="margin-top:16px">
+            <span>메모 <span class="muted sm">— 규격을 어떻게 쟀는지 등</span></span>
+            <textarea id="lgNote" rows="2"
+              placeholder="예: 뽁뽁이 포장 기준으로 쟀다. 실제 배송박스는 더 클 수 있음"></textarea>
+          </label>
+          <p class="muted sm" id="lgNoteLast"></p>
         </div>
       </section>
 
@@ -1665,6 +1709,7 @@
 <script src="js/90-listing-image.js"></script>
 <script src="js/91-listing-catalog.js"></script>
 <script src="js/92-listing-detail.js"></script>
+<script src="js/93-listing-logistics.js"></script>
 <script src="js/95-boot.js"></script>
 </body>
 </html>

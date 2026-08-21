@@ -30,6 +30,7 @@ js/89-listing-category.js 카테고리 — 검색·코드 입력 · 수수료/�
 js/90-listing-image.js 대표이미지 — 후보 업로드·선택·교체 이력 · 모든 옵션에 적용
 js/91-listing-catalog.js 카탈로그 매칭 — 확장에 시켜 WING pre-matching 조회 · 정보만 가져옴
 js/92-listing-detail.js 상세페이지 — 세트 단위 후보·순서·교체 이력
+js/93-listing-logistics.js 물류·바코드 — 입고명·규격·바코드 방식·날짜 플래그
 js/95-boot.js       네비게이션 · 테마 · 시작  ← 항상 마지막
 ```
 
@@ -164,10 +165,29 @@ primary_metrics)`. `product_change_history`(026)와 모양이 같아서 등록 �
 **입출고비 표가 없는 카테고리는 0으로 계산된다** — 그러면 마진이 실제보다 **좋게** 나온다.
 화면이 "입출고비 표 없음(0으로 계산)"이라고 붙여서 말한다.
 
+### 물류·바코드 (2026-08-21 실측 13건으로 확정)
+
 **바코드**: 기본은 쿠팡 발급(`barcode_mode='coupang'` = WING의 "상품 바코드가 없어요").
 자체 바코드를 넣으면 이 시스템의 조인키가 두 벌이 된다(D-02).
-→ 이 선택이 API의 어느 필드로 나가는지는 **아직 실물 미확인**(`skuInfo.originalBarcode` 추정).
-   기존 상품들의 값을 먼저 조회해서 확인한 뒤 코드를 쓴다(R-12).
+실측: 상품 13건이 **전부 `skuInfo.originalBarcode: null`** 이고 쿠팡 발급 바코드(`S00…`)를 쓴다.
+→ "없어요 = null" 은 확인됐다. **자체 바코드를 넣었을 때 이 필드로 가는지는 미확인**
+   (그렇게 등록해본 적이 없다). 화면이 그 사실을 말한다.
+
+**`skuInfo` 는 15개가 아니라 22개다.** 주면 전 항목이 필수라 빠뜨리면 등록이 깨진다.
+전체 목록·기본값은 `../api/coupang-open-api.md` 의 정정 표를 볼 것.
+
+**날짜 플래그가 셋이다**: `expiredAtManaged`(소비기한) · `producedAtManaged` ·
+`manufacturedAtManaged`. WING 화면의 "제조일이 적혀 있나요?"가 뒤의 둘 중 어느 쪽인지
+**아직 모른다** — 실측 13건이 전부 false 라 구분할 근거가 없었다. 둘 다 칸을 두고
+기본 false 로 둔다.
+
+**상품 단위 입고 표기명(`rfmInboundName`)은 따로 안 받는다** — 상품명을 그대로 쓴다.
+사람이 또 적게 하면 복제 원본 이름이 남는 사고(위 "놓치기 쉬운 자리 셋")가 반복된다.
+옵션 단위 `inboundName` 은 화면이 "상품명 + 옵션명"을 제안한다.
+
+카테고리 메타의 `isExpirationDateRequiredForRocketGrowth` 가 true 면 그 카테고리는
+유통기한이 필수다. 화면이 먼저 말한다. **다만 true 인 카테고리를 아직 못 봤다**
+(받아둔 두 카테고리 모두 false) — 그 분기는 미검증이다.
 
 ## 등록은 복제가 기본이다
 
