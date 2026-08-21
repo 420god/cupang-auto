@@ -129,6 +129,10 @@
         <svg viewBox="0 0 24 24"><path d="M3 5h18v14H3zM3 15l5-5 4 4 3-3 6 6"/></svg>
         <span>대표이미지</span>
         </button>
+        <button class="nav-item" data-page="listing-detail">
+        <svg viewBox="0 0 24 24"><path d="M6 3h12v6H6zM6 11h12v4H6zM6 17h12v4H6z"/></svg>
+        <span>상세페이지</span>
+        </button>
       </div>
       <div class="nav-group">
         <div class="nav-group-label">상품</div>
@@ -698,6 +702,54 @@
 
           <div id="lkResults"></div>
           <div id="lkMsg" class="msg hidden"></div>
+        </div>
+      </section>
+
+      <!-- ── 상세페이지 ──
+           여러 장이 한 덩어리라 **세트 단위**로 고른다. 한 장짜리 긴 이미지도
+           장 수가 1인 세트일 뿐 같은 구조다. -->
+      <section id="page-listing-detail" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>상세페이지</h2>
+            <p class="muted sm">세트 단위로 고릅니다 · 한 장짜리 긴 이미지도 됩니다</p>
+          </div>
+          <div class="page-actions">
+            <select id="ldPicker" class="ship-filter"></select>
+            <label class="btn btn-sm btn-primary">+ 새 세트 올리기
+              <input type="file" id="ldNewSet" accept="image/*" multiple hidden /></label>
+          </div>
+        </div>
+
+        <div class="lst-chips" id="ldSteps" style="margin-bottom:10px"></div>
+
+        <p id="ldEmpty" class="muted hidden">준비 중인 상품이 없습니다 —
+          소싱 → 즐겨찾기에서 [등록 준비]를 누르거나, 상품등록 화면에서 새로 만드세요.</p>
+
+        <div id="ldBody">
+          <div class="hint-box">
+            여러 장을 한 번에 올리면 <b>한 세트</b>가 됩니다. 고른 순서가 곧 노출 순서입니다.
+            세트를 여러 벌 만들어두고 <b>세트 통째로</b> 골라야
+            "A안에서 B안으로 바꿨더니 전환율이 어땠나"를 나중에 판정할 수 있습니다.
+            <div class="muted sm" style="margin-top:6px">상세페이지를 바꾸면
+              <b>구매전환율·장바구니</b>를 봅니다 — 조회는 안 변하는 게 정상입니다.</div>
+          </div>
+
+          <label class="chk" style="margin:8px 0">
+            <input type="checkbox" id="ldUseClone" />
+            <span>상세페이지를 새로 만들지 않고 <b>뼈대(복제 원본) 것을 그대로</b> 씁니다</span>
+          </label>
+
+          <div id="ldSets"></div>
+          <div id="ldMsg" class="msg hidden"></div>
+
+          <label class="field" style="margin-top:16px">
+            <span>왜 이 구성인가 <span class="muted sm">— 등록 후 전환율·장바구니로 판정합니다</span></span>
+            <textarea id="ldNote" rows="2"
+              placeholder="예: 첫 장에 사용법을 넣었다. 경쟁사는 성분표가 먼저인데 우리는 쓰는 장면을 먼저 보여줌"></textarea>
+          </label>
+          <button id="ldNoteSave" class="btn btn-sm">메모 남기기</button>
+          <p class="muted sm" id="ldNoteLast"></p>
         </div>
       </section>
 
@@ -1612,6 +1664,7 @@
 <script src="js/89-listing-category.js"></script>
 <script src="js/90-listing-image.js"></script>
 <script src="js/91-listing-catalog.js"></script>
+<script src="js/92-listing-detail.js"></script>
 <script src="js/95-boot.js"></script>
 </body>
 </html>

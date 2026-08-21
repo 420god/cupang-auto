@@ -30,6 +30,7 @@ $$('.nav-item').forEach((btn) => {
     if (page === 'listing-category') loadListingCategory();
     if (page === 'listing-image') loadListingImage();
     if (page === 'listing-catalog') loadListingCatalog();
+    if (page === 'listing-detail') loadListingDetail();
     if (page === 'sales')      loadSales();
     if (page === 'favorites')  loadFavorites();
     if (page === 'categories') loadCategories();

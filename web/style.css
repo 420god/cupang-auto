@@ -651,3 +651,13 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 }
 .li-cand.on img { border-color: var(--accent); }
 .li-cand-btns { margin-top: 3px; display: flex; gap: 3px; justify-content: center; flex-wrap: wrap; }
+
+/* ---------- 상세페이지 세트 (033) ---------- */
+.ld-on { border-color: var(--accent); }
+.ld-strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.ld-img { width: 110px; flex-shrink: 0; text-align: center; }
+.ld-img img {
+  width: 110px; height: 150px; object-fit: contain;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+}
+.dim-block { opacity: .45; pointer-events: none; }
