@@ -304,7 +304,8 @@ const PRIMARY_METRICS = {
 
    CDN 주소는 실물로 확인했다(2026-08-20):
      https://image1.coupangcdn.com/image/{cdnPath}  → 200 image/png
-   **/image/ 접두사가 필요하다.** 없으면 403이다. 호스트는 image1·thumbnail1·static 등
+   경로에 "/image/" 접두사가 반드시 들어간다 — 없으면 403이다.
+   호스트는 image1·thumbnail1·static 등
    여러 개가 같은 파일을 준다. */
 const COUPANG_IMAGE_BASE = 'https://image1.coupangcdn.com/image/';
 
