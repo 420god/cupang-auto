@@ -206,20 +206,53 @@ function pnItemRow(i) {
   </div>`;
 }
 
-/* 복제 원본의 두 가격 비율을 참고값으로 제안한다. **자동으로 확정하지 않고
-   칸에 채워 넣어 사람이 보게 한다** — 가격은 매출에 직결되므로 눈으로 확인해야 한다. */
-function pnSourcePriceRatio() {
+/* 복제 원본이 **어느 채널을 쓰는지** 본다.
+   상품마다 다르다(2026-08-20 실측): 정찰에서 본 상품은 로켓그로스 7,500 /
+   판매자배송 13,000의 이중 채널이었는데, 다른 상품은 marketplaceItemData 가
+   **null** 인 로켓그로스 전용이었다.
+   판매자배송 가격을 무조건 필수로 요구하면 단일 채널 상품을 복제할 수 없다. */
+function pnSourceChannels() {
   const src = $('#pnSource').value;
-  if (!src) return null;
+  const known = { unknown: true, hasRG: true, hasMP: true, ratio: null, rg: null, mp: null };
+  if (!src) return known;
   const row = SKUS.rows.find((r) => r.reg && String(r.reg.seller_product_id) === String(src)
     && r.reg.product_json);
   const it = row && (row.reg.product_json.items || [])[0];
-  if (!it) return null;
-  const rg = it.rocketGrowthItemData && it.rocketGrowthItemData.priceData;
-  const mp = it.marketplaceItemData && it.marketplaceItemData.priceData;
-  if (!rg || !mp || !(Number(rg.salePrice) > 0) || !(Number(mp.salePrice) > 0)) return null;
-  return { ratio: Number(mp.salePrice) / Number(rg.salePrice),
-           rg: Number(rg.salePrice), mp: Number(mp.salePrice) };
+  if (!it) return known;   // 원문을 아직 안 받았으면 모르는 것으로 둔다(R-15)
+
+  const rgD = it.rocketGrowthItemData && it.rocketGrowthItemData.priceData;
+  const mpD = it.marketplaceItemData && it.marketplaceItemData.priceData;
+  const out = { unknown: false, hasRG: !!rgD, hasMP: !!mpD, ratio: null,
+                rg: rgD ? Number(rgD.salePrice) : null,
+                mp: mpD ? Number(mpD.salePrice) : null };
+  if (out.rg > 0 && out.mp > 0) out.ratio = out.mp / out.rg;
+  return out;
+}
+
+/* 이름은 예전 것을 유지한다 — 부르는 곳이 여럿이라. 비율이 있을 때만 값을 준다. */
+function pnSourcePriceRatio() {
+  const c = pnSourceChannels();
+  return c.ratio ? c : null;
+}
+
+/* 채널 구성에 맞춰 판매자배송 칸을 켜고 끈다.
+   **없는 채널의 칸을 남겨두면 사람이 값을 넣고 그게 조용히 버려진다.** */
+function pnApplyChannels() {
+  const c = pnSourceChannels();
+  $$('#pnItems [data-pn-item]').forEach((row) => {
+    const lab = row.querySelector('.pn-item-mprice').closest('.field');
+    const on = c.unknown || c.hasMP;
+    lab.classList.toggle('hidden', !on);
+    if (!on) row.querySelector('.pn-item-mprice').value = '';
+  });
+  $('#pnSourceHint').textContent = c.unknown
+    ? '이 상품의 원문을 아직 안 받아서 채널 구성을 모릅니다 — 값을 직접 확인하세요.'
+    : c.hasMP
+      ? (c.ratio
+          ? `이 상품은 로켓그로스 ${c.rg.toLocaleString()}원 · 판매자배송 ${c.mp.toLocaleString()}원으로`
+            + ` 운영 중입니다 (${c.ratio.toFixed(2)}배). 아래 판매자배송 칸을 이 비율로 채워드립니다 — 확인하고 고치세요.`
+          : '이 상품은 판매자배송도 함께 운영합니다. 판매자배송 가격을 직접 입력하세요.')
+      : '이 상품은 로켓그로스 전용입니다 — 판매자배송 가격은 받지 않습니다.';
 }
 
 /* 로켓그로스 가격을 치면 판매자배송 칸을 원본 비율로 채워준다.
@@ -237,7 +270,7 @@ function pnRenderItems() {
   $('#pnItems').innerHTML = Array.from({ length: PN.rows }, (_, i) => pnItemRow(i + 1)).join('');
 }
 
-$('#pnAddItem').onclick = () => { PN.rows++; pnRenderItems(); };
+$('#pnAddItem').onclick = () => { PN.rows++; pnRenderItems(); pnApplyChannels(); };
 
 $('#pnItems').addEventListener('input', (ev) => {
   const row = ev.target.closest('[data-pn-item]');
@@ -248,11 +281,7 @@ $('#pnItems').addEventListener('input', (ev) => {
 
 /* 복제 원본을 바꾸면 비율이 달라진다 — 사람이 안 건드린 칸을 다시 제안한다. */
 $('#pnSource').addEventListener('change', () => {
-  const r = pnSourcePriceRatio();
-  $('#pnSourceHint').textContent = r
-    ? `이 상품은 로켓그로스 ${r.rg.toLocaleString()}원 · 판매자배송 ${r.mp.toLocaleString()}원으로 운영 중입니다`
-      + ` (${r.ratio.toFixed(2)}배). 아래 판매자배송 칸을 이 비율로 채워드립니다 — 확인하고 고치세요.`
-    : '이 상품의 가격 정보를 아직 못 읽었습니다. 판매자배송 가격을 직접 입력하세요.';
+  pnApplyChannels();
   $$('#pnItems [data-pn-item]').forEach((row) => pnSuggestMarketPrice(row));
 });
 
@@ -279,8 +308,12 @@ $('#peNewBtn').onclick = () => {
   $('#pnDetailPreview').innerHTML = '';
   $('#pnMsg').textContent = '';
   PN.rows = 1;
+  PN.draftId = null;
+  PN.loaded = null;
   pnRenderItems();
+  pnApplyChannels();
   $('#prodNewModal').classList.remove('hidden');
+  pnLoadDrafts();
 };
 
 $$('#prodNewModal [data-close]').forEach((b) => {
@@ -295,109 +328,236 @@ $('#pnDetailImages').addEventListener('change', () => {
     : '';
 });
 
-$('#pnSave').onclick = async () => {
+/* 폼 → 저장할 값. **초안 저장과 등록이 같은 함수를 쓴다** —
+   두 벌로 만들면 "초안에서는 되는데 등록하면 다르다"가 생긴다. */
+function pnCollect(strict) {
   const src = $('#pnSource').value;
   const name = ($('#pnProductName').value || '').trim();
-  if (!src) { $('#pnMsg').textContent = '복제할 상품을 고르세요.'; return; }
-  if (!name) { $('#pnMsg').textContent = '상품명을 입력하세요.'; return; }
+  if (!name) return { err: '상품명을 입력하세요.' };
+  if (strict && !src) return { err: '복제할 상품을 고르세요.' };
 
-  const rows = $$('#pnItems [data-pn-item]');
   const items = [];
-  for (const row of rows) {
+  for (const row of $$('#pnItems [data-pn-item]')) {
     const nm = (row.querySelector('.pn-item-name').value || '').trim();
     const pr = Number(row.querySelector('.pn-item-price').value);
     const mp = Number(row.querySelector('.pn-item-mprice').value);
-    if (!nm) { $('#pnMsg').textContent = '옵션명을 모두 입력하세요.'; return; }
-    if (!Number.isFinite(pr) || pr <= 0) { $('#pnMsg').textContent = '로켓그로스 판매가를 모두 입력하세요.'; return; }
-    if (!Number.isFinite(mp) || mp <= 0) { $('#pnMsg').textContent = '판매자배송 판매가를 모두 입력하세요.'; return; }
-    items.push({ el: row, itemName: nm, salePrice: Math.round(pr), marketplaceSalePrice: Math.round(mp) });
+    /* 판매자배송 칸이 숨겨져 있으면(원본이 로켓그로스 전용) 요구하지 않는다 —
+       없는 채널의 값을 강요하면 등록 자체를 못 한다. */
+    const needMp = !row.querySelector('.pn-item-mprice').closest('.field').classList.contains('hidden');
+    if (strict) {
+      if (!nm) return { err: '옵션명을 모두 입력하세요.' };
+      if (!Number.isFinite(pr) || pr <= 0) return { err: '로켓그로스 판매가를 모두 입력하세요.' };
+      if (needMp && (!Number.isFinite(mp) || mp <= 0)) return { err: '판매자배송 판매가를 모두 입력하세요.' };
+    }
+    items.push({ el: row, itemName: nm,
+                 salePrice: Number.isFinite(pr) && pr > 0 ? Math.round(pr) : null,
+                 marketplaceSalePrice: Number.isFinite(mp) && mp > 0 ? Math.round(mp) : null });
   }
+  const num = (id) => { const v = ($(id).value || '').trim(); return v === '' ? null : Number(v); };
+  return {
+    src, name, items,
+    tags: ($('#pnSearchTags').value || '').split(',').map((t) => t.trim()).filter(Boolean),
+    requested: $('#pnRequested').checked === true,
+    decision: {
+      expected_monthly_qty: num('#pnExpQty'),
+      expected_unit_cost_krw: num('#pnExpCost'),
+      expected_sell_price: num('#pnExpPrice'),
+      expected_margin_rate: num('#pnExpMargin'),
+      reason_memo: ($('#pnReason').value || '').trim() || null
+    }
+  };
+}
 
-  /* 되돌리기 어려운 일이라 한 번 더 묻는다. 등록되면 지우기가 까다롭다. */
-  const summary = items.map((it) =>
-    `  · ${it.itemName} — 로켓그로스 ${it.salePrice.toLocaleString()}원 / 판매자배송 ${it.marketplaceSalePrice.toLocaleString()}원`
+/* 초안 저장. **쿠팡에는 아무것도 보내지 않는다.**
+   이미지는 지금 올린다 — 파일은 나중에 다시 못 집어오기 때문이다(파일 입력은
+   초안을 다시 열었을 때 비어 있다). 올려두면 URL로 남아 초안에 실린다. */
+$('#pnDraftSave').onclick = async () => {
+  const f = pnCollect(false);
+  if (f.err) { $('#pnMsg').textContent = f.err; return; }
+  const btn = $('#pnDraftSave');
+  btn.disabled = true;
+  $('#pnMsg').textContent = '초안을 저장하는 중…';
+  try {
+    const payload = await pnBuildPayload(f);
+    await api('product_drafts', {
+      method: 'POST',
+      body: {
+        name: f.name,
+        source_seller_product_id: f.src || null,
+        payload,
+        decision: f.decision,
+        created_by: AUTH.userId || null
+      }
+    });
+    $('#pnMsg').textContent = '초안으로 저장했습니다 — 쿠팡에는 아무것도 보내지 않았습니다.';
+    await pnLoadDrafts();
+  } catch (e) {
+    $('#pnMsg').textContent = `초안 저장 실패: ${e.message}`;
+  } finally { btn.disabled = false; }
+};
+
+/* 이미지 업로드까지 끝낸 payload 를 만든다. 초안·등록이 공유한다. */
+async function pnBuildPayload(f) {
+  const folder = 'new/' + kstDateStr(new Date());
+  const detailFiles = Array.from($('#pnDetailImages').files || []);
+  let contents;
+  if (detailFiles.length) {
+    const urls = [];
+    for (const file of detailFiles) urls.push(await uploadProductImage(file, folder));
+    contents = urls.map((u) => ({
+      contentsType: 'IMAGE_NO_SPACE',
+      contentDetails: [{ content: u, detailType: 'IMAGE' }]
+    }));
+  }
+  const items = [];
+  for (const it of f.items) {
+    const one = { itemName: it.itemName, salePrice: it.salePrice,
+                  marketplaceSalePrice: it.marketplaceSalePrice };
+    if (f.tags.length) one.searchTags = f.tags;
+    const file = it.el ? it.el.querySelector('.pn-item-image').files[0] : null;
+    if (file) {
+      const u = await uploadProductImage(file, folder);
+      one.images = [{ imageOrder: 0, imageType: 'REPRESENTATION', vendorPath: u }];
+    } else if (it.images) {
+      one.images = it.images;          // 초안에서 불러온 것
+    }
+    if (contents) one.contents = contents;
+    else if (it.contents) one.contents = it.contents;
+    items.push(one);
+  }
+  return {
+    source_seller_product_id: f.src || null,
+    product: { sellerProductName: f.name, displayProductName: f.name },
+    items,
+    requested: f.requested
+  };
+}
+
+/* 저장해둔 초안 목록. 등록 모달을 열 때마다 새로 읽는다. */
+async function pnLoadDrafts() {
+  const box = $('#pnDraftBox');
+  if (!box) return;
+  try {
+    const rows = await api('product_drafts?select=*&status=eq.draft&order=updated_at.desc&limit=20') || [];
+    if (!rows.length) { box.innerHTML = ''; return; }
+    box.innerHTML = '<h4 class="sku-sec">저장해둔 초안</h4>'
+      + rows.map((d) => `<div style="display:flex;gap:6px;align-items:center;margin:4px 0">
+          <span style="flex:1">${esc(d.name)}
+            <span class="muted sm">옵션 ${((d.payload || {}).items || []).length}개 ·
+            ${esc(String(d.updated_at).slice(0, 10))}</span></span>
+          <button class="btn btn-sm" data-draft-load="${esc(d.id)}">불러오기</button>
+          <button class="btn btn-sm" data-draft-drop="${esc(d.id)}">삭제</button>
+        </div>`).join('');
+  } catch (e) {
+    box.innerHTML = '<p class="muted sm">초안 목록을 불러오지 못했습니다 '
+      + '(마이그레이션 030 미실행일 수 있습니다).</p>';
+  }
+}
+
+$('#pnDraftBox').addEventListener('click', async (ev) => {
+  const load = ev.target.closest('[data-draft-load]');
+  const drop = ev.target.closest('[data-draft-drop]');
+  if (load) { await pnFillFromDraft(load.dataset.draftLoad); return; }
+  if (drop) {
+    if (!confirm('이 초안을 삭제할까요?')) return;
+    try {
+      await api(`product_drafts?id=eq.${drop.dataset.draftDrop}`,
+        { method: 'PATCH', body: { status: 'discarded' } });
+      await pnLoadDrafts();
+    } catch (e) { $('#pnMsg').textContent = `삭제 실패: ${e.message}`; }
+  }
+});
+
+/* 초안을 폼에 되채운다. **파일 입력은 되채울 수 없다**(브라우저 보안) —
+   대신 이미 올려둔 이미지 URL이 payload 에 있으므로 그대로 쓴다. */
+async function pnFillFromDraft(id) {
+  try {
+    const rows = await api(`product_drafts?select=*&id=eq.${id}`) || [];
+    const d = rows[0];
+    if (!d) return;
+    PN.draftId = d.id;
+    PN.loaded = d.payload || {};
+    const p = PN.loaded;
+    $('#pnSource').value = d.source_seller_product_id || '';
+    $('#pnProductName').value = (p.product && p.product.sellerProductName) || d.name || '';
+    const first = (p.items || [])[0] || {};
+    $('#pnSearchTags').value = (first.searchTags || []).join(', ');
+    $('#pnRequested').checked = p.requested === true;
+    const dec = d.decision || {};
+    $('#pnExpQty').value = dec.expected_monthly_qty ?? '';
+    $('#pnExpCost').value = dec.expected_unit_cost_krw ?? '';
+    $('#pnExpPrice').value = dec.expected_sell_price ?? '';
+    $('#pnExpMargin').value = dec.expected_margin_rate ?? '';
+    $('#pnReason').value = dec.reason_memo || '';
+
+    PN.rows = Math.max(1, (p.items || []).length);
+    pnRenderItems();
+    $$('#pnItems [data-pn-item]').forEach((row, i) => {
+      const it = (p.items || [])[i] || {};
+      row.querySelector('.pn-item-name').value = it.itemName || '';
+      row.querySelector('.pn-item-price').value = it.salePrice ?? '';
+      const m = row.querySelector('.pn-item-mprice');
+      m.value = it.marketplaceSalePrice ?? '';
+      if (m.value) m.dataset.touched = '1';   // 불러온 값을 자동 제안이 덮지 않게
+    });
+    $('#pnMsg').textContent = '초안을 불러왔습니다. 이미지는 저장해둔 것이 그대로 쓰입니다.';
+  } catch (e) {
+    $('#pnMsg').textContent = `초안을 불러오지 못했습니다: ${e.message}`;
+  }
+}
+
+$('#pnSave').onclick = async () => {
+  /* 초안 저장과 **같은 수집 함수**를 쓴다 — 두 벌로 만들면
+     "초안에서는 되는데 등록하면 다르다"가 생긴다. strict=true 로 필수값을 강제한다. */
+  const f = pnCollect(true);
+  if (f.err) { $('#pnMsg').textContent = f.err; return; }
+
+  /* 되돌리기 어려운 일이라 한 번 더 묻는다. 등록되면 지우기가 까다롭다.
+     확인 창에 **두 채널 가격을 옵션별로 다 보여준다** — 눈으로 볼 마지막 자리다. */
+  const summary = f.items.map((it) =>
+    `  · ${it.itemName} — 로켓그로스 ${Number(it.salePrice).toLocaleString()}원`
+    + (it.marketplaceSalePrice ? ` / 판매자배송 ${Number(it.marketplaceSalePrice).toLocaleString()}원` : '')
   ).join('\n');
-  if (!confirm(`"${name}" 을(를) 아래 ${items.length}개 옵션으로 등록합니다.\n\n${summary}\n\n`
+  if (!confirm(`"${f.name}" 을(를) 아래 ${f.items.length}개 옵션으로 등록합니다.\n\n${summary}\n\n`
       + `등록은 되돌리기 어렵습니다. 진행할까요?`)) return;
 
   const btn = $('#pnSave');
   btn.disabled = true;
   $('#pnMsg').textContent = '이미지를 올리는 중…';
   try {
-    const tags = ($('#pnSearchTags').value || '').split(',')
-      .map((t) => t.trim()).filter(Boolean);
-
-    /* 이미지는 웹이 올린다 — 쿠팡은 공개 URL을 받아 스스로 내려받는다(정찰 확인).
-       워커가 올리게 하면 파일을 큐에 실어 보내야 해서 훨씬 복잡해진다. */
-    const detailFiles = Array.from($('#pnDetailImages').files || []);
-    let contents;
-    if (detailFiles.length) {
-      const urls = [];
-      /* 두 번째 인자는 Storage 경로의 폴더다. 신규 등록은 아직 SKU가 없으므로
-             'new/날짜' 로 모아둔다 — 나중에 어느 등록 건의 이미지인지 찾을 수 있다. */
-          const folder = 'new/' + kstDateStr(new Date());
-          for (const f of detailFiles) urls.push(await uploadProductImage(f, folder));
-      contents = urls.map((u) => ({
-        contentsType: 'IMAGE_NO_SPACE',
-        contentDetails: [{ content: u, detailType: 'IMAGE' }]
-      }));
-    }
-
-    const payloadItems = [];
-    for (const it of items) {
-      const f = it.el.querySelector('.pn-item-image').files[0];
-      const one = { itemName: it.itemName, salePrice: it.salePrice,
-                    marketplaceSalePrice: it.marketplaceSalePrice };
-      if (tags.length) one.searchTags = tags;
-      if (f) {
-        const u = await uploadProductImage(f, 'new/' + kstDateStr(new Date()));
-        one.images = [{ imageOrder: 0, imageType: 'REPRESENTATION', vendorPath: u }];
-      }
-      if (contents) one.contents = contents;
-      payloadItems.push(one);
-    }
-
-    $('#pnMsg').textContent = '등록 요청을 넣는 중…';
+    const payload = await pnBuildPayload(f);
 
     /* **판단을 먼저 남긴다.** 등록이 실패해도 "이걸 하려 했다"는 기록은 남아야 한다.
        성공하면 워커가 seller_product_id 를 채워 판단과 상품을 잇는다. */
     let decisionId = null;
-    const anyExpected = ['#pnExpQty', '#pnExpCost', '#pnExpPrice', '#pnExpMargin', '#pnReason']
-      .some((id) => ($(id).value || '').trim() !== '');
+    const dec = f.decision || {};
+    const anyExpected = Object.keys(dec).some((k) => dec[k] !== null && dec[k] !== '');
     if (anyExpected) {
       try {
-        const num = (id) => { const v = ($(id).value || '').trim(); return v === '' ? null : Number(v); };
         const made = await api('sourcing_decisions', {
           method: 'POST',
           headers: { Prefer: 'return=representation' },
-          body: {
-            method: 'manual_register',
-            expected_monthly_qty: num('#pnExpQty'),
-            expected_unit_cost_krw: num('#pnExpCost'),
-            expected_sell_price: num('#pnExpPrice'),
-            expected_margin_rate: num('#pnExpMargin'),
-            reason_memo: ($('#pnReason').value || '').trim() || null
-          }
+          body: Object.assign({ method: 'manual_register' }, dec)
         });
         if (Array.isArray(made) && made[0]) decisionId = made[0].id;
       } catch (e) { /* 판단 기록 실패로 등록을 막지 않는다 */ }
     }
+    payload.sourcing_decision_id = decisionId;
 
+    $('#pnMsg').textContent = '등록 요청을 넣는 중…';
     await api('coupang_write_queue', {
       method: 'POST',
-      body: {
-        kind: 'product_create',
-        payload: {
-          source_seller_product_id: src,
-          product: { sellerProductName: name, displayProductName: name },
-          items: payloadItems,
-          requested: $('#pnRequested').checked === true,
-          sourcing_decision_id: decisionId
-        },
-        requested_by: AUTH.userId || null
-      }
+      body: { kind: 'product_create', payload, requested_by: AUTH.userId || null }
     });
 
+    /* 초안에서 올린 것이면 그 초안을 닫는다 — 같은 걸 두 번 올리지 않도록. */
+    if (PN.draftId) {
+      try {
+        await api(`product_drafts?id=eq.${PN.draftId}`,
+          { method: 'PATCH', body: { status: 'submitted' } });
+      } catch (e) { /* 초안 정리 실패로 등록을 되돌리지 않는다 */ }
+      PN.draftId = null;
+    }
     $('#pnMsg').textContent = '등록을 요청했습니다 — VPS가 쿠팡에 올립니다(보통 몇 초).';
     setTimeout(() => $('#prodNewModal').classList.add('hidden'), 2500);
   } catch (e) {

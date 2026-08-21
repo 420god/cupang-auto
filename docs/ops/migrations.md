@@ -33,6 +33,7 @@ RLS 패턴은 전부 같다 — `read_for_authenticated`(select, 전체) + `writ
 | 027 | 지표 단위를 API 기준으로 교정 + 유입경로 + 동기화 로그 |
 | 028 | v_product_experiments — 변경 1건 = 1행, 전후 7일 지표 + 교란 요인 |
 | 029 | 신규 상품 등록(복제 기반) + sourcing_decisions 연결 + 카테고리 메타 캐시 |
+| 030 | product_drafts — 등록 전 초안 |
 
 ## 설계에서 꼭 알아야 할 것
 

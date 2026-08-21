@@ -1135,6 +1135,10 @@
       <button class="icon-btn" data-close aria-label="닫기">✕</button>
     </div>
     <div class="modal-body">
+      <!-- 저장해둔 초안이 있으면 먼저 보여준다. 등록은 되돌릴 수 없어서
+           "만들어두고 나중에 확인하고 올린다"가 기본 흐름이 되어야 한다. -->
+      <div id="pnDraftBox"></div>
+
       <h4 class="sku-sec">① 복제할 기존 상품</h4>
       <label class="field"><span>이 상품의 설정을 그대로 가져옵니다</span>
         <select id="pnSource"></select></label>
@@ -1183,7 +1187,10 @@
     <div class="modal-foot">
       <span class="muted sm" id="pnMsg"></span>
       <button class="btn" data-close>취소</button>
-      <button id="pnSave" class="btn btn-primary">등록 요청</button>
+      <!-- **초안 저장이 기본 동작이다.** 등록은 되돌릴 수 없으므로 한 번 세워두고
+           확인한 뒤 올리는 흐름을 권한다. -->
+      <button id="pnDraftSave" class="btn">초안으로 저장</button>
+      <button id="pnSave" class="btn btn-primary">쿠팡에 등록 요청</button>
     </div>
   </div>
 </div>
