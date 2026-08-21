@@ -1,0 +1,270 @@
+/* ============================================================
+   87-listing-price.js — 옵션·가격
+   ------------------------------------------------------------
+   **이 화면은 값을 처음 만드는 자리가 아니다.** 옵션 구성·판매가·1688 단가는
+   원래 소싱 단계에서 판단이 끝나는 것들이다(사용자 확인 2026-08-21).
+   다만 지금 소싱 화면에 그 값을 담을 칸이 아직 없어서, 당분간 여기서 직접 넣는다.
+   소싱 쪽이 완성되면 같은 칸이 price_source='sourcing' 으로 채워져 들어오고
+   사람은 확인만 하면 된다 — 표(031)는 이미 그 모양이다.
+
+   **원가는 추정치다**(R-05). 여기 적는 1688 단가·개당 원가는 소싱 시점의 감이고,
+   확정 원가는 발주 후 구매대행 청구서에서 온다(inventory_lots). 확정값이 나와도
+   이 값을 덮지 않는다 — 덮으면 "내 추정이 얼마나 틀렸나"를 영영 못 본다.
+
+   파일 순서 주의(D-17): 86 뒤, 90 앞. 86의 lstFetchOne·lstStepBar 를 쓴다.
+   ============================================================ */
+
+const LP = { p: null, items: [], removed: [], seq: 0 };
+
+const LP_SIZES = [['MINI', '극소형'], ['SMALL', '소형'], ['MEDIUM', '중형'],
+                  ['LARGE1', '대형1'], ['LARGE2', '대형2'], ['XLARGE', '특대형']];
+
+async function loadListingPrice() {
+  /* 마진 계산에 필요한 상태(수수료율·입출고비 표·설정)를 기다린다.
+     안 기다리면 첫 렌더가 전부 "수수료 정보 없음"으로 굳는다 — 2026-08-13에
+     소싱 탭에서 실제로 났던 버그다. */
+  const ready = state.readyForMargins || Promise.resolve();
+
+  let rows;
+  try {
+    rows = await lstFetchOpenProjects();
+  } catch (e) {
+    const miss = /PGRST205|does not exist|Not Found|404/i.test(e.message);
+    $('#lpItems').innerHTML = `<p class="muted">${miss
+      ? '아직 <b>db/migrations/031_listing_pipeline.sql</b> 을 실행하지 않았습니다.'
+      : '불러오지 못했습니다: ' + esc(e.message)}</p>`;
+    $('#lpSteps').innerHTML = '';
+    return;
+  }
+
+  lstFillPicker($('#lpPicker'), rows);
+  await ready;
+  await lpLoadCurrent();
+}
+
+async function lpLoadCurrent() {
+  const id = LISTING.currentId;
+  const box = $('#lpItems');
+  if (!id) {
+    box.innerHTML = '<p class="muted">준비 중인 상품이 없습니다 — '
+      + '소싱 → 즐겨찾기에서 [등록 준비]를 누르거나, 상품등록 화면에서 새로 만드세요.</p>';
+    $('#lpSteps').innerHTML = '';
+    $('#lpSummary').textContent = '—';
+    return;
+  }
+  box.innerHTML = '<div class="loader"><div class="spinner"></div>불러오는 중…</div>';
+
+  const { p, items, prog } = await lstFetchOne(id);
+  LP.p = p;
+  LP.items = items;
+  LP.removed = [];
+
+  $('#lpSteps').innerHTML = lstStepBar(prog, 'price');
+  $('#lpSummary').textContent = (p && p.product_name)
+    ? `${p.product_name} · 옵션 ${items.length}개`
+    : `옵션 ${items.length}개`;
+
+  /* 카테고리가 아직이면 마진을 못 낸다. **그 사실을 먼저 말한다**(R-15) —
+     0원이나 빈칸으로 두면 사람이 "마진이 0인가 보다"라고 읽는다. */
+  const cat = p && p.display_category_code;
+  $('#lpHint').innerHTML = cat
+    ? `카테고리 <b>${esc(p.category_path || cat)}</b> 기준으로 예상 마진을 계산합니다.`
+    : '카테고리를 아직 안 정해서 <b>예상 마진을 계산할 수 없습니다</b> — '
+      + '판매수수료와 입출고비가 카테고리에서 나옵니다. 카테고리 화면에서 정한 뒤 다시 보세요.';
+
+  box.innerHTML = items.map((it) => lpItemCard(it)).join('');
+  $$('#lpItems [data-lp]').forEach((row) => lpCalc(row));
+
+  const last = await lstLastNote(id, 'price');
+  $('#lpNote').value = '';
+  $('#lpNoteLast').textContent = last
+    ? `지난번 메모(${String(last.created_at).slice(0, 10)}): ${last.note || ''}`
+    : '';
+}
+
+function lpItemCard(it) {
+  const k = 'lp' + (LP.seq++);
+  const v = (x) => (x == null ? '' : esc(String(x)));
+  return `<div class="lp-card" data-lp="${k}" data-id="${it.id ? esc(it.id) : ''}">
+    <div class="lp-card-head">
+      <input class="lp-name" type="text" placeholder="옵션명 (예: 레드 1세트)" value="${v(it.item_name)}" />
+      <button class="btn btn-sm btn-ghost lp-del" title="이 옵션을 지웁니다">삭제</button>
+    </div>
+
+    <div class="two">
+      <label class="field"><span>로켓그로스 판매가 (원)</span>
+        <input class="lp-price" type="number" min="0" step="10" value="${v(it.sale_price)}" /></label>
+      <label class="field"><span>판매자배송 판매가 (원) <span class="muted">없으면 비움</span></span>
+        <input class="lp-mprice" type="number" min="0" step="10" value="${v(it.marketplace_sale_price)}" /></label>
+    </div>
+
+    <div class="two">
+      <label class="field"><span>크기 등급 <span class="muted">입출고비 구간</span></span>
+        <select class="lp-size">${LP_SIZES.map(([code, name]) =>
+          `<option value="${code}"${(it.size_type || settings.size) === code ? ' selected' : ''}>${name}</option>`).join('')}</select></label>
+      <label class="field"><span>MOQ (최소주문수량)</span>
+        <input class="lp-moq" type="number" min="1" value="${v(it.supplier_moq)}" /></label>
+    </div>
+
+    <div class="two">
+      <!-- 추정치임을 칸 이름에 적어둔다. 나중에 확정 원가와 나란히 볼 때 헷갈리면 안 된다 -->
+      <label class="field"><span>1688 단가 (CNY) <span class="muted">추정</span></span>
+        <input class="lp-cny" type="number" min="0" step="0.01" value="${v(it.supplier_price_cny)}" /></label>
+      <label class="field"><span>추정 개당 원가 (원) <span class="muted">비우면 단가×환율</span></span>
+        <input class="lp-cost" type="number" min="0" value="${v(it.est_unit_cost_krw)}" /></label>
+    </div>
+
+    <p class="sm lp-margin">—</p>
+
+    <details class="lp-more"${it.supplier_offer_url ? ' open' : ''}>
+      <summary>1688 공급처</summary>
+      <label class="field"><span>상품 링크</span>
+        <input class="lp-url" type="url" placeholder="https://detail.1688.com/offer/..."
+               value="${v(it.supplier_offer_url)}" /></label>
+      <div class="two">
+        <label class="field"><span>옵션1 (중국어)</span>
+          <input class="lp-cn1" type="text" value="${v(it.supplier_option1_cn)}" /></label>
+        <label class="field"><span>옵션2 (중국어)</span>
+          <input class="lp-cn2" type="text" value="${v(it.supplier_option2_cn)}" /></label>
+      </div>
+      <label class="field"><span>판매자 ID</span>
+        <input class="lp-seller" type="text" value="${v(it.supplier_seller_id)}" /></label>
+    </details>
+  </div>`;
+}
+
+/* 예상 마진. **계산 못 하는 이유를 말한다** — 소싱 탭과 같은 규칙이다.
+   전역 가정치로 때우지 않는다(수수료 정보 없음이면 그렇게 쓴다). */
+function lpCalc(row) {
+  const el = row.querySelector('.lp-margin');
+  const price = Number(row.querySelector('.lp-price').value);
+  const cat = LP.p && LP.p.display_category_code;
+
+  if (!Number.isFinite(price) || price <= 0) { el.textContent = '판매가를 넣으면 예상 마진을 계산합니다'; el.className = 'sm lp-margin muted'; return; }
+  if (!cat) { el.textContent = '카테고리 미정 — 예상 마진 계산 불가'; el.className = 'sm lp-margin muted'; return; }
+
+  const commission = commissionFor(cat);
+  if (commission === null) {
+    el.textContent = '수수료 정보 없음 — 이 카테고리는 요율이 매칭되지 않았습니다';
+    el.className = 'sm lp-margin muted';
+    return;
+  }
+
+  const size = row.querySelector('.lp-size').value || settings.size;
+  const fee = feeFor(cat, size, price);
+  const costKrw = Number(row.querySelector('.lp-cost').value) || null;
+  const costCny = Number(row.querySelector('.lp-cny').value) || null;
+
+  const c = calcMargin({ price, commission, fulfillment: fee, costKrw, costCny });
+  if (!c) { el.textContent = '계산 불가'; el.className = 'sm lp-margin muted'; return; }
+
+  if (c.margin === null) {
+    el.textContent = `수수료 ${won(c.commission)} · 입출고비 ${fee == null ? '표 없음' : won(c.fulfillment)}`
+      + ' · 원가를 넣으면 마진이 나옵니다';
+    el.className = 'sm lp-margin muted';
+    return;
+  }
+
+  /* 입출고비 표가 없으면 0으로 계산된다 — 그러면 마진이 실제보다 **좋게** 나온다.
+     조용히 넘기면 잘못된 판단으로 이어지므로 표시에 붙인다. */
+  const feeTxt = fee == null ? '입출고비 표 없음(0으로 계산)' : `입출고비 ${won(c.fulfillment)}`;
+  el.className = 'sm lp-margin ' + (c.rate >= 0 ? 'pos' : 'neg');
+  el.textContent = `예상 마진 ${won(c.margin)} (${c.rate}%) · 수수료 ${won(c.commission)}`
+    + ` · ${feeTxt} · 원가 ${won(c.cost)}${costKrw === null && costCny ? ` (단가×${settings.rate})` : ''}`
+    + ` · 출고·작업비 ${won(c.shipWork)}`;
+}
+
+/* 값이 바뀌면 그 줄만 다시 계산한다 */
+$('#lpItems').addEventListener('input', (ev) => {
+  const row = ev.target.closest('[data-lp]');
+  if (row) lpCalc(row);
+});
+$('#lpItems').addEventListener('change', (ev) => {
+  const row = ev.target.closest('[data-lp]');
+  if (row) lpCalc(row);
+});
+
+/* 삭제는 화면에서만 빼고, 저장할 때 실제로 지운다 — 실수로 누른 걸 되돌릴 수 있게 */
+$('#lpItems').addEventListener('click', (ev) => {
+  if (!ev.target.closest('.lp-del')) return;
+  const row = ev.target.closest('[data-lp]');
+  const id = row.dataset.id;
+  if ($$('#lpItems [data-lp]').length <= 1) {
+    toast('옵션은 최소 하나 필요합니다');
+    return;
+  }
+  if (id) LP.removed.push(id);
+  row.remove();
+});
+
+$('#lpAddItem').onclick = () => {
+  $('#lpItems').insertAdjacentHTML('beforeend', lpItemCard({}));
+  const rows = $$('#lpItems [data-lp]');
+  lpCalc(rows[rows.length - 1]);
+};
+
+$('#lpPicker').addEventListener('change', async (ev) => {
+  lstSetCurrent(ev.target.value);
+  await lpLoadCurrent();
+});
+
+/* ---------- 저장 ---------- */
+$('#lpSave').onclick = async () => {
+  if (!LP.p) return;
+  const btn = $('#lpSave');
+  const msg = $('#lpMsg');
+  btn.disabled = true;
+  msg.classList.remove('hidden');
+  msg.textContent = '저장 중…';
+
+  try {
+    const rows = $$('#lpItems [data-lp]');
+    const numOrNull = (el) => { const v = Number(el.value); return el.value === '' || !Number.isFinite(v) ? null : v; };
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const body = {
+        position: i,
+        item_name: (row.querySelector('.lp-name').value || '').trim() || null,
+        sale_price: numOrNull(row.querySelector('.lp-price')),
+        marketplace_sale_price: numOrNull(row.querySelector('.lp-mprice')),
+        size_type: row.querySelector('.lp-size').value || null,
+        supplier_moq: numOrNull(row.querySelector('.lp-moq')),
+        supplier_price_cny: numOrNull(row.querySelector('.lp-cny')),
+        est_unit_cost_krw: numOrNull(row.querySelector('.lp-cost')),
+        supplier_offer_url: (row.querySelector('.lp-url').value || '').trim() || null,
+        supplier_option1_cn: (row.querySelector('.lp-cn1').value || '').trim() || null,
+        supplier_option2_cn: (row.querySelector('.lp-cn2').value || '').trim() || null,
+        supplier_seller_id: (row.querySelector('.lp-seller').value || '').trim() || null
+      };
+      if (row.dataset.id) {
+        await api(`listing_project_items?id=eq.${row.dataset.id}`, {
+          method: 'PATCH', headers: { prefer: 'return=minimal' }, body
+        });
+      } else {
+        body.project_id = LP.p.id;
+        const [made] = await api('listing_project_items', {
+          method: 'POST', headers: { prefer: 'return=representation' }, body
+        });
+        row.dataset.id = made.id;
+      }
+    }
+
+    for (const id of LP.removed) {
+      await api(`listing_project_items?id=eq.${id}`, { method: 'DELETE', headers: { prefer: 'return=minimal' } });
+    }
+    LP.removed = [];
+
+    /* 근거는 적었을 때만 남긴다. 빈 행을 쌓으면 나중에 읽을 때 잡음이 된다. */
+    const note = ($('#lpNote').value || '').trim();
+    if (note) await lstAddNote(LP.p.id, 'price', note);
+
+    msg.textContent = '저장했습니다.';
+    toast('저장했습니다');
+    await lpLoadCurrent();
+  } catch (e) {
+    msg.textContent = '저장 실패: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};

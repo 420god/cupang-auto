@@ -109,6 +109,10 @@
         <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
         <span>상품등록</span>
         </button>
+        <button class="nav-item" data-page="listing-price">
+        <svg viewBox="0 0 24 24"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+        <span>옵션·가격</span>
+        </button>
       </div>
       <div class="nav-group">
         <div class="nav-group-label">상품</div>
@@ -469,6 +473,37 @@
             <tbody id="lstRows"></tbody>
           </table>
         </div>
+      </section>
+
+      <!-- ── 옵션·가격 ──
+           옵션 구성·판매가·1688 단가는 원래 소싱에서 판단이 끝나는 값이다.
+           소싱 화면에 그 칸이 아직 없어서 당분간 여기서 직접 넣는다(사용자 확인 2026-08-21).
+           **여기 원가는 전부 추정치다** — 확정 원가는 청구서에서 온다(R-05). -->
+      <section id="page-listing-price" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>옵션·가격</h2>
+            <p class="muted sm" id="lpSummary">—</p>
+          </div>
+          <div class="page-actions">
+            <select id="lpPicker" class="ship-filter"></select>
+            <button id="lpSave" class="btn btn-sm btn-primary">저장</button>
+          </div>
+        </div>
+
+        <div class="lst-chips" id="lpSteps" style="margin-bottom:10px"></div>
+        <div class="hint-box" id="lpHint"></div>
+
+        <div id="lpItems"></div>
+        <button id="lpAddItem" class="btn btn-sm">+ 옵션 추가</button>
+
+        <label class="field" style="margin-top:16px">
+          <span>왜 이 구성·이 가격인가 <span class="muted sm">— 나중에 실측과 대조합니다</span></span>
+          <textarea id="lpNote" rows="2"
+            placeholder="예: 경쟁사 최저가 12,900원이라 11,900원으로 진입. 1688 단가는 3개 판매자 중 중간값"></textarea>
+        </label>
+        <p class="muted sm" id="lpNoteLast"></p>
+        <div id="lpMsg" class="msg hidden"></div>
       </section>
 
       <!-- ── 카테고리 ── -->
@@ -1377,6 +1412,7 @@
 <script src="js/80-products.js"></script>
 <script src="js/85-product-edit.js"></script>
 <script src="js/86-listing.js"></script>
+<script src="js/87-listing-price.js"></script>
 <script src="js/90-boot.js"></script>
 </body>
 </html>

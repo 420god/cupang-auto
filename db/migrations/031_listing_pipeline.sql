@@ -181,6 +181,11 @@ create table if not exists listing_project_items (
   -- 읽은 값을 통째로 넣어두면 등록 시 빠뜨리지 않는다.
   sku_info_extra        jsonb,
 
+  -- 입출고비 요금 구간을 고르는 등급(MINI·SMALL·MEDIUM·LARGE1·LARGE2·XLARGE).
+  -- **mm 치수에서 자동으로 계산하지 않는다** — 쿠팡의 등급 기준을 아직 실물로 확인
+  -- 못 했다(R-14). 사람이 고르고, 비면 설정의 기본 등급을 쓴다.
+  size_type             text,
+
   -- ── 공급처 (1688) ──
   -- **sku_suppliers(015)와 같은 이름**을 쓴다. 등록 후 SKU 가 생기면 1:1로 복사한다.
   -- 사용자 결정: 소싱 단계의 데이터가 여기로 계속 흘러 들어와 쌓인다.
@@ -371,6 +376,8 @@ end $$;
 -- 이 파일의 이전 판을 먼저 돌린 경우를 위해 따로 얹는다(R-02 — 항상 멱등하게).
 alter table listing_project_items
   add column if not exists est_unit_cost_krw numeric;
+alter table listing_project_items
+  add column if not exists size_type text;
 alter table listing_project_items
   add column if not exists price_source text not null default 'manual';
 do $$

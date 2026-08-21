@@ -265,3 +265,73 @@ $('#favList').addEventListener('click', async (ev) => {
       : '만들지 못했습니다: ' + e.message);
   } finally { btn.disabled = false; }
 });
+
+/* ============================================================
+   작업 화면들이 공유하는 것 — "지금 작업 중인 준비 건"
+   ------------------------------------------------------------
+   대표이미지·상세페이지·상품명·카테고리·물류 화면이 전부 같은 준비 건을 놓고
+   일한다. 화면마다 따로 고르게 하면 "어느 상품을 편집 중인지"를 사람이 계속
+   확인해야 한다. 그래서 고른 것을 여기 한 곳에 두고 localStorage 에 남긴다.
+   ============================================================ */
+
+LISTING.currentId = localStorage.getItem('listing_current') || '';
+
+function lstSetCurrent(id) {
+  LISTING.currentId = id || '';
+  localStorage.setItem('listing_current', LISTING.currentId);
+}
+
+/* 아직 등록 전인 것만 고를 수 있게 한다 — 이미 등록된 상품을 여기서 고치면
+   쿠팡에 반영되지 않아서 "바꿨는데 왜 그대로냐"가 된다(수정은 상품수정 화면). */
+async function lstFetchOpenProjects() {
+  return await api('listing_projects?select=id,product_name,status,source_snapshot'
+    + '&status=in.(preparing,ready)&order=updated_at.desc&limit=200') || [];
+}
+
+/* 준비 건 하나를 통째로 읽는다. 작업 화면들이 공통으로 쓴다. */
+async function lstFetchOne(id) {
+  const [ps, items, prog] = await Promise.all([
+    api(`listing_projects?select=*&id=eq.${id}&limit=1`),
+    api(`listing_project_items?select=*&project_id=eq.${id}&order=position.asc`),
+    api(`v_listing_ready?select=*&id=eq.${id}&limit=1`)
+  ]);
+  return { p: (ps || [])[0] || null, items: items || [], prog: (prog || [])[0] || {} };
+}
+
+/* 준비 건 고르는 select 를 채운다. 이름이 아직 없으면 참고 상품명을 보여준다 —
+   "(상품명 미정)"만 여러 줄이면 무엇이 무엇인지 못 고른다. */
+function lstFillPicker(sel, rows) {
+  const label = (r) => (r.product_name || '').trim()
+    || ('(이름 미정) ' + (((r.source_snapshot || {}).product_name) || '').slice(0, 28));
+  sel.innerHTML = rows.length
+    ? rows.map((r) => `<option value="${esc(r.id)}">${esc(label(r))}</option>`).join('')
+    : '<option value="">준비 중인 상품이 없습니다</option>';
+  if (rows.length) {
+    if (!rows.some((r) => r.id === LISTING.currentId)) lstSetCurrent(rows[0].id);
+    sel.value = LISTING.currentId;
+  }
+}
+
+/* 단계 배지. 작업 화면 위쪽에 띄워 "지금 어디까지 됐는지"를 늘 보이게 한다.
+   목록 화면과 같은 판정(v_listing_ready)을 쓴다 — 두 화면이 다른 말을 하면 안 된다. */
+function lstStepBar(prog, activeKey) {
+  return LISTING_STEPS.map((s) => {
+    const done = prog[s.col] === true;
+    const cls = s.key === activeKey ? 'prog prog-mid' : (done ? 'prog prog-ok' : 'prog prog-dim');
+    return `<span class="${cls}">${done ? '✓ ' : ''}${s.label}</span>`;
+  }).join('');
+}
+
+/* 단계별 근거를 남긴다. append-only 라 고칠 때마다 행이 쌓이고 최신이 지금 생각이다. */
+async function lstAddNote(projectId, step, note, extra) {
+  const body = { project_id: projectId, step, note, created_by: AUTH.userId || null };
+  if (extra) body.extra = extra;
+  await api('listing_step_notes', { method: 'POST', body });
+}
+
+/* 그 단계에 마지막으로 적은 근거. 화면을 다시 열었을 때 지난번 생각을 보여준다. */
+async function lstLastNote(projectId, step) {
+  const rows = await api(`listing_step_notes?select=note,created_at`
+    + `&project_id=eq.${projectId}&step=eq.${step}&order=created_at.desc&limit=1`) || [];
+  return rows[0] || null;
+}
