@@ -177,3 +177,10 @@ POST /tenants/seller-web/pre-matching/search
 **조회수·판매량이 같이 온다.** 이건 소싱 판단 시점에만 볼 수 있는 값이라
 `listing_projects.catalog_snapshot` 에 응답 원문을 통째로 박아둔다(R-04).
 나중에 "28일 조회 5,877 · 판매 353짜리를 보고 골랐는데 결과가 어땠나"를 계산할 수 있다.
+
+**URL 을 그대로 보내면 0건이다**(2026-08-21 실측). `keyword` 에는 **상품번호만** 넣어야 한다.
+WING 화면도 같은 일을 한다 — 바깥 칸에 URL 을 붙여넣으면 다이얼로그 검색칸엔 숫자만 들어간다.
+그래서 확장프로그램이 `coupang.com/vp/products/(\d+)` 를 먼저 뽑아낸 뒤 보낸다.
+
+`{"hasNext":false,"nextSearchPage":0,"result":[]}` 는 **정상 응답에 결과가 없는 것**이다.
+파싱 실패와 구분해서 말해야 한다 — 같은 문구로 뭉개면 엉뚱한 데를 고치게 된다.

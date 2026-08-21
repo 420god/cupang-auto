@@ -764,6 +764,16 @@ async function syncMetricsBackfill(maxDays) {
    ========================================================================= */
 async function pageCatalogSearchBg(keyword) {
   try {
+    /* **URL 을 그대로 보내면 결과가 0건이다**(2026-08-21 실측).
+       WING 화면도 URL 을 붙여넣으면 상품번호만 뽑아서 보낸다(스크린샷 확인) —
+       바깥 칸에 URL 을 넣었는데 다이얼로그 검색칸엔 숫자만 들어가 있었다.
+       그래서 여기서도 같은 일을 한다. */
+    let kwNote = null;
+    let kw = String(keyword || '').trim();
+    const m = kw.match(/coupang\.com\/vp\/products\/(\d+)/i);
+    if (m) { kw = m[1]; kwNote = 'URL에서 상품번호를 뽑았습니다'; }
+    keyword = kw;
+
     const tpl = sessionStorage.getItem('__cwc_prematch_body');
 
     let savedHeaders = {};
@@ -826,7 +836,8 @@ async function pageCatalogSearchBg(keyword) {
        여기서 미리 쪼개면 우리가 아직 모르는 필드가 조용히 버려진다. */
     let json = null;
     try { json = JSON.parse(raw); } catch (e) { /* 파싱 실패면 raw 로만 넘긴다 */ }
-    return { ok: true, status: res.status, replacedFields: replaced, json, raw: raw.slice(0, 200000) };
+    return { ok: true, status: res.status, replacedFields: replaced,
+             usedKeyword: keyword, keywordNote: kwNote, json, raw: raw.slice(0, 200000) };
   } catch (e) {
     return { ok: false, error: (e && e.message) ? e.message : String(e) };
   }

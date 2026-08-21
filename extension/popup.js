@@ -4633,6 +4633,14 @@ function pageReadPreMatch() {
    무엇을 바꿨는지 같이 돌려준다. 아무것도 못 바꾸면 그 사실을 말한다. */
 async function pageCatalogSearch(keyword) {
   try {
+    /* URL 을 그대로 보내면 0건이다(2026-08-21 실측). WING 화면도 상품번호만 뽑아 보낸다.
+       background.js 의 같은 함수와 한 벌이다 — 고칠 때 둘 다 고칠 것. */
+    let kwNote = null;
+    let kw = String(keyword || '').trim();
+    const mUrl = kw.match(/coupang\.com\/vp\/products\/(\d+)/i);
+    if (mUrl) { kw = mUrl[1]; kwNote = 'URL에서 상품번호를 뽑았습니다'; }
+    keyword = kw;
+
     const tpl = sessionStorage.getItem('__cwc_prematch_body');
 
     let savedHeaders = {};
@@ -4692,6 +4700,8 @@ async function pageCatalogSearch(keyword) {
       ok: res.ok,
       status: res.status,
       replacedFields: replaced,
+      usedKeyword: keyword,
+      keywordNote: kwNote,
       sentBody: JSON.stringify(root).slice(0, 1200),
       raw: raw.slice(0, 200000),
       error: res.ok ? null : `HTTP ${res.status} ${raw.slice(0, 200)}`
@@ -4747,6 +4757,7 @@ if (catalogBtn) {
         return;
       }
       setStatus('카탈로그 매칭 응답 (HTTP ' + r.status + ')\n'
+        + '실제 검색어: ' + r.usedKeyword + (r.keywordNote ? ' (' + r.keywordNote + ')' : '') + '\n'
         + '바꾼 검색어 필드: ' + (r.replacedFields.join(', ') || '없음 — 검색어 필드를 못 찾았습니다')
         + '\n\n[보낸 몸통]\n' + r.sentBody
         + '\n\n[응답 원문]\n' + r.raw.slice(0, 6000));

@@ -158,10 +158,29 @@ function catRow(o) {
 function lkRenderResults(r) {
   const box = $('#lkResults');
   const rows = LCAT.results;
+  const used = r.usedKeyword ? `<p class="muted sm">실제 검색어: <b>${esc(r.usedKeyword)}</b>${
+    r.keywordNote ? ' — ' + esc(r.keywordNote) : ''}</p>` : '';
 
   if (!rows.length) {
+    /* **"결과 0건"과 "못 읽음"은 다르다.** 둘을 같은 문구로 뭉개면 사람이 엉뚱한 데를 고친다.
+       result 배열이 있는데 비었으면 쿠팡이 진짜로 못 찾은 것이다. */
+    const json = LCAT.raw;
+    const emptyResult = json && typeof json === 'object'
+      && Array.isArray(json.result) && json.result.length === 0;
+
+    if (emptyResult) {
+      box.innerHTML = used
+        + '<p class="msg">검색 결과가 없습니다.<br><span class="muted sm">'
+        /* URL에서 번호를 이미 뽑았으면 그 안내는 빼야 한다 — 이미 한 일을 시키면 헷갈린다 */
+        + (r.keywordNote ? '' : '· 상품 URL을 넣으셨다면 <b>상품번호만</b> 넣어보세요 (예: 9671949069)<br>')
+        + '· 상품명으로 찾을 땐 짧게 — 긴 상품명은 그대로 일치해야 잡히는 편입니다<br>'
+        + '· 카탈로그에 없는 신상품이면 결과가 원래 없습니다</span></p>';
+      return;
+    }
+
     /* 못 읽었으면 **숨기지 않고 원문을 보여준다**(R-15). 이 원문이 파서를 고치는 근거다. */
-    box.innerHTML = '<p class="msg err">응답은 받았지만 상품 후보를 못 읽었습니다 — '
+    box.innerHTML = used
+      + '<p class="msg err">응답은 받았지만 상품 후보를 못 읽었습니다 — '
       + '필드 이름이 예상과 다릅니다. 아래 원문을 개발자에게 보여주세요.</p>'
       + `<p class="muted sm">바꾼 검색어 필드: ${esc((r.replacedFields || []).join(', ') || '없음')}</p>`
       + `<details open><summary>응답 원문</summary><textarea rows="14" readonly style="width:100%">${
@@ -170,7 +189,7 @@ function lkRenderResults(r) {
     return;
   }
 
-  box.innerHTML = `<p class="muted sm">후보 ${rows.length}건 — 쓸 것을 고르세요</p>`
+  box.innerHTML = used + `<p class="muted sm">후보 ${rows.length}건 — 쓸 것을 고르세요</p>`
     + rows.map((c, i) => `<div class="lp-card">
         <div style="display:flex;gap:12px">
           ${c.image ? `<img class="thumb" style="width:64px;height:64px"
