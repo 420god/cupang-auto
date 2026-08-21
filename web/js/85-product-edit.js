@@ -203,7 +203,56 @@ function pnItemRow(i) {
     </div>
     <label class="field"><span>대표이미지 <span class="muted">비우면 복제 원본 것을 씁니다</span></span>
       <input class="pn-item-image" type="file" accept="image/*" /></label>
+
+    <!-- 로켓그로스 물류 입고 정보(skuInfo). **비우면 복제 원본 값이 그대로 간다** —
+         새 상품 크기가 다르면 틀린 규격으로 등록되므로 확인해야 한다.
+         단위는 문서 확인: 가로·세로·높이 mm, 무게 g. -->
+    <div class="muted sm" style="margin-top:4px">물류 입고 정보
+      <span data-pn-srcsku></span></div>
+    <div class="two">
+      <label class="field"><span>가로 (mm)</span>
+        <input class="pn-sku-w" type="number" min="0" /></label>
+      <label class="field"><span>세로 (mm)</span>
+        <input class="pn-sku-l" type="number" min="0" /></label>
+    </div>
+    <div class="two">
+      <label class="field"><span>높이 (mm)</span>
+        <input class="pn-sku-h" type="number" min="0" /></label>
+      <label class="field"><span>무게 (g)</span>
+        <input class="pn-sku-wt" type="number" min="0" /></label>
+    </div>
+    <label class="field"><span>유통기한 (일) <span class="muted">없으면 0</span></span>
+      <input class="pn-sku-dp" type="number" min="0" /></label>
   </div>`;
+}
+
+/* 복제 원본의 skuInfo 를 칸에 채워 넣고 원본 값을 옆에 적어준다.
+   **비워두면 원본 값이 그대로 등록된다** — 새 상품 크기가 다르면 그게 곧 오류다.
+   그래서 빈 칸으로 두지 않고 원본 값을 미리 넣어 "이대로 갈 거다"를 보이게 한다. */
+function pnFillSkuInfo() {
+  const src = $('#pnSource').value;
+  const row0 = SKUS.rows.find((r) => r.reg && String(r.reg.seller_product_id) === String(src)
+    && r.reg.product_json);
+  const it = row0 && (row0.reg.product_json.items || [])[0];
+  const sku = it && it.rocketGrowthItemData && it.rocketGrowthItemData.skuInfo;
+
+  $$('#pnItems [data-pn-item]').forEach((row) => {
+    const note = row.querySelector('[data-pn-srcsku]');
+    if (!sku) {
+      note.textContent = '— 복제 원본의 값을 못 읽어 직접 입력해야 합니다';
+      return;
+    }
+    note.textContent = `— 복제 원본: ${sku.width}×${sku.length}×${sku.height}mm · ${sku.weight}g`;
+    const set = (cls, v) => {
+      const el = row.querySelector(cls);
+      if (el && el.dataset.touched !== '1') el.value = (v == null ? '' : v);
+    };
+    set('.pn-sku-w', sku.width);
+    set('.pn-sku-l', sku.length);
+    set('.pn-sku-h', sku.height);
+    set('.pn-sku-wt', sku.weight);
+    set('.pn-sku-dp', sku.distributionPeriod);
+  });
 }
 
 /* 복제 원본이 **어느 채널을 쓰는지** 본다.
@@ -270,18 +319,20 @@ function pnRenderItems() {
   $('#pnItems').innerHTML = Array.from({ length: PN.rows }, (_, i) => pnItemRow(i + 1)).join('');
 }
 
-$('#pnAddItem').onclick = () => { PN.rows++; pnRenderItems(); pnApplyChannels(); };
+$('#pnAddItem').onclick = () => { PN.rows++; pnRenderItems(); pnApplyChannels(); pnFillSkuInfo(); };
 
 $('#pnItems').addEventListener('input', (ev) => {
   const row = ev.target.closest('[data-pn-item]');
   if (!row) return;
   if (ev.target.classList.contains('pn-item-mprice')) ev.target.dataset.touched = '1';
+  if (/pn-sku-/.test(ev.target.className)) ev.target.dataset.touched = '1';
   if (ev.target.classList.contains('pn-item-price')) pnSuggestMarketPrice(row);
 });
 
 /* 복제 원본을 바꾸면 비율이 달라진다 — 사람이 안 건드린 칸을 다시 제안한다. */
 $('#pnSource').addEventListener('change', () => {
   pnApplyChannels();
+  pnFillSkuInfo();
   $$('#pnItems [data-pn-item]').forEach((row) => pnSuggestMarketPrice(row));
 });
 
@@ -312,6 +363,7 @@ $('#peNewBtn').onclick = () => {
   PN.loaded = null;
   pnRenderItems();
   pnApplyChannels();
+  pnFillSkuInfo();
   $('#prodNewModal').classList.remove('hidden');
   pnLoadDrafts();
 };
@@ -349,9 +401,22 @@ function pnCollect(strict) {
       if (!Number.isFinite(pr) || pr <= 0) return { err: '로켓그로스 판매가를 모두 입력하세요.' };
       if (needMp && (!Number.isFinite(mp) || mp <= 0)) return { err: '판매자배송 판매가를 모두 입력하세요.' };
     }
+    /* 물류 규격. **부분만 보내면 안 된다** — 문서상 skuInfo 를 주면 그 객체의 모든
+       항목이 필수다. 그래서 여기서는 '덮어쓸 값'만 모으고, 워커가 복제 원본의
+       skuInfo 에 얹는다. 그러면 나머지 항목은 원본 값이 그대로 남는다. */
+    const n2 = (cls) => { const v = Number(row.querySelector(cls).value); return Number.isFinite(v) && v >= 0 ? Math.round(v) : null; };
+    const skuOverride = { width: n2('.pn-sku-w'), length: n2('.pn-sku-l'),
+                          height: n2('.pn-sku-h'), weight: n2('.pn-sku-wt'),
+                          distributionPeriod: n2('.pn-sku-dp') };
+    if (strict) {
+      const miss = ['width', 'length', 'height', 'weight']
+        .filter((k) => skuOverride[k] === null || skuOverride[k] === 0);
+      if (miss.length) return { err: '물류 입고 정보(가로·세로·높이·무게)를 모두 입력하세요.' };
+    }
     items.push({ el: row, itemName: nm,
                  salePrice: Number.isFinite(pr) && pr > 0 ? Math.round(pr) : null,
-                 marketplaceSalePrice: Number.isFinite(mp) && mp > 0 ? Math.round(mp) : null });
+                 marketplaceSalePrice: Number.isFinite(mp) && mp > 0 ? Math.round(mp) : null,
+                 skuInfo: skuOverride });
   }
   const num = (id) => { const v = ($(id).value || '').trim(); return v === '' ? null : Number(v); };
   return {
@@ -412,7 +477,8 @@ async function pnBuildPayload(f) {
   const items = [];
   for (const it of f.items) {
     const one = { itemName: it.itemName, salePrice: it.salePrice,
-                  marketplaceSalePrice: it.marketplaceSalePrice };
+                  marketplaceSalePrice: it.marketplaceSalePrice,
+                  skuInfo: it.skuInfo };
     if (f.tags.length) one.searchTags = f.tags;
     const file = it.el ? it.el.querySelector('.pn-item-image').files[0] : null;
     if (file) {
@@ -499,6 +565,15 @@ async function pnFillFromDraft(id) {
       const m = row.querySelector('.pn-item-mprice');
       m.value = it.marketplaceSalePrice ?? '';
       if (m.value) m.dataset.touched = '1';   // 불러온 값을 자동 제안이 덮지 않게
+      const sk = it.skuInfo || {};
+      const put = (cls, v) => {
+        const el = row.querySelector(cls);
+        if (!el || v == null) return;
+        el.value = v; el.dataset.touched = '1';
+      };
+      put('.pn-sku-w', sk.width); put('.pn-sku-l', sk.length);
+      put('.pn-sku-h', sk.height); put('.pn-sku-wt', sk.weight);
+      put('.pn-sku-dp', sk.distributionPeriod);
     });
     $('#pnMsg').textContent = '초안을 불러왔습니다. 이미지는 저장해둔 것이 그대로 쓰입니다.';
   } catch (e) {
@@ -517,6 +592,7 @@ $('#pnSave').onclick = async () => {
   const summary = f.items.map((it) =>
     `  · ${it.itemName} — 로켓그로스 ${Number(it.salePrice).toLocaleString()}원`
     + (it.marketplaceSalePrice ? ` / 판매자배송 ${Number(it.marketplaceSalePrice).toLocaleString()}원` : '')
+    + `\n      물류: ${it.skuInfo.width}×${it.skuInfo.length}×${it.skuInfo.height}mm · ${it.skuInfo.weight}g`
   ).join('\n');
   if (!confirm(`"${f.name}" 을(를) 아래 ${f.items.length}개 옵션으로 등록합니다.\n\n${summary}\n\n`
       + `등록은 되돌리기 어렵습니다. 진행할까요?`)) return;

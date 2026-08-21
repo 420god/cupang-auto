@@ -216,6 +216,37 @@ GET .../meta/category-related-metas/display-category-codes/{displayCategoryCode}
 전부 확인했다. 로켓그로스 전용은 `rocketGrowthAdditionalInformation` 하나뿐이고
 그 안에 `rfmInboundName`(입고 시 표기명)과 쓰기 전용 `legalAgreement`가 있다.
 
+### 정정(2026-08-21): 물류 정보는 `rocketGrowthItemData.skuInfo` 안에 있다
+
+위에서 "상품 응답 어디에도 없다"고 적었는데 **틀렸다.** 옵션 최상위 키만 훑고
+`rocketGrowthItemData` 안쪽을 안 봐서 놓쳤다. 실물에 이렇게 들어 있다:
+
+```json
+"skuInfo": {
+  "inboundName": "노트북 파우치 13인치",       // 옵션 단위 입고 표기명
+  "width": 424, "length": 280, "height": 60,   // mm
+  "weight": 201, "netWeight": null,            // g
+  "quantityPerBox": 1,                         // 로켓그로스는 항상 1 (문서 명시)
+  "distributionPeriod": 0, "expiredAtManaged": false,   // 유통기한(일) / 관리여부
+  "fragile": false, "hazardous": null, "heatSensitive": null, "heavyBulky": null,
+  "season": "YEAR_ROUND", "standAlone": false,
+  "originalBarcode": null, "originalDimensionInputType": "USER_INPUT"
+}
+```
+
+**단위**(문서 확인): `width`·`length`·`height` = mm, `weight`·`netWeight` = g.
+
+**중요한 제약**: skuInfo 는 선택적 객체지만 **주기로 하면 그 객체의 모든 항목이 필수**다.
+일부만 넣으면 오류가 난다 → 복제 원본의 skuInfo 에 **덮어쓰는** 방식이어야 한다.
+
+**복제에서 놓치기 쉬운 자리 둘**:
+· `skuInfo.inboundName` 은 **옵션 단위** 입고명이다(상품 단위 `rfmInboundName` 과 별개).
+  둘 다 안 바꾸면 창고에 원본 상품·옵션의 이름표가 붙는다.
+· 규격·무게가 그대로 따라온다. 새 상품 크기가 다르면 틀린 값으로 등록된다.
+
+WING 화면의 "지금 입력 / 나중에 입력"은 이 skuInfo 를 등록 때 채울지 나중에 채울지의
+선택이다. 기본값이 "나중에 입력"이라 **필수는 아니다.**
+
 → **확인됨(2026-08-20, WING 화면).** 상품 등록 화면의 "로켓그로스 물류 입고 정보"는
    `지금 입력 / 나중에 입력` 선택이고 **기본값이 "나중에 입력"**이다.
    안내 문구: "로켓그로스 입고 생성 페이지에서 다시 입력할 수 있습니다."

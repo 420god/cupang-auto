@@ -652,6 +652,31 @@ async function handleProductCreate(row) {
     setPrice('rocketGrowthItemData', w.salePrice, w.originalPrice);
     setPrice('marketplaceItemData', w.marketplaceSalePrice, w.marketplaceOriginalPrice);
     setPrice('marketPlaceItemData', w.marketplaceSalePrice, w.marketplaceOriginalPrice);
+
+    /* 로켓그로스 물류 입고 정보(skuInfo). **복제 원본 값에 덮어쓴다** —
+       문서상 skuInfo 를 주면 그 객체의 모든 항목이 필수라, 우리가 새로 만들면
+       모르는 항목이 빠져서 오류가 난다. 원본을 바탕으로 아는 것만 갈아끼운다.
+
+       그리고 inboundName 은 **옵션 단위 입고 표기명**이다(상품 단위 rfmInboundName 과 별개).
+       안 바꾸면 창고에 원본 옵션의 이름표가 붙는다 — 복제에서 놓치기 쉬운 자리다.
+       quantityPerBox 는 문서에 "로켓그로스는 항상 1"이라고 되어 있어 강제한다.
+       유통기한은 일수(distributionPeriod)와 관리여부(expiredAtManaged)가 짝이라 같이 맞춘다. */
+    const rg = it.rocketGrowthItemData;
+    if (rg && rg.skuInfo) {
+      const o = w.skuInfo || {};
+      ['width', 'length', 'height', 'weight'].forEach((k) => {
+        if (o[k] != null) rg.skuInfo[k] = Number(o[k]);
+      });
+      if (o.distributionPeriod != null) {
+        const dp = Number(o.distributionPeriod);
+        rg.skuInfo.distributionPeriod = dp;
+        rg.skuInfo.expiredAtManaged = dp > 0;
+      }
+      rg.skuInfo.quantityPerBox = 1;
+      if (w.itemName) rg.skuInfo.inboundName = w.itemName;
+      /* 원본 바코드가 skuInfo 안에도 남아 있으면 지운다 — 새 상품은 쿠팡이 발급한다. */
+      if (rg.skuInfo.originalBarcode) rg.skuInfo.originalBarcode = null;
+    }
     /* 이미지를 새로 안 올렸으면 원본 것을 우리 Storage로 옮겨서 URL로 준다. */
     if (w.images === undefined || w.contents === undefined) {
       await resolveCloneImages(it, `new-${row.id}-${i + 1}`);
