@@ -421,8 +421,8 @@ async function enterApp() {
     }
   } catch (e) { /* 무시 */ }
 
-  /* 앱에 들어왔다고 알린다. 지표 자동 동기화가 이걸 듣는다(web/js/90-boot.js).
-     여기서 직접 부르지 않는 이유: 00-core.js는 90-boot.js보다 먼저 로드되므로
+  /* 앱에 들어왔다고 알린다. 지표 자동 동기화가 이걸 듣는다(web/js/95-boot.js).
+     여기서 직접 부르지 않는 이유: 00-core.js는 95-boot.js보다 먼저 로드되므로
      그쪽 함수를 이 시점에 부르면 아직 정의 전일 수 있다(D-17 — 파일 순서가 곧 실행 순서). */
   try { window.dispatchEvent(new Event('cwc-app-ready')); } catch (e) { /* 무시 */ }
 }

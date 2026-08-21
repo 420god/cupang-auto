@@ -121,6 +121,10 @@
         <svg viewBox="0 0 24 24"><path d="M3 5h8v6H3zM13 5h8v6h-8zM3 13h8v6H3zM13 13h8v6h-8z"/></svg>
         <span>카테고리</span>
         </button>
+        <button class="nav-item" data-page="listing-image">
+        <svg viewBox="0 0 24 24"><path d="M3 5h18v14H3zM3 15l5-5 4 4 3-3 6 6"/></svg>
+        <span>대표이미지</span>
+        </button>
       </div>
       <div class="nav-group">
         <div class="nav-group-label">상품</div>
@@ -614,6 +618,44 @@
           </label>
           <button id="lcNoteSave" class="btn btn-sm">메모 남기기</button>
           <p class="muted sm" id="lcNoteLast"></p>
+        </div>
+      </section>
+
+      <!-- ── 대표이미지 ──
+           후보를 전부 남기고 하나에 표시만 한다. 버린 후보가 있어야 나중에
+           "무엇 대신 무엇을 골랐나"를 볼 수 있다(R-04). -->
+      <section id="page-listing-image" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>대표이미지</h2>
+            <p class="muted sm">옵션마다 하나씩 · 후보는 전부 남습니다</p>
+          </div>
+          <div class="page-actions">
+            <select id="liPicker" class="ship-filter"></select>
+          </div>
+        </div>
+
+        <div class="lst-chips" id="liSteps" style="margin-bottom:10px"></div>
+
+        <p id="liEmpty" class="muted hidden">준비 중인 상품이 없습니다 —
+          소싱 → 즐겨찾기에서 [등록 준비]를 누르거나, 상품등록 화면에서 새로 만드세요.</p>
+
+        <div id="liBody">
+          <div class="hint-box">
+            여러 장을 올려두고 그중 하나를 고르세요. <b>고르지 않은 후보도 지워지지 않습니다</b> —
+            나중에 "이걸 쓰다가 저걸로 바꿨더니 조회가 어떻게 됐나"를 보려면 둘 다 남아 있어야 합니다.
+          </div>
+
+          <div id="liItems"></div>
+          <div id="liMsg" class="msg hidden"></div>
+
+          <label class="field" style="margin-top:16px">
+            <span>왜 이 이미지인가 <span class="muted sm">— 등록 후 조회·방문자로 판정합니다</span></span>
+            <textarea id="liNote" rows="2"
+              placeholder="예: 경쟁 3곳이 다 흰 배경이라 노란 배경으로 갔다. 목록에서 눈에 띄는지 볼 것"></textarea>
+          </label>
+          <button id="liNoteSave" class="btn btn-sm">메모 남기기</button>
+          <p class="muted sm" id="liNoteLast"></p>
         </div>
       </section>
 
@@ -1526,6 +1568,7 @@
 <script src="js/87-listing-price.js"></script>
 <script src="js/88-listing-name.js"></script>
 <script src="js/89-listing-category.js"></script>
-<script src="js/90-boot.js"></script>
+<script src="js/90-listing-image.js"></script>
+<script src="js/95-boot.js"></script>
 </body>
 </html>

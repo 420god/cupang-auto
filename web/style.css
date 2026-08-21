@@ -633,3 +633,21 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 .lp-more { margin-top: 8px; }
 .lp-more summary { cursor: pointer; font-size: 12.5px; color: var(--text-2); }
 .lp-more[open] summary { margin-bottom: 8px; }
+
+/* ---------- 대표이미지 (031) ---------- */
+.li-row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
+.li-current { width: 200px; flex-shrink: 0; }
+.li-big {
+  width: 200px; height: 200px; object-fit: contain;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+}
+.li-empty { display: flex; align-items: center; justify-content: center;
+  color: var(--text-3); font-size: 12.5px; text-align: center; padding: 10px; }
+.li-cands { display: flex; gap: 10px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.li-cand { width: 96px; text-align: center; }
+.li-cand img {
+  width: 96px; height: 96px; object-fit: contain;
+  background: var(--surface-2); border: 2px solid var(--border); border-radius: var(--r-sm);
+}
+.li-cand.on img { border-color: var(--accent); }
+.li-cand-btns { margin-top: 3px; display: flex; gap: 3px; justify-content: center; flex-wrap: wrap; }

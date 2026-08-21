@@ -1,5 +1,5 @@
 /* ============================================================
-   90-boot.js — 네비게이션 · 테마 · 시작
+   95-boot.js — 네비게이션 · 테마 · 시작
    ------------------------------------------------------------
    **파일 순서가 곧 실행 순서다.** 원래 app.js 한 파일이던 것을 줄 단위로 자른 것이라
    전부 같은 전역 스코프를 공유한다(모듈 아님). 그래서 index.html의 <script> 순서를
@@ -28,6 +28,7 @@ $$('.nav-item').forEach((btn) => {
     if (page === 'listing-price') loadListingPrice();
     if (page === 'listing-name')  loadListingName();
     if (page === 'listing-category') loadListingCategory();
+    if (page === 'listing-image') loadListingImage();
     if (page === 'sales')      loadSales();
     if (page === 'favorites')  loadFavorites();
     if (page === 'categories') loadCategories();

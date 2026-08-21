@@ -113,3 +113,34 @@
 날짜를 바꾸면 화면 URL 자체가 바뀐다(페이지 재로드). 그래서 날짜별로 반복 호출하면
 과거 백필이 가능하다. **당일 데이터는 다음날 밤에 채워지므로 어제치까지만 받는다.**
 
+
+## 상품등록 화면이 부르는 내부 API (2026-08-21 캡처)
+
+확장프로그램 인터셉터가 WING 요청을 전부 기록한다 → 팝업 [캡처된 API 호출 목록].
+상품등록 페이지를 새로 열고 카탈로그 매칭을 한 번 검색해서 잡은 것들이다.
+
+| 경로 | 무엇 |
+|---|---|
+| `POST /tenants/seller-web/pre-matching/search` | **카탈로그 상품매칭** — 상품명·URL·상품번호로 카탈로그 조회 |
+| `GET /tenants/seller-web/vendor-inventory/product-category/getCategories?registrationType=NORMAL&term=` | 카테고리 검색(자동완성) |
+| `GET /tenants/seller-web/category/display-category/getRootCategories` | 카테고리 최상위 트리 |
+| `GET /tenants/seller-web/vendor/my/outbound-address` | **출고지 목록** — 뼈대에 필요 |
+| `GET /tenants/seller-web/vendor/my/return-address` | **반품지 목록** — 뼈대에 필요 |
+| `GET /vendor-inventory/constraint-by-info?internalCategoryId=…&dataType=SHIPPING_AND_RETURN_FEE` | 카테고리별 배송·반품비 제약 |
+| `GET /vendor-inventory/delivery-charge-constraint?internalCategoryId=…` | 배송비 제약 |
+| `GET /tenants/seller-web/vendor-inventory/rod/v2/prohibited-item-words` | **상품명 금지어** |
+| `GET /tenants/seller-web/vendor-inventory/creation/is-mfn-allowed` | 판매자배송 가능 여부 |
+
+**아직 바디는 못 봤다** — 목록에는 경로만 나온다. `pre-matching/search`를 쓰려면
+`trends/search`와 같은 방식(인터셉터가 요청 몸통을 템플릿으로 저장 → 검색어만 바꿔 재요청)이
+필요하다.
+
+### 왜 Open API 가 아니라 여기인가
+
+등록 몸통 23키를 실제로 확인했다(2026-08-21): `brand` · `brandId` · `manufacture` ·
+`sellerProductId` 뿐이고 **카탈로그를 지정하는 필드가 없다.** 조회 응답에도 없다.
+즉 Open API 로는 카탈로그 정보를 가져올 수도, 특정 카탈로그에 붙여달라고 지정할 수도 없다.
+→ 카탈로그 매칭은 **WING 내부 API + 확장프로그램**이 유일하게 확인된 길이다.
+
+**호출은 사람이 누를 때 1회씩만.** 배치·반복 호출을 하지 않는 게 차단을 피하는 유일한 방법이다
+(소싱 수집이 이미 훨씬 무거운 호출을 하고 있어서, 준비 건당 1~2회는 증가분이 사실상 없다).
