@@ -157,42 +157,98 @@ localStorage 에는 `rememberLogin`·`userEmail`·`wasLoggedIn`·`cdt:v1:*`(화�
 
 **VPS 워커로는 못 한다** — 세션이 사용자 브라우저에 있다. 쿠팡 쓰기(고정 IP·API 키)와 성격이 정반대다.
 
-### 요청 한 줄의 모양
+### 요청 한 줄의 모양 (2026-08-22 실제 payload로 확정)
 
-키 이름이 **한국어**다. 아래 영문 키는 캡처에서 확정된 것이고, 한글 키는 아직 정확한
-철자를 못 받았다(Windows `Copy as cURL (cmd)` 가 한글을 공백으로 날렸다).
+`requestpurchase` 본문은 **줄 객체의 배열**이다. 키가 한국어다.
 
 ```
-{
-  checked, showspinner,
-  <바코드>, <제품명>, <제품명>init, <구매링크>, <구매링크>init,
-  <옵션1_중국어>, <옵션2_중국어>, <이미지>, <옵션목록>{ 옵션명: [{name, imageUrl}] },
-  <구매재고>: 5451, <구매요청수량>: "2"(문자열), <판매구성수량>: 1(숫자), <묶음구성>: false,
-  HSCODE: "6401.10-1000", reqtype, sizeX, sizeY, sizeZ, weight,
-  <요청사항>: {
-    default, poarrange, <기본검수>, barcode, sticker, sewing, stamp, tag,
-    reqcontent,          // 배대지 작업요청사항
-    reqcontentPurchase,  // 1688판매자와의 협의 사항
-    opp, LDPE, airpacking, masking, auto,
-    exportType: "box",
-    destination: "coupang",       // 도착지
-    customsType: "integrated"     // ★ 통관 방식
-  },
-  <한글표시사항>: { 10개 항목 },
-  polists: [], selectpo: "",
-  item: { …1688 원문 통째로… },
-  companyid: "growth", <등록시각>: 1787387761943, _id: ""
-}
+checked, showspinner                    화면 상태(그대로 흉내 낸다)
+바코드          "NOBARCODE"             ← 없으면 이 문자열
+상품명 · 상품명init                      init 는 매칭 전 원값(둘 다 보낸다)
+구매링크 · 구매링크init                   1688 URL 통째로(추적 파라미터까지)
+옵션1_중국어 · 옵션2_중국어               1688 옵션명 원문
+옵션이미지 · 등록이미지                    이미지 URL
+매칭상태        "매칭완료"
+상품매칭        { 옵션1_중국어: [{name,imageUrl}…], 옵션2_중국어: […] }  ← 고를 수 있는 전체 목록
+구매재고        5451 (숫자)             1688 재고
+구매요청수량    "2"  ← **문자열**
+판매구성수량    1    ← **숫자**
+묶음구성여부 · 묶음구성수량 · 묶음대상바코드
+신고영문명      "plastic"   신고가격 0   HSCODE "6401.10-1000"   ← 통관 신고값
+진행현황        "구매전"
+재고동봉        true
+요청사항        "등록완료"  ← **문자열이다.** 옵션은 아래 요청내역에 있다
+reqtype         "제트배송"
+sizeX · sizeY · sizeZ · weight          빈 문자열(미입력)
+요청내역        { … 아래 … }
+한글표시사항    { … 9개 … }
+polists []  ·  selectpo ""
+item            1688 원문 통째로
+구매id "" · 구매_id "" · companyid "growth" · 요청일 1787387761943(epoch ms)
 ```
 
-삭제 요청에는 `_id`·`processStatus`·`processHistory[{fromStatus,toStatus,changedAt,changedBy,changedByName,memo}]`
-가 더 붙어 있다 — **서버가 요청의 상태 흐름을 들고 있다.**
+**`요청사항`(문자열)과 `요청내역`(객체)은 다른 것이다.** 이름이 헷갈리게 붙어 있다.
+
+#### 요청내역 — 검수·포장·통관
+
+```json
+{ "default": true, "poarrange": false, "한글표시사항": true, "barcode": true,
+  "sticker": false, "sewing": false, "stamp": false, "tag": false,
+  "reqcontent": "", "reqcontentPurchase": "",
+  "opp": false, "LDPE": false, "airpacking": false, "masking": false,
+  "exportType": "box", "destination": "coupang", "customsType": "integrated",
+  "auto": true }
+```
+
+| 키 | 폼의 무엇 |
+|---|---|
+| `default` · `opp` · `LDPE` | 포장 방법(위임 / 투명 OPP / 불투명 LDPE) — 라디오가 불리언으로 흩어져 있다 |
+| `barcode` | 바코드라벨 (₩100) |
+| `masking` · `airpacking` | 중국어 마스킹 · 에어캡 |
+| `sewing` · `stamp` · `tag` | 원산지 봉제 · 도장 · 택 (각 6,000원/시간) |
+| `reqcontent` | 배대지 작업요청사항(자유 텍스트) |
+| `reqcontentPurchase` | 1688판매자와의 협의 사항(자유 텍스트) |
+| `destination` | `coupang` = 쿠팡센터 |
+| `customsType` | `integrated` = 통합통관 |
+
+**`한글표시사항`(불리언)·`poarrange`·`sticker`·`auto`·`exportType`이 폼의 무엇인지는 아직 모른다.**
+폼 토글 7개와 개수가 안 맞는다 — 특히 "기본검수/분류/포장/포장자재(₩200)"에 대응하는 키를
+못 찾았다. **추측해서 채우지 않는다**(R-14). 기본값 그대로 보내면 지금은 문제없다.
+
+#### 한글표시사항 — 9개, `label_*` 와 정확히 맞물린다
+
+```json
+{ "제품명": "말랑이", "수입원/판매원": "덴넬", "제조원": "덴넬 OEM", "제조국": "중국",
+  "내용량": "상세페이지 참조", "원료명및성분명(재질)": "플라스틱", "상품유형": "생활용품",
+  "사용시주의사항": "용도 이외에 사용금지", "사용기준": "14세이상" }
+```
+
+| 쿠플러스 | 우리 |
+|---|---|
+| 제품명 | `my_skus.sku_name` |
+| 수입원/판매원 | `label_importer` |
+| 제조원 | `label_manufacturer` |
+| 제조국 | `label_origin_country` |
+| 내용량 | `label_volume` |
+| 원료명및성분명(재질) | `label_material` |
+| 상품유형 | `label_product_type` |
+| 사용시주의사항 | `label_caution` |
+| 사용기준 | `label_usage_standard` |
+
+**바코드는 이 객체 밖의 최상위 `바코드` 필드다.** 앞서 "10개 항목"이라 적은 것은
+바코드까지 세었기 때문이고, 객체 자체는 9개다. 015가 잡아둔 `label_*` 8개 + 제품명 —
+**한 칸도 남거나 모자라지 않는다.**
+
+실제 값이 SKU마다 거의 같다(덴넬 / 덴넬 OEM / 중국 / 상세페이지 참조 …).
+→ 등록 설정처럼 **기본값 한 벌**을 두고 SKU가 다른 것만 덮는 게 맞다.
 
 ### 캡처에서 새로 알게 된 것
 
 1. **`customsType` 을 요청마다 고른다**(`integrated` = 통합통관). 화면 상단의
-   `통합통관 300원/위안` · `단독통관 220.39원/위안` 과 짝이다. **환율이 여기서 갈린다** —
-   폼 캡처만 봤을 땐 이 선택지의 존재를 몰랐다.
+   `통합통관 300원/위안` · `단독통관 220.39원/위안` 과 짝이고, **사용자는 둘 다 쓴다**
+   (2026-08-22 확인). **환율이 여기서 갈린다** — 016의 `exchange_rates` 는 시점 하나에
+   `rate_purchase` 하나뿐이라 **이 축을 표현할 수 없다.** 로트마다 어느 통관으로 샀는지
+   저장하지 않으면 원가가 조용히 틀어진다. → 미해결.
 2. **`item` 에 1688 원문이 통째로 실린다.** `productSkuInfos`(옵션별 가격·재고·specId),
    `skuShippingDetails`(**옵션별 무게**), `productAttribute`, 판매자 점수까지.
    우리가 물류 화면에서 손으로 넣는 무게가 여기 이미 있다.
@@ -202,8 +258,28 @@ localStorage 에는 `rememberLogin`·`userEmail`·`wasLoggedIn`·`cdt:v1:*`(화�
 5. **대량주문 엑셀은 바코드·수량 두 칸뿐이다**(사용자 확인). 요청사항·포장·통관을 못 실어서
    우리 용도로는 부족하다 → API 경로로 간다.
 
-**아직 모르는 것**: 한글 키의 정확한 철자, 응답 모양, `reqtype`·`exportType`의 다른 값,
-모달 5~7번 항목.
+6. **통관 신고값이 줄마다 있다** — `HSCODE`·`신고영문명`·`신고가격`. 우리 시스템 어디에도 없다.
+   HS코드는 SKU 고정값이라 상품원장에 둘 자리다.
+7. `reqtype: "제트배송"` · `진행현황: "구매전"` · `매칭상태: "매칭완료"` · `요청사항: "등록완료"` —
+   상태 문자열들. 다른 값이 뭐가 있는지는 모른다.
+
+**아직 모르는 것**: 응답 모양 · `요청내역`의 `한글표시사항`/`poarrange`/`sticker`/`auto`/`exportType`이
+폼의 무엇인지 · `reqtype`·`진행현황`의 다른 값 · 모달 5~7번 항목 ·
+**`item`(1688 원문)을 우리가 어떻게 얻는가** — 이게 자동화의 마지막 관문이다.
+
+### `item` 을 어디서 얻나 — 다음 관문
+
+payload에 1688 원문(`offerId`·`productSkuInfos`·`productShippingInfo`…)이 통째로 들어간다.
+쿠플러스 화면은 구매링크를 넣으면 그걸 알아서 채운다(1688 조회는 쿠플러스가 한다).
+**우리가 요청을 만들려면 그 덩어리가 있어야 한다.** 길이 셋이고 아직 안 골랐다:
+
+| 길 | 방법 | 걸리는 것 |
+|---|---|---|
+| ① 재사용 | `getlists` 로 지난 요청의 `item` 을 가져다 쓴다 | **재발주는 이걸로 끝난다.** 신규는 못 한다 |
+| ② 쿠플러스에 시킨다 | `savereqlist` 로 링크만 넣고 매칭을 쿠플러스가 하게 한 뒤 다시 읽는다 | 매칭 트리거가 뭔지 모른다 |
+| ③ 우리가 1688을 읽는다 | 확장이 1688 상세를 긁는다 | 제일 크고 제일 잘 깨진다 |
+
+**①이 현실적이다** — 우리가 실제로 자주 하는 건 재발주다.
 
 ## 환율 — 두 개고, 주문 시각에 고정된다
 
