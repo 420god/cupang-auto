@@ -583,6 +583,184 @@ function lstBuildAttributes(meta, template, itemAttrs, filters, itemName, auto, 
   return out;
 }
 
+/* ---------- 등록 확인 모달 ---------- */
+/* **등록은 되돌릴 수 없다.** 그래서 무엇을 보낼지 먼저 보여주고, 경고가 있으면
+   그것부터 읽게 한다. 자동으로 채운 값도 반드시 보여준다 — 조용히 채우면
+   틀린 값이 그대로 등록된다. */
+async function lstOpenSubmit(projectId) {
+  const modal = $('#lstSubmitModal');
+  modal.classList.remove('hidden');
+  $('#lstSubBody').innerHTML = '<div class="loader"><div class="spinner"></div>몸통을 만드는 중…</div>';
+  $('#lstSubGo').disabled = true;
+  $('#lstSubMsg').classList.add('hidden');
+
+  let built;
+  try {
+    built = await lstBuildPayload(projectId);
+  } catch (e) {
+    $('#lstSubBody').innerHTML = '<p class="msg err">몸통을 못 만들었습니다: ' + esc(e.message) + '</p>';
+    return;
+  }
+  LISTING.building = built;
+
+  const p = built.project;
+  const pay = built.payload;
+  const blocking = !pay.source_seller_product_id;
+
+  const rows = pay.items.map((it) => '<tr>'
+    + '<td>' + esc(it.itemName || '(이름없음)') + '</td>'
+    + '<td class="col-num">' + (it.salePrice ? won(it.salePrice) : '—') + '</td>'
+    + '<td class="col-num">' + (it.marketplaceSalePrice ? won(it.marketplaceSalePrice) : '—') + '</td>'
+    + '<td class="sm">' + esc(it.skuInfo.inboundName) + '</td>'
+    + '<td class="sm">' + it.skuInfo.width + '×' + it.skuInfo.length + '×' + it.skuInfo.height
+      + 'mm · ' + it.skuInfo.weight + 'g</td>'
+    + '<td class="sm">' + (it.skuInfo.originalBarcode ? esc(it.skuInfo.originalBarcode) : '쿠팡 발급') + '</td>'
+    + '</tr>').join('');
+
+  $('#lstSubBody').innerHTML =
+    '<div class="kv-grid">'
+    + '<span class="kv"><span class="kv-k">상품명</span><span class="kv-v">' + esc(pay.product.sellerProductName) + '</span></span>'
+    + '<span class="kv"><span class="kv-k">카테고리</span><span class="kv-v">' + esc(p.category_path || pay.product.displayCategoryCode || '—') + '</span></span>'
+    + '<span class="kv"><span class="kv-k">옵션</span><span class="kv-v">' + pay.items.length + '개</span></span>'
+    + '<span class="kv"><span class="kv-k">복제 원본</span><span class="kv-v">' + esc(pay.source_seller_product_id || '없음') + '</span></span>'
+    + '</div>'
+    + '<h4 class="sku-sec">옵션</h4>'
+    + '<div class="table-wrap"><table class="grid"><thead><tr>'
+    + '<th>옵션명</th><th class="col-num">로켓그로스</th><th class="col-num">판매자배송</th>'
+    + '<th>입고 표기명</th><th>규격</th><th>바코드</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+    + (built.auto.length
+        ? '<h4 class="sku-sec">자동으로 채운 값 <span class="muted sm">— 틀렸으면 지금 고치세요</span></h4><ul class="sm">'
+          + built.auto.map((a) => '<li>' + esc(a) + '</li>').join('') + '</ul>'
+        : '')
+    + (built.warn.length
+        ? '<div class="msg err"><b>확인이 필요합니다</b><ul class="sm">'
+          + built.warn.map((w) => '<li>' + w + '</li>').join('') + '</ul></div>'
+        : '')
+    + (blocking ? '<p class="msg err">복제 원본이 없어 등록할 수 없습니다 — 뼈대를 기존 상품에서 뜨세요.</p>' : '')
+    + '<details style="margin-top:10px"><summary class="muted sm">쿠팡에 보낼 몸통 전체 보기</summary>'
+    + '<textarea rows="16" readonly style="width:100%;font-family:monospace;font-size:12px">'
+    + esc(JSON.stringify(pay, null, 1)) + '</textarea></details>'
+    + '<label class="chk" style="margin-top:10px"><input type="checkbox" id="lstSubRequested"'
+    + (pay.requested ? ' checked' : '') + ' />'
+    + '<span>등록과 동시에 <b>승인 요청</b>까지 보냅니다 (체크를 빼면 임시저장 상태로 들어갑니다)</span></label>';
+
+  $('#lstSubGo').disabled = blocking;
+  $('#lstSubGo').dataset.pid = projectId;
+}
+
+$('#lstSubmitModal').addEventListener('click', (ev) => {
+  if (ev.target.matches('[data-close], .modal-backdrop')) $('#lstSubmitModal').classList.add('hidden');
+});
+
+/* 진짜 등록 — 여기서부터는 되돌릴 수 없다 */
+$('#lstSubGo').onclick = async () => {
+  const built = LISTING.building;
+  if (!built) return;
+  const btn = $('#lstSubGo');
+  const pid = btn.dataset.pid;
+  btn.disabled = true;
+  $('#lstSubMsg').classList.remove('hidden');
+  $('#lstSubMsg').textContent = '등록 요청을 넣는 중…';
+
+  try {
+    const payload = built.payload;
+    payload.requested = $('#lstSubRequested').checked === true;
+
+    /* 판단을 먼저 박제한다. **등록이 실패해도 판단은 남아야 한다** —
+       "이렇게 보고 골랐는데 등록이 안 됐다"도 기록이다(017). */
+    let decisionId = built.project.sourcing_decision_id || null;
+    if (!decisionId) {
+      const p = built.project;
+      const snap = p.source_snapshot || {};
+      const cat = p.catalog_snapshot || {};
+      const [made] = await api('sourcing_decisions', {
+        method: 'POST', headers: { prefer: 'return=representation' },
+        body: {
+          method: p.source_kind,
+          snapshot_min_price: snap.current_price || cat.salePrice || null,
+          snapshot_review_count: cat.ratingCount || null,
+          snapshot_raw: { favorite: snap, catalog: cat },
+          expected_monthly_qty: p.expected_monthly_qty,
+          expected_unit_cost_krw: p.expected_unit_cost_krw,
+          expected_sell_price: p.expected_sell_price || (payload.items[0] || {}).salePrice || null,
+          expected_margin_rate: p.expected_margin_rate,
+          reason_memo: p.reason_memo
+        }
+      });
+      decisionId = made.id;
+      await api('listing_projects?id=eq.' + pid, {
+        method: 'PATCH', headers: { prefer: 'return=minimal' },
+        body: { sourcing_decision_id: decisionId }
+      });
+    }
+    payload.sourcing_decision_id = decisionId;
+
+    const [q] = await api('coupang_write_queue', {
+      method: 'POST', headers: { prefer: 'return=representation' },
+      body: { kind: 'product_create', payload, requested_by: AUTH.userId || null }
+    });
+
+    await api('listing_projects?id=eq.' + pid, {
+      method: 'PATCH', headers: { prefer: 'return=minimal' },
+      body: { status: 'submitted', submitted_queue_id: q.id,
+              submitted_at: new Date().toISOString(), requested: payload.requested }
+    });
+    await lstAddNote(pid, 'submit',
+      '쿠팡 등록 요청 (옵션 ' + payload.items.length + '개, '
+      + (payload.requested ? '승인요청까지' : '임시저장') + ')', { queue_id: q.id });
+
+    $('#lstSubMsg').textContent = '등록을 요청했습니다 — VPS 워커가 처리합니다. 결과를 지켜봅니다.';
+    lstWatchQueue(q.id, pid);
+    await loadListing();
+  } catch (e) {
+    $('#lstSubMsg').textContent = '요청 실패: ' + e.message;
+    btn.disabled = false;
+  }
+};
+
+/* 큐가 처리되는지 지켜본다. **워커가 꺼져 있으면 영원히 기다리게 되므로**
+   2분이 지나면 그 사실을 말한다(가격 변경 화면과 같은 규칙). */
+function lstWatchQueue(queueId, projectId) {
+  const started = Date.now();
+  const tick = async () => {
+    let row;
+    try {
+      row = (await api('coupang_write_queue?select=*&id=eq.' + queueId + '&limit=1'))[0];
+    } catch (e) { return; }
+    if (!row) return;
+
+    if (row.status === 'done' || row.status === 'failed') {
+      const ok = row.status === 'done';
+      $('#lstSubMsg').innerHTML = ok
+        ? '<b>등록되었습니다.</b> 새 상품ID ' + esc(row.created_seller_product_id || '—')
+        : '<b class="neg">등록 실패</b> — ' + esc(String(row.response_body || '').slice(0, 400));
+      if (ok) {
+        await api('listing_projects?id=eq.' + projectId, {
+          method: 'PATCH', headers: { prefer: 'return=minimal' },
+          body: { status: 'registered', created_seller_product_id: row.created_seller_product_id,
+                  registered_at: new Date().toISOString() }
+        });
+      } else {
+        /* 실패하면 다시 준비중으로 돌린다 — 고쳐서 다시 시도할 수 있어야 한다 */
+        await api('listing_projects?id=eq.' + projectId, {
+          method: 'PATCH', headers: { prefer: 'return=minimal' }, body: { status: 'preparing' }
+        });
+        $('#lstSubGo').disabled = false;
+      }
+      await loadListing();
+      return;
+    }
+
+    if (Date.now() - started > 120000) {
+      $('#lstSubMsg').innerHTML = '2분이 지나도 처리되지 않았습니다 — '
+        + '<b>VPS 워커가 꺼져 있을 수 있습니다.</b> 요청은 큐에 남아 있어서 워커가 켜지면 처리됩니다.';
+      return;
+    }
+    setTimeout(tick, 3000);
+  };
+  setTimeout(tick, 3000);
+}
+
 /* ============================================================
    순서 강제 — 카테고리가 먼저다 (사용자 결정 2026-08-21)
    ------------------------------------------------------------
