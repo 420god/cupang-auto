@@ -4,7 +4,7 @@
 명시했다. `api/*.js`는 예외(Vercel이 번들러 없이 함수로 인식).
 
 ```
-index.html  로그인 + 12개 화면 + 모달
+index.html  로그인 + 21개 화면 + 모달
 style.css   CSS 변수 기반 라이트/다크
 js/         전체 로직. 빌드 없음 — 아래 순서대로 로드된다
 api/        서버리스 함수 — parse-invoice.js(청구서 읽기) 하나뿐
@@ -12,6 +12,7 @@ api/        서버리스 함수 — parse-invoice.js(청구서 읽기) 하나뿐
 
 `js/` 안의 **파일명 앞 숫자가 로드 순서**다. 어느 화면이 어느 파일인지는
 `docs/domain/product-listing.md` 또는 각 파일 머리 주석 참조.
+**등록 파이프라인이 86~94를 쓰고 boot 은 95다** — 새 등록 화면은 그 사이 번호로 넣는다.
 
 ## 절대 바꾸지 말 것
 
@@ -26,6 +27,8 @@ api/        서버리스 함수 — parse-invoice.js(청구서 읽기) 하나뿐
 4. **`user_items`/`item_calc` 쓰기에서 `on_conflict=user_id,item_id`를 빼지 않는다** —
    빼면 사용자 간 데이터가 덮어써진다(RLS는 읽기만 막는다)
 5. **확장프로그램 호출(`syncSalesViaExtension`)이 실패해도 판매현황은 항상 동작해야 한다**
+6. **등록 화면의 잠금 판정은 `lstGuardCategory()` 하나만 쓴다**(D-22) — 화면마다 따로
+   판정하면 기준이 갈린다. 카테고리 → 옵션 순으로 막는다
 
 ## 알아둘 것
 

@@ -2,9 +2,9 @@
 
 > **언제 읽나**: 상품 등록·수정 화면을 고칠 때. "바꿨더니 어떻게 됐나"를 분석할 때.
 > 쿠팡에 쓰기가 안 나갈 때.
-> **최종 검증**: 2026-08-21 (가격 변경 실물 성공 · 임시저장 확인 · skuInfo 단위 확인)
-> **관련 코드**: `web/js/85-product-edit.js` · `scripts/coupang-write-worker.js` ·
-> `db/migrations/023~030` · API 스펙은 `../api/coupang-open-api.md`
+> **최종 검증**: 2026-08-22 (등록 파이프라인 10화면 · 옵션명 자동 생성 · 검색필터 실물 대조)
+> **관련 코드**: `web/js/86~94-listing-*.js` · `scripts/coupang-write-worker.js` ·
+> `db/migrations/031~038` · API 스펙은 `../api/coupang-open-api.md`
 
 ## 웹 파일 배치
 
@@ -24,14 +24,15 @@ js/80-products.js   상품원장(공급처·발주 파라미터) + 가격/상품
 js/85-product-edit.js 상품수정 화면 — 편집 UI · 실험 기록 · 신규 등록(복제, D-21로 이관 예정)
 js/86-listing.js    상품등록 — 등록 준비 건 목록 · 진행 배지 · 즐겨찾기에서 승격
                     + 작업 화면 공용 헬퍼(lstFetchOne · lstStepBar · lstAddNote)
-js/87-listing-price.js 옵션·가격 — 옵션 구성 · 판매가 · 1688 추정 단가 · 예상 마진
-js/88-listing-name.js  상품명·검색어 — 이름 · 노출명 · 브랜드 · 검색어(칩·중복 정리)
-js/89-listing-category.js 카테고리 — 검색·코드 입력 · 수수료/요금표 확인 · 필수속성 받기
+js/87-listing-price.js 옵션·가격 — 필수속성·옵션명 자동 생성 · 판매가 · 추정 단가 · 예상 마진
+js/88-listing-name.js  상품명·검색어 — 이름 · 노출 미리보기 · 브랜드 · 검색어(칩·중복 정리)
+js/89-listing-category.js 카테고리 — 검색·코드 입력 · 수수료 확인 · 필수속성 받기
+                       + 카탈로그 매칭(확장에 시켜 WING pre-matching 조회)
 js/90-listing-image.js 대표이미지 — 후보 업로드·선택·교체 이력 · 모든 옵션에 적용
-js/91-listing-catalog.js 카탈로그 매칭 — 확장에 시켜 WING pre-matching 조회 · 정보만 가져옴
+js/91-listing-filter.js 검색필터 — 카테고리 선택 속성(드롭다운·단위) · 카테고리별 기본값
 js/92-listing-detail.js 상세페이지 — 세트 단위 후보·순서·교체 이력
 js/93-listing-logistics.js 물류·바코드 — 입고명·규격·바코드 방식·날짜 플래그
-js/94-listing-template.js 뼈대 — 기존 상품에서 뜨기·수정·준비 건에 붙이기
+js/94-listing-template.js 등록 설정 — 기본값(브랜드·제조사·고시) + 양식 관리
 js/95-boot.js       네비게이션 · 테마 · 시작  ← 항상 마지막
 ```
 
@@ -84,15 +85,16 @@ js/95-boot.js       네비게이션 · 테마 · 시작  ← 항상 마지막
 
 ```
 소싱 즐겨찾기 → [등록 준비] → listing_projects 1건 + 옵션 1행
-   ├ 뼈대        복제 원본 또는 listing_templates  (배송·반품지·과세·필수속성·고시정보)
-   ├ 카테고리    display_category_code
-   ├ 상품명·검색어
-   ├ 대표이미지  listing_assets(kind='rep')     ← 옵션별
-   ├ 상세페이지  listing_assets(kind='detail')  ← 상품 단위
-   ├ 물류·바코드 listing_project_items          ← 옵션별
-   └ 가격        listing_project_items
+                            (등록 설정의 기본값·기본 양식이 자동으로 붙는다)
+   ① 카테고리     display_category_code       ← **먼저 정해야 나머지가 풀린다**
+   ② 상품명·검색어 product_name · search_tags
+   ③ 옵션·가격    listing_project_items       ← 필수속성 → 옵션명 자동 생성
+   ④ 검색필터     listing_projects.search_filters  ← 옵션이 있어야 열린다
+   ⑤ 대표이미지   listing_assets(kind='rep')  ← 옵션별
+   ⑥ 상세페이지   listing_assets(kind='detail') ← 상품 단위·세트
+   ⑦ 물류·바코드  listing_project_items       ← 옵션별
               ↓ 다 찼으면 (v_listing_ready.all_done)
-   상품등록 화면에서 payload 빌드 → coupang_write_queue(product_create)
+   상품등록 화면에서 payload 빌드 → 확인 → coupang_write_queue(product_create)
 ```
 
 **등록 화면은 값을 받지 않는다.** 상품명을 고치려면 상품명 화면에서 고친다. 이유는

@@ -1,7 +1,7 @@
 # 문서 지도
 
 > **언제 읽나**: 무언가를 찾을 때 **가장 먼저**. 어느 문서를 열지 여기서 정한다.
-> **최종 갱신**: 2026-08-21
+> **최종 갱신**: 2026-08-22
 
 ## 먼저 읽을 것
 
@@ -62,6 +62,10 @@
 | 쿠팡에 쓰기가 안 나감 (가격·상품수정·등록) | `domain/product-listing.md` |
 | 상품 복제할 때 뭘 지우나 | `domain/product-listing.md` · D-19 |
 | 등록 준비 배지가 안 채워짐 · 등록 버튼이 비활성 | `domain/product-listing.md` (등록 파이프라인) · D-21 |
+| 화면이 잠겨서 입력이 안 됨 | `domain/product-listing.md` (순서 강제) · D-22 |
+| 옵션명이 자동으로 바뀜 · 필수속성 | `domain/product-listing.md` · D-23 |
+| 검색필터 항목이 안 나옴 | `api/coupang-open-api.md` (카테고리 속성) |
+| 늘 같은 값을 매번 넣기 싫음 | `domain/product-listing.md` (등록 설정) |
 | 바코드를 쿠팡이 발급하나 우리가 넣나 | `domain/product-listing.md` · D-02 |
 | 노출·클릭 지표는 어디서 오나 | `api/wing-internal.md` · D-20 |
 | 실험 전후 비교가 "판단 불가"로 나옴 | `domain/product-listing.md` |
