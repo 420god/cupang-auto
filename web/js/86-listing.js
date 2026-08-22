@@ -416,7 +416,14 @@ async function lstBuildPayload(projectId) {
       manufacture: p.manufacture || (settingsRow && settingsRow.default_manufacture) || p.brand || ''
     });
   if (p.display_category_code) product.displayCategoryCode = Number(p.display_category_code);
-  if (!p.manufacture) auto.push('제조사가 비어 브랜드명을 넣었습니다 (쿠팡 안내와 같은 방식)');
+  /* 무엇으로 채웠는지 **정확히** 말한다. "브랜드명을 넣었다"고만 하면 설정값이 들어간
+     경우에도 그렇게 보여서, 확인 화면이 사실과 다른 말을 하게 된다. */
+  if (!p.manufacture) {
+    const from = (settingsRow && settingsRow.default_manufacture) ? '등록 설정의 제조사'
+      : (p.brand ? '브랜드명(쿠팡 안내와 같은 방식)' : null);
+    if (from) auto.push(`제조사가 비어 ${from}을(를) 넣었습니다`);
+    else warn.push('제조사가 비어 있습니다 — 등록 설정이나 카탈로그 매칭으로 채우세요');
+  }
 
   /* ── 옵션 공통(뼈대) ── */
   const itemCommon = Object.assign({},
