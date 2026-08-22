@@ -418,6 +418,18 @@ async function lstBuildPayload(projectId) {
   if (p.display_category_code) product.displayCategoryCode = Number(p.display_category_code);
   /* 무엇으로 채웠는지 **정확히** 말한다. "브랜드명을 넣었다"고만 하면 설정값이 들어간
      경우에도 그렇게 보여서, 확인 화면이 사실과 다른 말을 하게 된다. */
+  /* 예전(2026-08-22 이전)에는 카탈로그 매칭이 브랜드·제조사를 준비 건에 그대로 써넣었다.
+     그 준비 건들이 아직 남아 있으므로 **등록 직전에 한 번 더 짚는다.** */
+  const catSnap = p.catalog_snapshot || {};
+  [['brand', '브랜드', catSnap.brand], ['manufacture', '제조사', catSnap.manufacture]]
+    .forEach(([key, label, snapVal]) => {
+      const cur = String(p[key] || '').trim();
+      if (cur && snapVal && cur === String(snapVal).trim()) {
+        warn.push(`${label} "${cur}"가 **카탈로그에서 본 남의 상품 값과 같습니다** — `
+          + '우리 값이 맞는지 상품명·검색어 화면에서 확인하세요');
+      }
+    });
+
   if (!p.manufacture) {
     const from = (settingsRow && settingsRow.default_manufacture) ? '등록 설정의 제조사'
       : (p.brand ? '브랜드명(쿠팡 안내와 같은 방식)' : null);
@@ -621,6 +633,10 @@ async function lstOpenSubmit(projectId) {
     '<div class="kv-grid">'
     + '<span class="kv"><span class="kv-k">상품명</span><span class="kv-v">' + esc(pay.product.sellerProductName) + '</span></span>'
     + '<span class="kv"><span class="kv-k">카테고리</span><span class="kv-v">' + esc(p.category_path || pay.product.displayCategoryCode || '—') + '</span></span>'
+    + '<span class="kv"><span class="kv-k">브랜드</span><span class="kv-v">' + esc(pay.product.brand || '—') + '</span></span>'
+    /* 제조사는 WING '상품 주요 정보'의 필수 첫 칸이다. 요약에 없어서 첫 등록 때
+       카탈로그(남의 상품) 값이 그대로 나간 걸 아무도 못 봤다(2026-08-22). */
+    + '<span class="kv"><span class="kv-k">제조사</span><span class="kv-v">' + esc(pay.product.manufacture || '—') + '</span></span>'
     + '<span class="kv"><span class="kv-k">옵션</span><span class="kv-v">' + pay.items.length + '개</span></span>'
     + '<span class="kv"><span class="kv-k">복제 원본</span><span class="kv-v">' + esc(pay.source_seller_product_id || '없음') + '</span></span>'
     + '</div>'

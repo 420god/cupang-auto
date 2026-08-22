@@ -574,6 +574,14 @@
               <input id="lnBrand" type="text" /></label>
           </div>
 
+          <!-- 제조사는 WING '상품 주요 정보'의 첫 칸이고 **필수**다. 여기 칸이 없어서
+               카탈로그 매칭 값(경쟁 상품의 제조사)이 그대로 등록된 사고가 있었다
+               (2026-08-22 실측: 제조사가 "루모아"로 등록됨). -->
+          <label class="field"><span>제조사
+            <span class="muted">비우면 등록 설정의 기본 제조사 → 그것도 없으면 브랜드명</span></span>
+            <input id="lnManufacture" type="text" /></label>
+          <p class="muted sm" id="lnManuFrom"></p>
+
           <label class="field"><span>검색어 <span class="muted">쉼표로 구분</span></span>
             <input id="lnTags" type="text" placeholder="슬라임, 말랑이, 수제슬라임, 촉감놀이" /></label>
           <div class="lst-chips" id="lnTagChips" style="margin-bottom:6px"></div>

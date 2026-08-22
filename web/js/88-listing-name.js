@@ -13,7 +13,7 @@
    파일 순서 주의(D-17): 86 뒤, 90 앞. 86의 lstFetchOne·lstStepBar 를 쓴다.
    ============================================================ */
 
-const LN = { p: null, items: [] };
+const LN = { p: null, items: [], settings: null };
 
 async function loadListingName() {
   let rows;
@@ -50,7 +50,9 @@ async function lnLoadCurrent() {
   $('#lnName').value = p.product_name || '';
   $('#lnDisplayName').value = p.display_product_name || '';
   $('#lnBrand').value = p.brand || '';
+  $('#lnManufacture').value = p.manufacture || '';
   $('#lnTags').value = (p.search_tags || []).join(', ');
+  await lnShowManufactureFrom();
 
   /* 소싱 때 본 상품. **판단의 출발점이라 늘 옆에 보여준다** — 이름을 지을 때
      "무엇과 경쟁하는 이름인가"가 안 보이면 그냥 예쁜 이름이 된다. */
@@ -156,6 +158,7 @@ $('#lnSave').onclick = async () => {
         product_name: name,
         display_product_name: ($('#lnDisplayName').value || '').trim() || null,
         brand: ($('#lnBrand').value || '').trim() || null,
+        manufacture: ($('#lnManufacture').value || '').trim() || null,
         search_tags: uniq
       }
     });
@@ -173,3 +176,45 @@ $('#lnSave').onclick = async () => {
     btn.disabled = false;
   }
 };
+
+
+/* 제조사는 **비었을 때 무엇이 나가는지**를 눈으로 보여준다.
+   ------------------------------------------------------------
+   등록 몸통의 manufacture 는 `준비 건 → 등록 설정 기본값 → 브랜드명` 순으로 정해진다
+   (86-listing.js lstBuildPayload). 그 순서를 사람이 모르면 빈 칸을 "안 나간다"로 읽는다.
+
+   이 칸이 없어서 카탈로그 매칭이 넣은 경쟁 상품 제조사가 그대로 등록된 적이 있다
+   (2026-08-22 첫 등록: 제조사 "루모아"). 그래서 카탈로그에서 온 값이면 그렇게 말한다. */
+async function lnShowManufactureFrom() {
+  const el = $('#lnManuFrom');
+  if (!el) return;
+  const p = LN.p || {};
+  const cur = ($('#lnManufacture').value || '').trim();
+
+  if (cur) {
+    /* 카탈로그 스냅샷의 제조사와 같으면 남의 값일 가능성이 높다. 조용히 넘기지 않는다. */
+    const snapManu = ((p.catalog_snapshot || {}).manufacture || '').trim();
+    el.innerHTML = (snapManu && snapManu === cur)
+      ? `지금 값은 <b>카탈로그 매칭에서 본 상품의 제조사</b>입니다 — 우리 제조사가 맞는지 확인하세요.`
+      : '';
+    el.classList.toggle('neg', !!(snapManu && snapManu === cur));
+    return;
+  }
+
+  if (LN.settings === null) {
+    try { LN.settings = (await api('listing_settings?select=*&id=eq.1&limit=1'))[0] || {}; }
+    catch (e) { LN.settings = {}; }
+  }
+  const def = (LN.settings.default_manufacture || '').trim();
+  const brand = ($('#lnBrand').value || '').trim();
+  el.textContent = def ? `비워두면 등록 설정의 "${def}"이(가) 나갑니다`
+    : (brand ? `비워두면 브랜드명 "${brand}"이(가) 나갑니다 (쿠팡 안내와 같은 방식)`
+             : '비워두면 등록할 때 제조사가 비어 경고가 뜹니다');
+  el.classList.remove('neg');
+}
+
+/* 타이핑하는 동안에도 안내가 따라간다 */
+$('#lnManufacture').addEventListener('input', () => lnShowManufactureFrom());
+$('#lnBrand').addEventListener('input', () => {
+  if (!($('#lnManufacture').value || '').trim()) lnShowManufactureFrom();
+});

@@ -444,8 +444,13 @@ $('#lkResults').addEventListener('click', async (ev) => {
       catalog_matched_at: new Date().toISOString(),
       catalog_snapshot: c.raw          // 원문 통째로 (R-04)
     };
-    if (c.brand) body.brand = c.brand;
-    if (c.manufacture) body.manufacture = c.manufacture;
+    /* **브랜드·제조사는 가져오지 않는다**(2026-08-22 사용자 결정).
+       예전에는 여기서 body.brand / body.manufacture 에 카탈로그 값을 그대로 넣었다.
+       그 결과 첫 등록에서 WING '상품 주요 정보'의 제조사가 **경쟁 상품의 제조사("루모아")**로
+       나갔다. 카탈로그는 **남의 상품 정보**다 — 조회수·판매량·카테고리를 보려고 보는 것이지
+       우리 상품의 신원을 여기서 정하는 게 아니다.
+       값 자체는 catalog_snapshot 과 아래 근거 기록에 남으므로 필요하면 보고 옮겨 적으면 된다.
+       우리 값은 상품명·검색어 화면에서 사람이 정한다. */
 
     /* 카테고리 — 코드가 오면 그대로 쓰고, 경로만 오면 우리 표에서 찾아 코드를 얻는다.
        **못 찾으면 채우지 않는다.** 잘못된 코드로 등록하면 필수속성이 통째로 어긋난다. */
@@ -483,6 +488,14 @@ $('#lkResults').addEventListener('click', async (ev) => {
       + (c.sales != null ? ` · 28일 판매 ${c.sales}` : '')
       + (c.salePrice != null ? ` · 그때 가격 ${c.salePrice}원` : ''),
       { source: 'pre-matching', catalog: c.raw });
+
+    /* 무엇을 안 가져왔는지도 말한다 — 조용히 빼면 "왜 제조사가 안 채워지지"가 된다(R-15). */
+    const skipped = [c.brand ? `브랜드 "${c.brand}"` : null,
+                     c.manufacture ? `제조사 "${c.manufacture}"` : null].filter(Boolean);
+    if (skipped.length) {
+      catMsg = ` · ${skipped.join(' · ')}는 참고만 했습니다(남의 상품 값이라 안 채웁니다) — `
+        + '우리 값은 상품명·검색어 화면에서 넣으세요' + catMsg;
+    }
 
     toast('가져왔습니다' + (catMsg ? ' —' + catMsg : ''));
     if (catMsg) $('#lkMsg').textContent = catMsg.replace(/^ · /, '');
