@@ -561,6 +561,12 @@
           <label class="field"><span>상품명 <span class="muted sm" id="lnNameCount"></span></span>
             <input id="lnName" type="text" placeholder="예: 덴넬 수제 딸기 슬라임 250g" /></label>
 
+          <!-- 쿠팡은 상품명 뒤에 옵션명을 붙여 노출한다(실측). 합친 모습을 보여준다. -->
+          <div class="filter-panel" style="padding:10px 14px">
+            <div class="muted xs" style="margin-bottom:4px">실제 노출 형태</div>
+            <div id="lnPreview"></div>
+          </div>
+
           <div class="two">
             <label class="field"><span>노출 상품명 <span class="muted">비우면 상품명을 그대로 씁니다</span></span>
               <input id="lnDisplayName" type="text" /></label>

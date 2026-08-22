@@ -13,7 +13,7 @@
    파일 순서 주의(D-17): 86 뒤, 90 앞. 86의 lstFetchOne·lstStepBar 를 쓴다.
    ============================================================ */
 
-const LN = { p: null };
+const LN = { p: null, items: [] };
 
 async function loadListingName() {
   let rows;
@@ -41,8 +41,9 @@ async function lnLoadCurrent() {
   $('#lnEmpty').classList.add('hidden');
   $('#lnBody').classList.remove('hidden');
 
-  const { p, prog } = await lstFetchOne(id);
+  const { p, items, prog } = await lstFetchOne(id);
   LN.p = p;
+  LN.items = items || [];
 
   $('#lnSteps').innerHTML = lstStepBar(prog, 'name');
   lstGuardCategory(p, $('#lnBody'));
@@ -101,6 +102,20 @@ function lnRender() {
      사실만 보여주고 판단은 사람이 한다. */
   const lower = name.toLowerCase();
   const inName = uniq.filter((t) => t.length > 1 && lower.includes(t.toLowerCase()));
+
+  /* **쿠팡은 상품명 뒤에 옵션명을 붙여서 노출한다**(2026-08-21 실측):
+       sellerProductName "덴넬 수제 쿠마 말랑이 슬랑이 슬라임 PVC"
+       + itemName "바나나쿠마 200g 1개"
+     그래서 상품명만 보고 지으면 실제로 보이는 길이를 못 가늠한다. 합쳐서 보여준다. */
+  const shown = (LN.items || []).filter((it) => (it.item_name || '').trim());
+  $('#lnPreview').innerHTML = !name
+    ? '<span class="muted sm">상품명을 넣으면 실제 노출 형태를 보여줍니다.</span>'
+    : (shown.length
+        ? shown.slice(0, 4).map((it) => `<div class="sm">${esc(name)}<span class="muted">, ${
+            esc(it.item_name.trim().split(/\s+/).join(', '))}</span>
+            <span class="muted xs">(${name.length + it.item_name.length}자)</span></div>`).join('')
+          + (shown.length > 4 ? `<div class="muted xs">…외 ${shown.length - 4}개 옵션</div>` : '')
+        : `<div class="sm">${esc(name)}<span class="muted">, (옵션명이 아직 없습니다)</span></div>`);
 
   $('#lnTagChips').innerHTML = uniq.length
     ? uniq.map((t) => `<span class="prog ${inName.indexOf(t) >= 0 ? 'prog-dim' : 'prog-mid'}">${esc(t)}</span>`).join('')

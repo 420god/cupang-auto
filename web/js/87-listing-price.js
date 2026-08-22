@@ -14,7 +14,7 @@
    파일 순서 주의(D-17): 86 뒤, 90 앞. 86의 lstFetchOne·lstStepBar 를 쓴다.
    ============================================================ */
 
-const LP = { p: null, items: [], removed: [], seq: 0 };
+const LP = { p: null, items: [], removed: [], seq: 0, mandatory: [] };
 
 const LP_SIZES = [['MINI', '극소형'], ['SMALL', '소형'], ['MEDIUM', '중형'],
                   ['LARGE1', '대형1'], ['LARGE2', '대형2'], ['XLARGE', '특대형']];
@@ -61,6 +61,18 @@ async function lpLoadCurrent() {
 
   $('#lpSteps').innerHTML = lstStepBar(prog, 'price');
   lstGuardCategory(p, $('#lpItems'));
+
+  /* 카테고리의 필수속성을 읽어둔다 — 옵션 칸과 옵션명이 여기서 나온다.
+     카테고리가 없으면 빈 배열이고, 화면이 그 사실을 말한다(R-15). */
+  LP.mandatory = [];
+  if (p && p.display_category_code) {
+    try {
+      const m = (await api('coupang_category_meta?select=raw&display_category_code=eq.'
+        + encodeURIComponent(p.display_category_code) + '&limit=1'))[0];
+      LP.mandatory = (((m || {}).raw || {}).attributes || [])
+        .filter((a) => a.required === 'MANDATORY');
+    } catch (e) { /* 029 미실행 */ }
+  }
   $('#lpSummary').textContent = (p && p.product_name)
     ? `${p.product_name} · 옵션 ${items.length}개`
     : `옵션 ${items.length}개`;
@@ -74,7 +86,12 @@ async function lpLoadCurrent() {
       + '판매수수료와 입출고비가 카테고리에서 나옵니다. 카테고리 화면에서 정한 뒤 다시 보세요.';
 
   box.innerHTML = items.map((it) => lpItemCard(it)).join('');
-  $$('#lpItems [data-lp]').forEach((row) => lpCalc(row));
+  $$('#lpItems [data-lp]').forEach((row) => {
+    lpCalc(row);
+    /* 지금 저장된 속성으로 만들어지는 이름을 기억해둔다 — 이게 "자동으로 만든 이름"의
+       기준이 된다. 사람이 다른 이름을 써두면 속성을 바꿔도 안 덮인다. */
+    row.dataset.lastAuto = lpNameFromAttrs(row);
+  });
 
   const last = await lstLastNote(id, 'price');
   $('#lpNote').value = '';
@@ -83,14 +100,71 @@ async function lpLoadCurrent() {
     : '';
 }
 
+/* 카테고리의 **필수속성** 칸. 실측으로 확인한 것(2026-08-21):
+   옵션명은 이 값들의 조합이다 — `색상=감자색 · 개당 중량=70g · 수량=1개` → "감자색 70g 1개".
+   그래서 여기서 값을 받고 옵션명을 만들어준다. 그동안은 옵션명만 받고 등록할 때
+   **추측으로**(색상←옵션명) 채웠는데, 그러면 복제 원본 값이 그대로 나가는 사고가 났다. */
+function lpAttrFields(it) {
+  if (!LP.mandatory.length) {
+    return '<p class="muted sm">이 카테고리의 필수속성 목록을 아직 안 받았습니다 — '
+      + '카테고리 화면에서 [지금 받기]를 누르면 여기에 칸이 생깁니다.</p>';
+  }
+  const cur = it.attributes || {};
+  return '<div class="lf-grid">' + LP.mandatory.map((a) => {
+    const nm = a.attributeTypeName;
+    const raw = cur[nm] == null ? '' : String(cur[nm]);
+    const units = (a.usableUnits && a.usableUnits.length) ? a.usableUnits
+      : ((a.basicUnit && a.basicUnit !== '없음') ? [a.basicUnit] : []);
+    let control;
+    if (a.inputType === 'SELECT' && (a.inputValues || []).length) {
+      control = `<select class="lp-attr" data-attr="${esc(nm)}">
+        <option value="">선택안함</option>
+        ${a.inputValues.map((x) => `<option${x === raw ? ' selected' : ''}>${esc(x)}</option>`).join('')}
+      </select>`;
+    } else if (units.length) {
+      const m = raw.match(/^\s*([\d.]+)\s*(.*)$/);
+      control = `<div class="range">
+        <input class="lp-attr" data-attr="${esc(nm)}" type="number" step="any"
+               value="${esc(m ? m[1] : '')}" placeholder="숫자" />
+        <select class="lp-attr-unit" style="max-width:88px">
+          ${units.map((u) => `<option${u === ((m && m[2]) || units[0]) ? ' selected' : ''}>${esc(u)}</option>`).join('')}
+        </select></div>`;
+    } else {
+      control = `<input class="lp-attr" data-attr="${esc(nm)}" type="text" value="${esc(raw)}"
+                        placeholder="직접 입력" />`;
+    }
+    return `<label class="field"><span>${esc(nm)} <span class="neg">·</span></span>${control}</label>`;
+  }).join('') + '</div>';
+}
+
+/* 필수속성 값을 옵션명으로 합친다. 메타에 적힌 순서를 그대로 따른다 —
+   실측 상품이 그 순서였다(색상 → 개당 중량 → 수량 = "감자색 70g 1개"). */
+function lpNameFromAttrs(row) {
+  const parts = [];
+  LP.mandatory.forEach((a) => {
+    const el = row.querySelector(`.lp-attr[data-attr="${a.attributeTypeName}"]`);
+    if (!el) return;
+    const v = (el.value || '').trim();
+    if (!v) return;
+    const unitEl = el.parentNode.querySelector('.lp-attr-unit');
+    parts.push(unitEl ? v + unitEl.value : v);
+  });
+  return parts.join(' ');
+}
+
 function lpItemCard(it) {
   const k = 'lp' + (LP.seq++);
   const v = (x) => (x == null ? '' : esc(String(x)));
   return `<div class="lp-card" data-lp="${k}" data-id="${it.id ? esc(it.id) : ''}">
     <div class="lp-card-head">
-      <input class="lp-name" type="text" placeholder="옵션명 (예: 레드 1세트)" value="${v(it.item_name)}" />
+      <input class="lp-name" type="text" placeholder="옵션명 (속성을 넣으면 자동으로 만들어집니다)"
+             value="${v(it.item_name)}" />
+      <button class="btn btn-sm lp-rename" title="필수속성으로 옵션명을 다시 만듭니다">이름 만들기</button>
       <button class="btn btn-sm btn-ghost lp-del" title="이 옵션을 지웁니다">삭제</button>
     </div>
+
+    <h4 class="sku-sec">필수속성 <span class="muted sm">— 이 값들이 합쳐져 옵션명이 됩니다</span></h4>
+    ${lpAttrFields(it)}
 
     <div class="two">
       <label class="field"><span>로켓그로스 판매가 (원)</span>
@@ -182,7 +256,29 @@ $('#lpItems').addEventListener('input', (ev) => {
 });
 $('#lpItems').addEventListener('change', (ev) => {
   const row = ev.target.closest('[data-lp]');
-  if (row) lpCalc(row);
+  if (!row) return;
+  lpCalc(row);
+  /* 속성을 건드렸으면 옵션명을 다시 만든다. **사람이 직접 쓴 이름은 안 건드린다** —
+     비어 있거나, 직전 속성 조합과 똑같을 때만 갈아끼운다. */
+  if (ev.target.matches('.lp-attr, .lp-attr-unit')) {
+    const nameEl = row.querySelector('.lp-name');
+    const cur = (nameEl.value || '').trim();
+    if (!cur || cur === row.dataset.lastAuto) {
+      const made = lpNameFromAttrs(row);
+      nameEl.value = made;
+      row.dataset.lastAuto = made;
+    }
+  }
+});
+
+/* [이름 만들기] — 사람이 고친 이름도 이 버튼을 누르면 속성 조합으로 덮는다 */
+$('#lpItems').addEventListener('click', (ev) => {
+  if (!ev.target.matches('.lp-rename')) return;
+  const row = ev.target.closest('[data-lp]');
+  const made = lpNameFromAttrs(row);
+  if (!made) { toast('필수속성을 먼저 채우세요'); return; }
+  row.querySelector('.lp-name').value = made;
+  row.dataset.lastAuto = made;
 });
 
 /* 삭제는 화면에서만 빼고, 저장할 때 실제로 지운다 — 실수로 누른 걸 되돌릴 수 있게 */
@@ -236,7 +332,18 @@ $('#lpSave').onclick = async () => {
         supplier_offer_url: (row.querySelector('.lp-url').value || '').trim() || null,
         supplier_option1_cn: (row.querySelector('.lp-cn1').value || '').trim() || null,
         supplier_option2_cn: (row.querySelector('.lp-cn2').value || '').trim() || null,
-        supplier_seller_id: (row.querySelector('.lp-seller').value || '').trim() || null
+        supplier_seller_id: (row.querySelector('.lp-seller').value || '').trim() || null,
+        /* 필수속성. 단위를 붙여서 담는다(실측 형태: "70g" · "1개") */
+        attributes: (function () {
+          const out = {};
+          row.querySelectorAll('.lp-attr').forEach((el) => {
+            const v = (el.value || '').trim();
+            if (!v) return;
+            const u = el.parentNode.querySelector('.lp-attr-unit');
+            out[el.dataset.attr] = u ? v + u.value : v;
+          });
+          return out;
+        })()
       };
       if (row.dataset.id) {
         await api(`listing_project_items?id=eq.${row.dataset.id}`, {
