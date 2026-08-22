@@ -156,6 +156,11 @@
       </div>
       <div class="nav-group">
         <div class="nav-group-label">공급</div>
+        <!-- 구매요청이 발주보다 앞이다 — 요청을 해야 청구서가 오고, 발주는 청구서부터다 -->
+        <button class="nav-item" data-page="preq">
+        <svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8M20 12v7a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h9"/></svg>
+        <span>구매요청</span>
+        </button>
         <button class="nav-item" data-page="po">
         <svg viewBox="0 0 24 24"><path d="M3 9h18M7 3v4M17 3v4M4 5h16v16H4zM8 13h8M8 17h5"/></svg>
         <span>발주</span>
@@ -936,6 +941,79 @@
 
       <!-- ── 카테고리 ── -->
       <!-- ── 발주 ── -->
+      <!-- ── 구매요청 (쿠플러스에 넣기 전 단계, 039) ──
+           **요청 1건 = SKU 1개**이고 청구서는 여러 요청을 묶어 한 장으로 온다.
+           그래서 묶음(purchase_requests) 아래에 줄(purchase_request_lines)을 쌓는다.
+           폼 전체는 docs/api/couplus.md 「구매요청 폼」. -->
+      <section id="page-preq" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>구매요청</h2>
+            <p class="muted sm" id="prqSummary">—</p>
+          </div>
+          <div class="page-actions">
+            <button id="prqBack" class="btn btn-sm hidden">← 묶음 목록</button>
+            <button id="prqNew" class="btn btn-sm btn-primary">새 요청 묶음</button>
+          </div>
+        </div>
+
+        <div id="prqListWrap">
+          <div class="table-wrap">
+            <table class="grid">
+              <thead><tr>
+                <th>묶음</th><th>상태</th><th class="col-num">줄</th><th class="col-num">수량</th>
+                <th>청구서</th><th>만든 날</th><th></th>
+              </tr></thead>
+              <tbody id="prqRows"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="prqDetail" class="hidden">
+          <div class="filter-panel" style="padding:10px 14px;margin-bottom:10px">
+            <div class="two">
+              <label class="field"><span>묶음 이름</span><input id="prqTitle" type="text" /></label>
+              <label class="field"><span>상태</span>
+                <select id="prqStatus">
+                  <option value="draft">만드는 중</option>
+                  <option value="submitted">쿠플러스에 넣음</option>
+                  <option value="invoiced">청구서 받음</option>
+                  <option value="cancelled">취소</option>
+                </select></label>
+            </div>
+            <label class="field"><span>메모</span><textarea id="prqMemo" rows="2"></textarea></label>
+            <div class="page-actions" style="justify-content:flex-start;gap:6px">
+              <button id="prqSaveHead" class="btn btn-sm btn-primary">묶음 저장</button>
+              <button id="prqAddOpen" class="btn btn-sm">+ SKU 추가</button>
+              <span class="muted sm" id="prqHeadMsg"></span>
+            </div>
+          </div>
+
+          <div id="prqAddBox" class="filter-panel hidden" style="padding:10px 14px;margin-bottom:10px">
+            <p class="muted sm">재고 화면과 <b>같은 계산</b>입니다 — 발주 필요부터 위에 옵니다.
+              권장 수량이 미리 채워지고, 고치면 고쳤다는 사실이 남습니다.</p>
+            <label class="field"><span>찾기</span>
+              <input id="prqAddSearch" type="text" placeholder="상품명·바코드" /></label>
+            <div class="table-wrap" style="max-height:320px;overflow:auto">
+              <table class="grid"><thead><tr>
+                <th>SKU</th><th>판정</th><th class="col-num">일평균</th>
+                <th class="col-num">가진 물량</th><th class="col-num">권장</th><th></th>
+              </tr></thead><tbody id="prqAddRows"></tbody></table>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="grid">
+              <thead><tr>
+                <th>제품정보</th><th>구매링크</th><th>옵션(중국어)</th>
+                <th class="col-num">수량</th><th>요청사항</th><th>넣음</th><th></th>
+              </tr></thead>
+              <tbody id="prqLineRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <section id="page-po" class="page hidden">
         <div class="page-head">
           <div>
@@ -1847,6 +1925,64 @@
 <script src="js/40-invoice.js"></script>
 <script src="js/50-purchase.js"></script>
 <script src="js/60-inbound.js"></script>
+<!-- 구매요청 줄의 [요청등록] — 쿠플러스 모달과 같은 항목을 같은 순서로 둔다.
+     순서를 바꾸면 옮겨 적을 때 눈이 미끄러진다(docs/api/couplus.md 「구매요청 폼」). -->
+<div id="prqLineModal" class="modal hidden">
+  <div class="modal-backdrop" data-close></div>
+  <div class="modal-card modal-wide">
+    <div class="modal-head">
+      <h3 id="prqLineTitle">요청사항</h3>
+      <button class="icon-btn" data-close aria-label="닫기">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="prqLineRo" class="kv-grid"></div>
+
+      <h4 class="sku-sec">1~4. 수량 · 구성 · 도착지</h4>
+      <div class="two">
+        <label class="field"><span>구매요청수량 <span class="muted" id="prqMoqNote"></span></span>
+          <input id="prqQty" type="number" min="1" /></label>
+        <label class="field"><span>판매구성수량 <span class="muted">세트가 아니면 1</span></span>
+          <input id="prqBundleQty" type="number" min="1" value="1" /></label>
+      </div>
+      <div class="two">
+        <label class="chk"><input id="prqIsBundle" type="checkbox" /><span>A-B번들 묶음구성</span></label>
+        <label class="field"><span>도착지</span>
+          <select id="prqDest">
+            <option value="coupang_center">쿠팡센터</option>
+            <option value="owner">화주(직수령)</option>
+          </select></label>
+      </div>
+
+      <h4 class="sku-sec">8. 검수 및 포장</h4>
+      <label class="field"><span>포장 방법</span>
+        <select id="prqPacking">
+          <option value="delegate">포장 방법 위임</option>
+          <option value="no_repack">재포장 생략</option>
+          <option value="opp">투명 OPP 봉투 포장 (무료)</option>
+          <option value="ldpe">불투명 LDPE 봉투 포장 (무료)</option>
+        </select></label>
+      <div id="prqPackOpts"></div>
+      <p class="muted sm" id="prqPackFee"></p>
+
+      <h4 class="sku-sec">기타요청사항</h4>
+      <label class="field"><span>배대지 작업요청사항</span>
+        <textarea id="prqWhNote" rows="3"></textarea></label>
+      <label class="field"><span>1688판매자와의 협의 사항</span>
+        <textarea id="prqSellerNote" rows="2"></textarea></label>
+
+      <h4 class="sku-sec">한글표시사항 <span class="muted sm">— 상품원장의 값입니다. 복사해서 쓰세요</span></h4>
+      <div id="prqLabels"></div>
+
+      <div id="prqLineMsg" class="msg hidden"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close>닫기</button>
+      <button id="prqLineSave" class="btn btn-primary">저장</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/65-purchase-request.js"></script>
 <script src="js/70-outbound.js"></script>
 <script src="js/80-products.js"></script>
 <script src="js/85-product-edit.js"></script>

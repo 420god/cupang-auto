@@ -28,7 +28,7 @@
    ↓ 등록 성공 → 쿠팡이 옵션ID 발급 → rocket-growth-sync.js 가 SKU를 만들 때
 상품원장 SKU                sku_suppliers                      ← 자동으로 따라온다
    ↓
-구매요청 (쿠플러스)          아직 화면 없음 — 다음 작업
+구매요청 화면 (039)          purchase_request_lines            ← 여기서 수량을 정한다
 ```
 
 **옵션명으로 잇는다.** 우리가 `itemName` 으로 보낸 값이 쿠팡 응답에 그대로 돌아오기

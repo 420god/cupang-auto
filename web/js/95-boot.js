@@ -19,6 +19,7 @@ $$('.nav-item').forEach((btn) => {
 
     if (page === 'po')         loadPOs();
     if (page === 'inbound')    loadInbound();
+    if (page === 'preq')       loadPurchaseRequests();
     if (page === 'deposit')    loadDeposits();
     if (page === 'stock')      loadStock();
     if (page === 'ship')       loadShip();
