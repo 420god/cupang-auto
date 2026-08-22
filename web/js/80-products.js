@@ -364,6 +364,19 @@ function openSkuModal(skuId) {
   set('#skuOpt2', sup.option2_cn);
   set('#skuPriceCny', sup.last_price_cny);
   set('#skuSellerId', sup.seller_1688_id);
+
+  /* 공급처는 읽기 전용으로 먼저 보여준다 — 입력칸은 접혀 있다(2026-08-22).
+     **비어 있으면 어디서 채우는지 말한다**(R-15). 예전에는 빈 칸만 보여서
+     사람이 여기서 채웠고, 등록 준비 쪽 값과 두 벌이 됐다. */
+  const supKv = [['상품 링크', sup.offer_url], ['옵션1', sup.option1_cn],
+                 ['옵션2', sup.option2_cn],
+                 ['최근 단가', sup.last_price_cny != null ? sup.last_price_cny + ' CNY' : null],
+                 ['판매자 ID', sup.seller_1688_id]].filter(([, v]) => v != null && v !== '');
+  $('#skuSupRo').innerHTML = supKv.length
+    ? supKv.map(([k, v]) => `<span class="kv"><span class="kv-k">${k}</span>`
+        + `<span class="kv-v">${esc(String(v))}</span></span>`).join('')
+    : '<p class="muted sm">공급처가 비어 있습니다 — <b>등록 준비의 옵션·가격 화면</b>에서 넣으면 '
+      + '등록 뒤 동기화가 여기로 옮겨줍니다. 이미 등록된 상품이면 아래 접힌 칸에서 임시로 넣으세요.</p>';
   set('#skuMoq', s.moq);
   set('#skuLeadTime', s.lead_time_days);
   set('#skuSafetyDays', s.safety_days);

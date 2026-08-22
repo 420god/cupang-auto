@@ -1598,17 +1598,28 @@
 
       <!-- 쿠팡 판매가 — 여기서 고치면 VPS 워커가 쿠팡에 실제로 쏜다(db/migrations/023).
            WING이 못 하는 걸 하는 자리다: 원가·수수료·입출고비를 다 아는 채로 가격을 정한다. -->
-      <h4 class="sku-sec">공급처 (1688)</h4>
-      <label class="field"><span>상품 링크</span>
-        <input id="skuOfferUrl" type="url" placeholder="https://detail.1688.com/offer/..." /></label>
-      <div class="two">
-        <label class="field"><span>옵션1 (중국어)</span><input id="skuOpt1" type="text" /></label>
-        <label class="field"><span>옵션2 (중국어)</span><input id="skuOpt2" type="text" /></label>
-      </div>
-      <div class="two">
-        <label class="field"><span>최근 단가 (CNY)</span><input id="skuPriceCny" type="number" step="0.01" /></label>
-        <label class="field"><span>판매자 ID</span><input id="skuSellerId" type="text" /></label>
-      </div>
+      <!-- 공급처는 **여기서 넣는 값이 아니다**(사용자 결정 2026-08-22).
+           등록 준비의 옵션·가격 화면에서 넣으면 등록 뒤 동기화가 SKU로 옮겨준다.
+           같은 값을 두 곳에서 치면 어느 쪽이 맞는지 알 수 없게 된다.
+           고치는 자리는 구매요청 화면으로 간다 — 그때까지만 아래 접힌 칸을 남겨둔다. -->
+      <h4 class="sku-sec">공급처 (1688)
+        <span class="muted sm">— 등록 준비(옵션·가격)에서 넣으면 등록 뒤 자동으로 넘어옵니다</span></h4>
+      <div id="skuSupRo" class="kv-grid"></div>
+      <details style="margin:6px 0 10px">
+        <summary class="muted sm">여기서 임시로 고치기</summary>
+        <p class="muted sm">이 칸은 <b>구매요청 화면으로 옮겨갑니다.</b>
+          그때까지 급할 때만 쓰세요 — 등록 준비 쪽 값과 갈라집니다.</p>
+        <label class="field"><span>상품 링크</span>
+          <input id="skuOfferUrl" type="url" placeholder="https://detail.1688.com/offer/..." /></label>
+        <div class="two">
+          <label class="field"><span>옵션1 (중국어)</span><input id="skuOpt1" type="text" /></label>
+          <label class="field"><span>옵션2 (중국어)</span><input id="skuOpt2" type="text" /></label>
+        </div>
+        <div class="two">
+          <label class="field"><span>최근 단가 (CNY)</span><input id="skuPriceCny" type="number" step="0.01" /></label>
+          <label class="field"><span>판매자 ID</span><input id="skuSellerId" type="text" /></label>
+        </div>
+      </details>
 
       <h4 class="sku-sec">발주 파라미터</h4>
       <div class="two">

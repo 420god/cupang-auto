@@ -502,6 +502,32 @@ async function syncSkuLedger(accessToken, opts) {
       }
     }
 
+    /* 등록 준비에서 적어둔 공급처(1688 링크·옵션·단가·판매자ID)를 새 SKU에 이어붙인다
+       (2026-08-22 사용자 결정). 전에는 등록 준비 화면에 넣은 값이 여기서 끊겨서,
+       상품원장에서 사람이 **같은 값을 두 번** 쳐야 했다.
+
+       옵션명으로 잇는다 — 우리가 itemName 으로 보낸 값이 그대로 돌아오기 때문이다.
+       못 이으면 **조용히 넘어간다.** 공급처가 없다고 동기화를 멈출 이유는 없다. */
+    let supplierByItemName = null;
+    if (newRows.length) {
+      try {
+        const projs = await sbSelectAll(accessToken, 'listing_projects',
+          `select=id&created_seller_product_id=eq.${encodeURIComponent(spid)}&limit=1`);
+        if (projs.length) {
+          const its = await sbSelectAll(accessToken, 'listing_project_items',
+            `select=item_name,supplier_seller_id,supplier_offer_url,supplier_option1_cn,`
+            + `supplier_option2_cn,supplier_price_cny&project_id=eq.${projs[0].id}`);
+          supplierByItemName = new Map();
+          its.forEach((it) => {
+            const nm = String(it.item_name || '').trim();
+            if (nm) supplierByItemName.set(nm, it);
+          });
+        }
+      } catch (e) {
+        console.log(`  공급처 이어붙이기 건너뜀 (${e.message})`);
+      }
+    }
+
     /* 2) 새 SKU + 채널 매핑 생성 */
     for (const r of newRows) {
       const vid = String(r.vendor_item_id);
@@ -528,6 +554,33 @@ async function syncSkuLedger(accessToken, opts) {
       }], false);
       mappedOption.set(vid, { sku_id: skuId, external_product_id: spid });
       skuById.set(skuId, { id: skuId, product_id: productUuid, barcode: barcode || null });
+
+      /* 공급처 이어붙이기. 값이 하나라도 있을 때만 행을 만든다 —
+         빈 공급처 행은 나중에 "왜 공급처가 있는데 링크가 없지"가 된다. */
+      const sup = supplierByItemName && optName ? supplierByItemName.get(String(optName).trim()) : null;
+      if (sup) {
+        const row = {
+          sku_id: skuId, is_primary: true,
+          seller_1688_id: sup.supplier_seller_id || null,
+          offer_url: sup.supplier_offer_url || null,
+          option1_cn: sup.supplier_option1_cn || null,
+          option2_cn: sup.supplier_option2_cn || null,
+          last_price_cny: sup.supplier_price_cny != null ? sup.supplier_price_cny : null
+        };
+        const any = ['seller_1688_id', 'offer_url', 'option1_cn', 'option2_cn', 'last_price_cny']
+          .some((k) => row[k] != null);
+        if (any) {
+          /* offerId 는 저장할 때 한 번만 뽑는다(웹 화면과 같은 규칙) */
+          const m = String(row.offer_url || '').match(/offer\/(\d+)/);
+          if (m) row.offer_id = m[1];
+          try {
+            await sbInsert(accessToken, 'sku_suppliers', [row], false);
+            console.log(`  공급처 이어붙임  ${skuName}`);
+          } catch (e) {
+            console.log(`  공급처 이어붙이기 실패 (${e.message}) — SKU 는 만들어졌다`);
+          }
+        }
+      }
       created++;
     }
 
