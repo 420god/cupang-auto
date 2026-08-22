@@ -57,7 +57,7 @@ async function liLoadCurrent() {
   LIMG.assets = assets || [];
 
   $('#liSteps').innerHTML = lstStepBar(prog, 'rep_image');
-  lstGuardCategory(p, $('#liBody'));
+  lstGuardCategory(p, $('#liBody'), items);
   liRender();
 
   const last = await lstLastNote(id, 'rep_image');

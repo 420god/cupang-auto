@@ -50,7 +50,7 @@ async function lgLoadCurrent() {
   LG.p = p;
   LG.items = items;
   $('#lgSteps').innerHTML = lstStepBar(prog, 'logistics');
-  lstGuardCategory(p, $('#lgBody'));
+  lstGuardCategory(p, $('#lgBody'), items);
 
   /* 카테고리가 유통기한을 요구하는지. 카테고리를 아직 안 정했으면 알 수 없다(R-15). */
   LG.meta = null;

@@ -32,7 +32,7 @@ $$('.nav-item').forEach((btn) => {
     if (page === 'listing-detail') loadListingDetail();
     if (page === 'listing-logistics') loadListingLogistics();
     if (page === 'listing-filter') loadListingFilter();
-    if (page === 'listing-settings') loadListingTemplate();
+    if (page === 'listing-settings') { loadListingTemplate(); lsLoad(); }
     if (page === 'sales')      loadSales();
     if (page === 'favorites')  loadFavorites();
     if (page === 'categories') loadCategories();

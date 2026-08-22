@@ -664,3 +664,4 @@ tr.detail > td { padding: 0; background: var(--surface-2); }
 
 /* ---------- 검색필터 (037) ---------- */
 .lf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 14px; }
+.ls-pane { margin-top: 12px; }

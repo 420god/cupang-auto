@@ -176,10 +176,29 @@ $('#lstNewCreate').onclick = async () => {
    하나 필요하고, 옵션이 0개면 대표이미지·물류·가격 단계가 판정 자체를 못 한다.
    출처 기록(step='source')도 이때 남긴다. 나중에 "이걸 왜 골랐더라"의 출발점이다. */
 async function createListingProject(fields, sourceNote) {
+  /* 늘 같은 값과 기본 양식을 여기서 붙인다(사용자 결정 2026-08-21).
+     **부르는 쪽이 준 값이 이긴다** — 즐겨찾기에서 온 값을 설정이 덮으면 안 된다.
+     설정/양식이 없거나 037·035 미실행이면 그냥 넘어간다(준비 건 생성은 막지 않는다). */
+  const auto = {};
+  try {
+    const st = (await api('listing_settings?select=*&id=eq.1&limit=1'))[0];
+    if (st) {
+      if (st.default_brand) auto.brand = st.default_brand;
+      if (st.default_manufacture) auto.manufacture = st.default_manufacture;
+    }
+  } catch (e) { /* 037 미실행 */ }
+  try {
+    const tpls = await api('listing_templates?select=id,kind&is_default=is.true') || [];
+    tpls.forEach((t) => {
+      if (t.kind === 'shipping') auto.shipping_template_id = t.id;
+      if (t.kind === 'notice') auto.notice_template_id = t.id;
+    });
+  } catch (e) { /* 031·035 미실행 */ }
+
   const [p] = await api('listing_projects', {
     method: 'POST',
     headers: { prefer: 'return=representation' },
-    body: Object.assign({ created_by: AUTH.userId || null }, fields)
+    body: Object.assign({ created_by: AUTH.userId || null }, auto, fields)
   });
   await api('listing_project_items', {
     method: 'POST',
@@ -363,14 +382,16 @@ async function lstBuildPayload(projectId) {
   const warn = [];
   const auto = [];
 
-  const [assets, tpls, metaRows] = await Promise.all([
+  const [assets, tpls, metaRows, settingsRows] = await Promise.all([
     api(`listing_assets?select=*&project_id=eq.${projectId}&is_selected=is.true&order=set_no.asc,position.asc`),
     api('listing_templates?select=*'),
     p.display_category_code
       ? api('coupang_category_meta?select=raw&display_category_code=eq.'
           + encodeURIComponent(p.display_category_code) + '&limit=1')
-      : Promise.resolve([])
+      : Promise.resolve([]),
+    api('listing_settings?select=*&id=eq.1&limit=1').catch(() => [])
   ]);
+  const settingsRow = (settingsRows || [])[0] || null;
   const shipT = (tpls || []).find((t) => t.id === p.shipping_template_id);
   const noticeT = (tpls || []).find((t) => t.id === p.notice_template_id);
   const meta = (metaRows || [])[0] || null;
@@ -392,7 +413,7 @@ async function lstBuildPayload(projectId) {
       displayProductName: (p.display_product_name || p.product_name || ''),
       generalProductName: p.product_name || '',
       brand: p.brand || '',
-      manufacture: p.manufacture || p.brand || ''
+      manufacture: p.manufacture || (settingsRow && settingsRow.default_manufacture) || p.brand || ''
     });
   if (p.display_category_code) product.displayCategoryCode = Number(p.display_category_code);
   if (!p.manufacture) auto.push('제조사가 비어 브랜드명을 넣었습니다 (쿠팡 안내와 같은 방식)');
@@ -401,6 +422,18 @@ async function lstBuildPayload(projectId) {
   const itemCommon = Object.assign({},
     (shipT && shipT.payload.item) || {},
     (noticeT && noticeT.payload.item) || {});
+
+  /* 고시정보: 양식 값이 비었으면 **등록 설정의 기본값**으로 메운다(사용자 결정 2026-08-21).
+     양식이 더 구체적이므로 양식이 우선이고, 설정은 빈 자리만 채운다. */
+  const noticeDef = ((settingsRow || {}).notice_defaults || {}).items || {};
+  if (Array.isArray(itemCommon.notices)) {
+    itemCommon.notices = itemCommon.notices.map((n) => {
+      const nm = n.noticeCategoryDetailName || '';
+      if (String(n.content || '').trim() || !noticeDef[nm]) return n;
+      auto.push(`고시정보 '${nm}' ← 등록 설정 기본값`);
+      return Object.assign({}, n, { content: noticeDef[nm] });
+    });
+  }
 
   /* 고시정보의 '품명 및 모델명'은 상품명으로 채운다(사용자 결정 2026-08-21) */
   if (Array.isArray(itemCommon.notices)) {
@@ -553,13 +586,33 @@ function lstBuildAttributes(meta, template, itemAttrs, filters, itemName, auto, 
    막는 방식은 **열리되 입력만 잠그는 것**이다(사용자 선택). 아예 못 열게 하면
    그 화면에 뭐가 있는지도 볼 수 없다.
    ============================================================ */
-function lstGuardCategory(p, bodyEl) {
+function lstGuardCategory(p, bodyEl, items) {
   if (!bodyEl) return true;
-  const has = !!(p && p.display_category_code);
   const host = bodyEl.parentNode;
   let g = host.querySelector('.lst-guard');
 
-  if (has) {
+  /* 무엇이 먼저 필요한지 순서대로 본다. **카테고리 → 옵션** 순이다.
+     items 를 넘기지 않은 화면은 카테고리만 본다. */
+  let need = null;
+  if (!(p && p.display_category_code)) {
+    need = {
+      page: 'listing-category', label: '카테고리 정하러 가기',
+      msg: '<b>카테고리를 먼저 정해야 합니다.</b> '
+        + '카테고리에 따라 필수속성·검색필터·고시정보·수수료가 전부 달라집니다 — '
+        + '먼저 정하지 않으면 여기서 채운 값이 나중에 안 맞습니다.'
+    };
+  } else if (items && !(items || []).some((it) => String(it.item_name || '').trim())) {
+    /* WING 도 검색필터를 열면 "옵션을 먼저 설정해주세요"로 막는다(2026-08-21 캡처).
+       옵션명이 필수속성의 조합이라, 옵션이 없으면 채울 대상 자체가 없다. */
+    need = {
+      page: 'listing-price', label: '옵션 만들러 가기',
+      msg: '<b>옵션을 먼저 만들어야 합니다.</b> '
+        + '옵션명은 필수속성(색상·수량 등)의 조합이라, 옵션이 없으면 여기서 채울 대상이 없습니다. '
+        + 'WING 도 같은 이유로 막습니다.'
+    };
+  }
+
+  if (!need) {
     if (g) g.remove();
     bodyEl.classList.remove('dim-block');
     return true;
@@ -569,18 +622,19 @@ function lstGuardCategory(p, bodyEl) {
     g.className = 'msg err lst-guard';
     host.insertBefore(g, bodyEl);
   }
-  g.innerHTML = '<b>카테고리를 먼저 정해야 합니다.</b> '
-    + '카테고리에 따라 필수속성·검색필터·고시정보·수수료가 전부 달라집니다 — '
-    + '먼저 정하지 않으면 여기서 채운 값이 나중에 안 맞습니다. '
-    + '<button class="btn btn-sm lst-go-cat" style="margin-left:6px">카테고리 정하러 가기</button>';
+  g.innerHTML = need.msg
+    + ` <button class="btn btn-sm lst-go-cat" data-page="${need.page}" style="margin-left:6px">`
+    + `${need.label}</button>`;
   bodyEl.classList.add('dim-block');
   return false;
 }
 
 /* 배너의 버튼. 화면마다 따로 걸지 않고 한 번만 건다(위임). */
 document.addEventListener('click', (ev) => {
-  if (!ev.target.closest('.lst-go-cat')) return;
+  const go = ev.target.closest('.lst-go-cat');
+  if (!go) return;
+  const page = go.dataset.page || 'listing-category';
   const btn = Array.from(document.querySelectorAll('.nav-item'))
-    .find((b) => b.dataset.page === 'listing-category');
+    .find((b) => b.dataset.page === page);
   if (btn) btn.click();
 });

@@ -720,3 +720,156 @@ async function ltRenderTarget() {
     } finally { btn.disabled = false; }
   };
 }
+
+/* ============================================================
+   등록 설정 — 기본값 (037)
+   ------------------------------------------------------------
+   **상품이 달라도 늘 같은 값**을 한 곳에 둔다(사용자 결정 2026-08-21).
+   준비 건을 만들 때 자동으로 채워지고, 고시정보는 양식 값이 비었을 때 메운다.
+
+   settings(002)와 섞지 않는다 — 그쪽은 환율·기본원가 같은 **계산용**이다.
+   등록용 값을 거기 넣으면 "이 값이 계산에 쓰이나 등록에 쓰이나"를 매번 따져야 한다.
+   ============================================================ */
+
+const LS = { row: null, noticeCats: {} };
+
+/* 탭 — 기본값 / 양식 */
+$('#lsTabs').addEventListener('click', (ev) => {
+  const t = ev.target.closest('.tab');
+  if (!t) return;
+  $$('#lsTabs .tab').forEach((x) => x.classList.toggle('active', x === t));
+  $('#lsBasic').classList.toggle('hidden', t.dataset.pane !== 'basic');
+  $('#lsForm').classList.toggle('hidden', t.dataset.pane !== 'form');
+});
+
+async function lsLoad() {
+  try {
+    LS.row = (await api('listing_settings?select=*&id=eq.1&limit=1'))[0] || null;
+  } catch (e) {
+    $('#lsBasic').innerHTML = /PGRST205|does not exist|404/i.test(e.message)
+      ? '<p class="muted">아직 <b>db/migrations/037_listing_settings.sql</b> 을 실행하지 않았습니다.</p>'
+      : '<p class="muted">불러오지 못했습니다: ' + esc(e.message) + '</p>';
+    return;
+  }
+  const r = LS.row || {};
+  $('#lsBrand').value = r.default_brand || '';
+  $('#lsManufacture').value = r.default_manufacture || '';
+  $('#lsSize').value = r.default_size_type || '';
+  $('#lsOutDay').value = r.default_outbound_day == null ? '' : r.default_outbound_day;
+
+  /* 고시 종류 목록은 받아둔 카테고리 메타에서 모은다 — 우리가 지어내지 않는다 */
+  LS.noticeCats = {};
+  try {
+    const metas = await api('coupang_category_meta?select=raw') || [];
+    metas.forEach((m) => ((m.raw || {}).noticeCategories || []).forEach((nc) => {
+      LS.noticeCats[nc.noticeCategoryName] =
+        (nc.noticeCategoryDetailNames || []).map((d) => d.noticeCategoryDetailName);
+    }));
+  } catch (e) { /* 029 미실행 */ }
+
+  const cur = (r.notice_defaults || {}).noticeCategoryName || '';
+  const names = Object.keys(LS.noticeCats);
+  if (cur && names.indexOf(cur) === -1) names.unshift(cur);
+  $('#lsNoticeCat').innerHTML = names.length
+    ? '<option value="">선택안함</option>'
+      + names.map((n) => `<option${n === cur ? ' selected' : ''}>${esc(n)}</option>`).join('')
+    : '<option value="">카테고리 메타를 받아야 목록이 나옵니다</option>';
+  lsRenderNotices();
+}
+
+function lsRenderNotices() {
+  const cat = $('#lsNoticeCat').value;
+  const saved = (LS.row || {}).notice_defaults || {};
+  const savedItems = (saved.noticeCategoryName === cat) ? (saved.items || {}) : {};
+  const names = LS.noticeCats[cat] || [];
+  if (!cat || !names.length) {
+    $('#lsNoticeRows').innerHTML = '<p class="muted sm">고시 종류를 고르면 항목이 나옵니다.</p>';
+    return;
+  }
+  /* 품명은 항상 상품명이라 여기서 안 받는다(사용자 결정) */
+  $('#lsNoticeRows').innerHTML = '<div class="lf-grid">' + names
+    .filter((n) => !/품명/.test(n))
+    .map((n) => `<label class="field"><span>${esc(n)}</span>
+      <input class="ls-notice" data-n="${esc(n)}" type="text"
+             value="${esc(savedItems[n] || '')}" /></label>`).join('') + '</div>';
+}
+
+$('#lsNoticeCat').addEventListener('change', lsRenderNotices);
+
+$('#lsSave').onclick = async () => {
+  const msg = $('#lsMsg');
+  const btn = $('#lsSave');
+  btn.disabled = true;
+  msg.classList.remove('hidden');
+  msg.textContent = '저장 중…';
+  try {
+    const cat = $('#lsNoticeCat').value;
+    const items = {};
+    $$('#lsNoticeRows .ls-notice').forEach((el) => {
+      const v = (el.value || '').trim();
+      if (v) items[el.dataset.n] = v;
+    });
+    const day = ($('#lsOutDay').value || '').trim();
+    await api('listing_settings?id=eq.1', {
+      method: 'PATCH', headers: { prefer: 'return=minimal' },
+      body: {
+        default_brand: ($('#lsBrand').value || '').trim() || null,
+        default_manufacture: ($('#lsManufacture').value || '').trim() || null,
+        default_size_type: $('#lsSize').value || null,
+        default_outbound_day: day === '' ? null : Number(day),
+        notice_defaults: cat ? { noticeCategoryName: cat, items } : {},
+        updated_by: AUTH.userId || null
+      }
+    });
+    msg.textContent = '저장했습니다.';
+    toast('저장했습니다');
+    await lsLoad();
+  } catch (e) {
+    msg.textContent = '저장 실패: ' + e.message;
+  } finally { btn.disabled = false; }
+};
+
+/* ---------- 양식: 빈 양식 · 복사 ---------- */
+/* 사용자 결정(2026-08-21): 빈 양식에서 직접 만들거나 기존 양식을 복사한다.
+   기존 상품에서 뜨기는 남겨둔다 — 쿠팡이 받아준 값이라 첫 양식을 만들 때 가장 확실하다. */
+$('#ltNewBlank').onclick = async () => {
+  const name = ($('#ltName').value || '').trim() || `${LT_KIND_LABEL[LT.kind]} 양식`;
+  const btn = $('#ltNewBlank');
+  btn.disabled = true;
+  try {
+    const [made] = await api('listing_templates', {
+      method: 'POST', headers: { prefer: 'return=representation' },
+      body: { name, kind: LT.kind, payload: { product: {}, item: {} },
+              is_default: !LT.list.some((t) => t.kind === LT.kind && t.is_default),
+              created_by: AUTH.userId || null }
+    });
+    $('#ltName').value = '';
+    LT.cur[LT.kind] = made.id;
+    toast('빈 양식을 만들었습니다 — 값을 채우세요');
+    await loadListingTemplate();
+  } catch (e) {
+    toast('만들지 못했습니다: ' + e.message);
+  } finally { btn.disabled = false; }
+};
+
+$('#ltCopy').onclick = async () => {
+  const src = LT.list.find((t) => t.id === LT.cur[LT.kind]);
+  if (!src) { toast('복사할 양식을 먼저 고르세요'); return; }
+  const name = ($('#ltName').value || '').trim() || `${src.name} 복사본`;
+  const btn = $('#ltCopy');
+  btn.disabled = true;
+  try {
+    const [made] = await api('listing_templates', {
+      method: 'POST', headers: { prefer: 'return=representation' },
+      body: { name, kind: src.kind, payload: src.payload,
+              source_seller_product_id: src.source_seller_product_id,
+              is_default: false, created_by: AUTH.userId || null }
+    });
+    $('#ltName').value = '';
+    LT.cur[LT.kind] = made.id;
+    toast('복사했습니다');
+    await loadListingTemplate();
+  } catch (e) {
+    toast('복사하지 못했습니다: ' + e.message);
+  } finally { btn.disabled = false; }
+};

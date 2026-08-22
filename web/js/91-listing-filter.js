@@ -47,14 +47,14 @@ async function lfLoadCurrent() {
   $('#lfBody').classList.remove('hidden');
   $('#lfRows').innerHTML = '<div class="loader"><div class="spinner"></div>불러오는 중…</div>';
 
-  const { p, prog } = await lstFetchOne(id);
+  const { p, items, prog } = await lstFetchOne(id);
   LF.p = p;
   $('#lfSteps').innerHTML = lstStepBar(prog, 'category');
 
-  /* 카테고리가 먼저다 — 여기가 그 규칙이 가장 뚜렷한 화면이다.
-     카테고리 없이는 **보여줄 항목 자체가 없다.** */
-  if (!lstGuardCategory(p, $('#lfBody'))) {
-    $('#lfRows').innerHTML = '<p class="muted">카테고리를 정하면 그 카테고리의 필터 항목이 나옵니다.</p>';
+  /* 카테고리 → 옵션 순으로 막는다. WING 도 검색필터를 열면
+     "옵션을 먼저 설정해주세요"로 막는다(2026-08-21 캡처, 사용자 지적). */
+  if (!lstGuardCategory(p, $('#lfBody'), items)) {
+    $('#lfRows').innerHTML = '<p class="muted">위 안내대로 먼저 채우면 여기에 필터 항목이 나옵니다.</p>';
     return;
   }
 
