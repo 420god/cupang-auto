@@ -994,11 +994,15 @@
               권장 수량이 미리 채워지고, 고치면 고쳤다는 사실이 남습니다.</p>
             <label class="field"><span>찾기</span>
               <input id="prqAddSearch" type="text" placeholder="상품명·바코드" /></label>
+            <!-- **신규 상품은 SKU가 아직 없다** — 바코드는 등록·동기화 뒤에 생긴다.
+                 그래서 첫 구매요청은 등록 준비 건에서 나온다(2026-08-22 사용자 지적). -->
+            <div class="lst-chips" style="margin-bottom:6px">
+              <button class="btn btn-sm btn-primary prq-src" data-src="stock">재고에서 (재발주)</button>
+              <button class="btn btn-sm prq-src" data-src="new">신규 — 등록 준비 건에서</button>
+            </div>
             <div class="table-wrap" style="max-height:320px;overflow:auto">
-              <table class="grid"><thead><tr>
-                <th>SKU</th><th>판정</th><th class="col-num">일평균</th>
-                <th class="col-num">가진 물량</th><th class="col-num">권장</th><th></th>
-              </tr></thead><tbody id="prqAddRows"></tbody></table>
+              <table class="grid"><thead><tr id="prqAddHead"></tr></thead>
+                <tbody id="prqAddRows"></tbody></table>
             </div>
           </div>
 
@@ -1568,6 +1572,16 @@
       <div class="sku-ro" id="poDetailRo"></div>
       <div id="poSteps" class="po-steps"></div>
       <p class="muted sm" id="poDetailHint"></p>
+
+      <!-- 이 청구서가 어느 구매요청에서 나왔나(039). **청구서를 받은 그 순간에 고르는 게
+           자연스럽다** — 그때 요청 수량과 청구 수량이 다르면 바로 짚어줄 수 있다. -->
+      <div class="two" style="margin:8px 0">
+        <label class="field"><span>구매요청 묶음
+          <span class="muted">이 청구서가 어느 요청에서 왔나</span></span>
+          <select id="poReqPick"><option value="">— 연결 안 함 —</option></select></label>
+        <div class="field"><span class="muted sm">요청 ↔ 청구 대조</span>
+          <div id="poReqDiff" class="muted sm">묶음을 고르면 수량을 맞춰봅니다.</div></div>
+      </div>
 
       <div class="table-wrap po-lines-wrap">
         <table class="grid">

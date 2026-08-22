@@ -19,7 +19,7 @@
    어느 쪽을 믿어야 할지 모르게 된다.
    ============================================================ */
 
-const PRQ = { list: [], cur: null, lines: [], line: null, skuCache: null };
+const PRQ = { list: [], cur: null, lines: [], line: null, addSrc: 'stock', newRows: null };
 
 /* 쿠플러스 모달의 토글 7개. **화면이 이 배열 하나만 읽는다** — 폼이 바뀌면 여기만 고친다.
    비용을 같이 들고 있는 이유: 켜는 순간 개당 원가가 달라지는데, 그걸 모달에서
@@ -263,22 +263,60 @@ $('#prqAddOpen').onclick = async () => {
   const box = $('#prqAddBox');
   box.classList.toggle('hidden');
   if (box.classList.contains('hidden')) return;
+  await prqLoadSource();
+};
 
-  $('#prqAddRows').innerHTML = '<tr><td colspan="6"><div class="loader"><div class="spinner"></div>'
-    + '재고와 판매 추이를 계산하는 중…</div></td></tr>';
+/* 담을 곳이 두 갈래다.
+     재고에서 — 이미 파는 SKU의 **재발주**. 판매 추이가 있어 권장 수량이 나온다
+     신규    — 아직 SKU가 없는 **첫 구매**. 등록 준비 건에서 가져온다
+   신규를 SKU 목록에서 찾을 수 없는 이유: 바코드가 쿠팡 발급이라 등록·동기화 뒤에야
+   my_skus 행이 생긴다. 그전에도 사야 하므로(첫 물량) 준비 건이 출처가 된다. */
+$$('#prqAddBox .prq-src').forEach((b) => {
+  b.onclick = async () => {
+    PRQ.addSrc = b.dataset.src;
+    $$('#prqAddBox .prq-src').forEach((x) => x.classList.toggle('btn-primary', x === b));
+    await prqLoadSource();
+  };
+});
+
+async function prqLoadSource() {
+  const cols = PRQ.addSrc === 'stock' ? 6 : 5;
+  $('#prqAddRows').innerHTML = `<tr><td colspan="${cols}"><div class="loader"><div class="spinner"></div>`
+    + '불러오는 중…</div></td></tr>';
   try {
-    /* **재고 화면의 계산을 그대로 부른다.** 여기서 다시 계산하면 두 화면이
-       다른 수를 말하게 되고, 어느 쪽을 믿을지 모르게 된다. */
-    await loadStock();
+    if (PRQ.addSrc === 'stock') {
+      /* **재고 화면의 계산을 그대로 부른다.** 여기서 다시 계산하면 두 화면이
+         다른 수를 말하게 되고, 어느 쪽을 믿을지 모르게 된다. */
+      await loadStock();
+    } else if (!PRQ.newRows) {
+      await prqLoadNewRows();
+    }
     prqRenderAdd();
   } catch (e) {
-    $('#prqAddRows').innerHTML = `<tr><td colspan="6" class="muted">계산하지 못했습니다: ${esc(e.message)}</td></tr>`;
+    $('#prqAddRows').innerHTML = `<tr><td colspan="${cols}" class="muted">불러오지 못했습니다: ${esc(e.message)}</td></tr>`;
   }
-};
+}
+
+/* 등록 준비 건의 옵션 = 아직 SKU가 안 생긴 상품. 공급처도 여기 있다(옵션·가격 화면). */
+async function prqLoadNewRows() {
+  const [projects, items] = await Promise.all([
+    api('listing_projects?select=id,product_name,status,created_seller_product_id'
+      + '&status=neq.discarded&order=updated_at.desc&limit=200'),
+    api('listing_project_items?select=*&order=position.asc')
+  ]);
+  const byId = {};
+  (projects || []).forEach((p) => { byId[p.id] = p; });
+  PRQ.newRows = (items || [])
+    .filter((it) => byId[it.project_id])
+    .map((it) => ({ it, p: byId[it.project_id] }));
+}
 
 $('#prqAddSearch').oninput = debounce(() => prqRenderAdd(), 200);
 
 function prqRenderAdd() {
+  if (PRQ.addSrc === 'new') { prqRenderAddNew(); return; }
+  $('#prqAddHead').innerHTML = '<th>SKU</th><th>판정</th><th class="col-num">일평균</th>'
+    + '<th class="col-num">가진 물량</th><th class="col-num">권장</th><th></th>';
   const q = ($('#prqAddSearch').value || '').trim().toLowerCase();
   const already = new Set(PRQ.lines.map((l) => l.sku_id).filter(Boolean));
 
@@ -308,7 +346,75 @@ function prqRenderAdd() {
     : '<tr><td colspan="6" class="muted">고를 SKU가 없습니다.</td></tr>';
 }
 
+/* 신규 목록. **권장 수량이 없다** — 판매 이력이 없으니 계산할 게 없다.
+   여기서 숫자를 지어내면 그게 근거처럼 보인다(R-15). 그래서 MOQ나 1로 두고
+   "첫 구매라 계산 근거가 없다"고 줄에 남긴다. */
+function prqRenderAddNew() {
+  $('#prqAddHead').innerHTML = '<th>준비 건</th><th>옵션</th><th>공급처</th><th>상태</th><th></th>';
+  const q = ($('#prqAddSearch').value || '').trim().toLowerCase();
+  const already = new Set(PRQ.lines.map((l) => (l.sku_name_text || '').trim()).filter(Boolean));
+
+  const rows = (PRQ.newRows || []).filter(({ it, p }) => {
+    const nm = `${p.product_name || ''} ${it.item_name || ''}`.toLowerCase();
+    return !q || nm.includes(q);
+  }).slice(0, 80);
+
+  $('#prqAddRows').innerHTML = rows.length ? rows.map(({ it, p }, i) => {
+    const label = [p.product_name, it.item_name].filter(Boolean).join(', ');
+    const dup = already.has(label.trim());
+    const sup = it.supplier_offer_url || it.supplier_option1_cn || it.supplier_seller_id;
+    return `<tr data-new="${i}">
+      <td><div class="pname">${esc(p.product_name || '(상품명 미정)')}</div>
+        <div class="psub">${p.created_seller_product_id
+          ? '등록됨 · 상품ID ' + esc(p.created_seller_product_id) : '아직 등록 전'}</div></td>
+      <td class="sm">${esc(it.item_name || '(옵션명 없음)')}</td>
+      <td class="sm">${sup ? '있음' : '<span class="neg">없음</span>'}</td>
+      <!-- 86-listing.js 는 이 파일보다 **뒤에** 로드된다(D-17). 클릭 시점이라 실제로는
+           정의돼 있지만, 규칙을 눈으로 지키려고 있을 때만 쓴다. -->
+      <td class="sm">${esc((typeof LISTING_STATUS_LABEL !== 'undefined'
+        && LISTING_STATUS_LABEL[p.status]) || p.status || '')}</td>
+      <td class="col-mid">${dup
+        ? '<span class="muted sm">담김</span>'
+        : '<button class="btn btn-sm btn-primary prq-add-new">담기</button>'}</td>
+    </tr>`;
+  }).join('')
+    : '<tr><td colspan="5" class="muted">등록 준비 건이 없습니다.</td></tr>';
+}
+
 $('#prqAddRows').addEventListener('click', async (ev) => {
+  const trNew = ev.target.closest('tr[data-new]');
+  if (trNew && ev.target.closest('.prq-add-new')) {
+    const entry = (PRQ.newRows || [])[Number(trNew.dataset.new)];
+    if (!entry) return;
+    ev.target.disabled = true;
+    const { it, p } = entry;
+    try {
+      await api('purchase_request_lines', {
+        method: 'POST', headers: { prefer: 'return=minimal' },
+        body: {
+          request_id: PRQ.cur.id,
+          /* SKU는 아직 없다. 바코드도 없다(쿠플러스 폼이 "없으면 생략"을 허용한다).
+             동기화가 SKU를 만든 뒤에 이 줄을 SKU에 잇는 일은 아직 안 한다 — 미해결. */
+          sku_id: null,
+          barcode_text: null,
+          sku_name_text: [p.product_name, it.item_name].filter(Boolean).join(', ') || null,
+          offer_url: it.supplier_offer_url || null,
+          option1_cn: it.supplier_option1_cn || null,
+          option2_cn: it.supplier_option2_cn || null,
+          qty: 1,
+          qty_suggested: null,
+          qty_reason: { source: 'listing_project', project_id: p.id,
+                        note: '첫 구매 — 판매 이력이 없어 권장 수량 없음' }
+        }
+      });
+      await prqLoadLines();
+      prqRenderAddNew();
+    } catch (e) {
+      toast('담지 못했습니다: ' + e.message);
+    } finally { ev.target.disabled = false; }
+    return;
+  }
+
   const tr = ev.target.closest('tr[data-add]');
   if (!tr || !ev.target.closest('.prq-add')) return;
   const r = (STOCK.rows || []).find((x) => x.sku.id === tr.dataset.add);

@@ -195,9 +195,111 @@ async function openPoDetail(poId) {
       .map((s) => `<option value="${esc(skuPickLabel(s))}"></option>`).join('');
 
     renderPoDetail();
+    poLoadRequests();
   } catch (e) {
     $('#poDetailRows').innerHTML = `<tr><td colspan="6" class="muted">불러오기 실패: ${esc(e.message)}</td></tr>`;
   }
+}
+
+/* ---------- 구매요청 묶음과 잇기 (039) ----------
+   **요청과 청구서는 단위가 다르다** — 요청은 SKU 하나씩이고 청구서는 여러 요청을
+   묶어 한 장으로 온다. 그래서 청구서 쪽에서 "이건 그 요청분이다"를 고르게 한다.
+
+   고르고 나면 **수량을 맞춰본다.** 요청 12개인데 청구서가 10개면 그건 사고이거나
+   재고없음 취소다. 청구서를 넣는 그 순간에 안 보면 나중엔 아무도 안 본다. */
+async function poLoadRequests() {
+  const sel = $('#poReqPick');
+  if (!sel) return;
+  try {
+    const reqs = await api('purchase_requests?select=id,title,status,po_id'
+      + '&status=neq.cancelled&order=created_at.desc&limit=100') || [];
+    POD.reqs = reqs;
+    /* 다른 청구서에 이미 붙은 묶음은 고를 수 없게 한다 — 한 요청이 두 청구서에
+       걸리면 대조가 무의미해진다. */
+    sel.disabled = false;
+    sel.innerHTML = '<option value="">— 연결 안 함 —</option>'
+      + reqs.filter((r) => !r.po_id || r.po_id === POD.poId)
+            .map((r) => `<option value="${esc(r.id)}">${esc(r.title || r.id.slice(0, 8))}</option>`)
+            .join('');
+    const mine = reqs.find((r) => r.po_id === POD.poId);
+    sel.value = mine ? mine.id : '';
+    poRenderReqDiff();
+  } catch (e) {
+    /* 039 미실행이면 여기만 조용히 접는다 — 발주 화면 전체를 막을 이유는 없다(R-15) */
+    sel.innerHTML = '<option value="">구매요청 표가 없습니다 (039 미실행)</option>';
+    sel.disabled = true;
+    $('#poReqDiff').textContent = '';
+  }
+}
+
+$('#poReqPick').onchange = async () => {
+  const sel = $('#poReqPick');
+  const id = sel.value;
+  sel.disabled = true;
+  try {
+    /* 이 청구서에 붙어 있던 다른 묶음은 떼어낸다 — 안 그러면 둘이 같은 청구서를 가리킨다 */
+    const prev = (POD.reqs || []).find((r) => r.po_id === POD.poId);
+    if (prev && prev.id !== id) {
+      await api(`purchase_requests?id=eq.${prev.id}`, {
+        method: 'PATCH', headers: { prefer: 'return=minimal' }, body: { po_id: null }
+      });
+      prev.po_id = null;
+    }
+    if (id) {
+      await api(`purchase_requests?id=eq.${id}`, {
+        method: 'PATCH', headers: { prefer: 'return=minimal' },
+        body: { po_id: POD.poId, status: 'invoiced' }
+      });
+      const r = (POD.reqs || []).find((x) => x.id === id);
+      if (r) { r.po_id = POD.poId; r.status = 'invoiced'; }
+    }
+    await poRenderReqDiff();
+  } catch (e) {
+    $('#poReqDiff').innerHTML = '<span class="neg">연결하지 못했습니다: ' + esc(e.message) + '</span>';
+  } finally { sel.disabled = false; }
+};
+
+/* 요청 수량 ↔ 청구 수량. **SKU로 먼저 맞추고, 없으면 바코드로** 맞춘다 —
+   신규 상품은 요청 시점에 SKU도 바코드도 없을 수 있어서 못 맞추는 줄이 생긴다.
+   그 줄은 "못 맞춤"으로 남긴다. 조용히 빼면 수량이 맞는 것처럼 보인다. */
+async function poRenderReqDiff() {
+  const el = $('#poReqDiff');
+  const id = $('#poReqPick').value;
+  if (!id) { el.textContent = '묶음을 고르면 수량을 맞춰봅니다.'; return; }
+  el.textContent = '맞춰보는 중…';
+
+  let lines;
+  try {
+    lines = await api(`purchase_request_lines?select=*&request_id=eq.${id}`) || [];
+  } catch (e) { el.textContent = '요청 줄을 못 읽었습니다.'; return; }
+
+  const key = (o) => (o.sku_id ? 'S' + o.sku_id : (o.barcode_text ? 'B' + o.barcode_text : null));
+  const inv = new Map();
+  POD.lines.forEach((l) => {
+    const k = key(l);
+    if (k) inv.set(k, (inv.get(k) || 0) + (Number(l.qty) || 0));
+  });
+
+  const diffs = [];
+  let matched = 0;
+  let unkeyed = 0;
+  lines.forEach((r) => {
+    const k = key(r);
+    if (!k) { unkeyed++; return; }
+    if (!inv.has(k)) { diffs.push(`${esc(r.sku_name_text || k)}: 요청 ${r.qty} → <b>청구서에 없음</b>`); return; }
+    matched++;
+    const got = inv.get(k);
+    if (got !== r.qty) diffs.push(`${esc(r.sku_name_text || k)}: 요청 ${r.qty} → 청구 <b>${got}</b>`);
+    inv.delete(k);
+  });
+  const extra = inv.size;
+
+  el.innerHTML = `요청 ${lines.length}줄 · 맞춘 ${matched}줄`
+    + (diffs.length ? `<ul class="sm neg" style="margin:4px 0 0 14px">${
+        diffs.map((d) => '<li>' + d + '</li>').join('')}</ul>` : ' · <b>수량 일치</b>')
+    + (unkeyed ? `<div class="sm">바코드·SKU가 없어 못 맞춘 요청 ${unkeyed}줄 — `
+        + '신규 상품이면 정상입니다(바코드는 등록 뒤에 생깁니다)</div>' : '')
+    + (extra ? `<div class="sm">요청에 없던 청구서 줄 ${extra}개</div>` : '');
 }
 
 const skuPickLabel = (s) => `${s.sku_name} [${s.barcode || '바코드없음'}]`;
