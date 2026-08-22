@@ -338,6 +338,23 @@ function lstStepBar(prog, activeKey) {
   }).join('');
 }
 
+/* ============================================================
+   아직 이 경로로 등록해본 적이 없는 것들 (2026-08-22, 사용자 결정 ⓒ)
+   ------------------------------------------------------------
+   실물이 없어서 확인을 못 한 것들이다. **막지 않는다** — 막으면 정작 그런 상품이
+   왔을 때 못 올린다. 대신 등록 직전에 "이건 처음 가는 길"이라고 확실히 말하고,
+   등록 후 WING에서 대조하게 한다. 대조가 끝나면 이 표에서 그 줄을 지우면 된다.
+
+   왜 표로 두는가: 지금은 화면 세 곳(뼈대 편집·물류·확인 모달)이 각자 "미검증"을
+   적고 있어서 서로 어긋난다 — 실제로 병행수입은 뼈대 화면이 '검증됨'으로,
+   docs/domain/product-listing.md 는 '미검증'으로 적고 있었다(2026-08-22 발견).
+   ============================================================ */
+const LISTING_UNVERIFIED = [
+  { scope: 'item', key: 'taxType',          bad: 'FREE',               label: '부가세 면세' },
+  { scope: 'item', key: 'adultOnly',        bad: 'ADULT_ONLY',         label: '성인 전용(19세 이상)' },
+  { scope: 'item', key: 'parallelImported', bad: 'PARALLEL_IMPORTED',  label: '병행수입' }
+];
+
 /* 단계마다 **봐야 할 지표가 다르다.** 등록 후 이 상품을 판정할 때 무엇을 볼지
    지금 박아둬야 AI가 매번 추측하지 않는다(026·D-18과 같은 생각).
    **키 이름을 워커의 PRIMARY_METRICS와 똑같이 쓴다** — 다른 낱말을 쓰면
@@ -400,6 +417,7 @@ async function lstBuildPayload(projectId) {
   if (!noticeT) warn.push('고시정보·상품주요정보 뼈대가 없습니다');
 
   /* 복제 원본이 있어야 워커가 몸통을 만든다(빈 양식 등록은 아직 워커가 거부한다) */
+  const unver = [];
   const src = p.clone_seller_product_id
     || (shipT && shipT.source_seller_product_id) || (noticeT && noticeT.source_seller_product_id);
   if (!src) warn.push('복제 원본이 없습니다 — 뼈대를 기존 상품에서 떠야 합니다');
@@ -519,15 +537,40 @@ async function lstBuildPayload(projectId) {
       }
     }
     if (it.barcode_mode === 'own') {
-      warn.push(`옵션 "${name}"이 자체 바코드를 씁니다 — **이 경로는 미검증**입니다`);
+      unver.push(`옵션 "${name}"이 자체 바코드를 씁니다 — 우리 상품 13건은 전부 쿠팡 발급이었습니다`);
     }
     return one;
   });
 
+  /* ── 처음 가는 길인지 본다 ── */
+  LISTING_UNVERIFIED.forEach((u) => {
+    const box = u.scope === 'item' ? itemCommon : product;
+    if (box[u.key] === u.bad) {
+      unver.push(`${u.label} (\`${u.key}=${u.bad}\`) — 이 코드값으로 등록해본 적이 없습니다`);
+    }
+  });
+  const bundleType = ((product.bundleInfo || {}).bundleType) || 'SINGLE';
+  if (bundleType !== 'SINGLE') {
+    unver.push(`혼합 구성 (\`bundleType=${bundleType}\`) — 우리 상품은 전부 SINGLE 이었습니다`);
+  }
+
+  /* 유통기한이 필수인 카테고리인지는 **카테고리 메타만 안다**(93 화면과 같은 판정).
+     필수인데 안 채웠으면 등록이 거부될 수 있으므로 경고 쪽으로 올린다. */
+  const needExp = !!(meta && meta.raw && meta.raw.isExpirationDateRequiredForRocketGrowth === true);
+  if (needExp) {
+    const missing = outItems.filter((it) =>
+      !(it.skuInfo.expiredAtManaged === true && Number(it.skuInfo.distributionPeriod) > 0));
+    if (missing.length) {
+      warn.push(`이 카테고리는 <b>유통기한 입력이 필수</b>인데 옵션 ${missing.length}개가 비어 있습니다 `
+        + '— 물류·바코드 화면에서 소비기한 관리를 켜고 일수를 넣으세요');
+    }
+    unver.push('유통기한 필수 카테고리입니다 — 이 분기로 등록해본 적이 없습니다');
+  }
+
   return {
     payload: { source_seller_product_id: src ? String(src) : null,
                product, itemCommon, items: outItems, requested: p.requested === true },
-    warn, auto, project: p
+    warn, auto, unver, project: p
   };
 }
 
@@ -651,6 +694,14 @@ async function lstOpenSubmit(projectId) {
     + (built.warn.length
         ? '<div class="msg err"><b>확인이 필요합니다</b><ul class="sm">'
           + built.warn.map((w) => '<li>' + w + '</li>').join('') + '</ul></div>'
+        : '')
+    /* **처음 가는 길**은 경고와 따로 세운다. 섞으면 "빠진 값"과 "안 해본 것"이 같은
+       빨간 덩어리가 되어 사람이 둘 다 대충 읽는다. 막지는 않는다(사용자 결정 2026-08-22). */
+    + (built.unver && built.unver.length
+        ? '<div class="msg warn"><b>아직 이 경로로 등록해본 적이 없습니다</b>'
+          + '<ul class="sm">' + built.unver.map((u) => '<li>' + u + '</li>').join('') + '</ul>'
+          + '<p class="sm">막지는 않습니다. 다만 <b>등록한 뒤 WING에서 이 항목을 꼭 대조하세요</b> — '
+          + '맞았으면 알려주시면 이 경고를 지웁니다.</p></div>'
         : '')
     + (blocking ? '<p class="msg err">복제 원본이 없어 등록할 수 없습니다 — 뼈대를 기존 상품에서 뜨세요.</p>' : '')
     + '<details style="margin-top:10px"><summary class="muted sm">쿠팡에 보낼 몸통 전체 보기</summary>'

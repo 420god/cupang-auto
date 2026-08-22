@@ -128,6 +128,9 @@ input[type="checkbox"] { width: auto; accent-color: var(--accent); cursor: point
 .msg { font-size: 12.5px; margin-top: 10px; line-height: 1.6; white-space: pre-wrap; }
 .msg.err { color: var(--neg); }
 .msg.ok  { color: var(--pos); }
+/* 아직 안 해본 경로. 경고(빨강)와 구별해야 한다 — "빠진 값"과 "처음 가는 길"은 다른 일이다. */
+.msg.warn { color: var(--warn); background: var(--warn-soft); border-radius: 8px;
+            padding: 8px 10px; white-space: normal; }
 
 /* ---------- 로그인 ---------- */
 .login-wrap {

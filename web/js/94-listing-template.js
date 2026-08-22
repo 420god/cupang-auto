@@ -376,11 +376,11 @@ function ltNoticeForm(t) {
     </div>
 
     ${ltRadioPair('병행수입', 'parallelImported', item.parallelImported || 'NOT_PARALLEL_IMPORTED',
-      'NOT_PARALLEL_IMPORTED', '병행수입 아님', 'PARALLEL_IMPORTED', '병행수입', true)}
+      'NOT_PARALLEL_IMPORTED', '병행수입 아님', 'PARALLEL_IMPORTED', '병행수입')}
     ${ltRadioPair('구매 연령', 'adultOnly', item.adultOnly || 'EVERYONE',
-      'EVERYONE', '전체 연령', 'ADULT_ONLY', '성인 전용(19세 이상)', false)}
+      'EVERYONE', '전체 연령', 'ADULT_ONLY', '성인 전용(19세 이상)')}
     ${ltRadioPair('부가세', 'taxType', item.taxType || 'TAX',
-      'TAX', '과세', 'FREE', '면세', false)}
+      'TAX', '과세', 'FREE', '면세')}
 
     <label class="field"><span>인당 최대구매수량</span>
       <div class="range">
@@ -429,8 +429,13 @@ function ltNoticeForm(t) {
       <span class="kv-v">${esc(a.attributeValueName || '—')}</span></span>`).join('')}</div>`;
 }
 
-/* 실측된 쪽을 왼쪽에 두고, 반대쪽은 **미검증**이라고 적는다 */
-function ltRadioPair(label, key, cur, vA, lA, vB, lB, bVerified) {
+/* 실측된 쪽을 왼쪽에 두고, 반대쪽은 **미검증**이라고 적는다.
+   무엇이 미검증인지는 **여기서 정하지 않는다** — 86-listing.js 의 LISTING_UNVERIFIED 가
+   한 곳에서 정한다. 두 곳이 각자 적다가 실제로 어긋났다(병행수입: 여기선 검증됨,
+   docs/domain/product-listing.md 에선 미검증. 2026-08-22 발견). */
+function ltRadioPair(label, key, cur, vA, lA, vB, lB) {
+  const bVerified = !(typeof LISTING_UNVERIFIED !== 'undefined'
+    && LISTING_UNVERIFIED.some((u) => u.key === key && u.bad === vB));
   return `<label class="field"><span>${esc(label)} <span class="muted xs">${esc(key)}</span></span>
     <div class="range">
       <label class="chk"><input type="radio" name="lt-${key}" class="lt-enum" data-key="${key}"
