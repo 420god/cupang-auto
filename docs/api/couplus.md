@@ -135,6 +135,76 @@
 **전에 이 문서가 "9필드"라고 적은 것은 틀렸다** — 모달의 섹션 번호를 개수로 옮긴
 것으로 보인다. 캡처를 결론만 남기고 버리면 이런 게 조용히 굳는다(R-12).
 
+## 내부 API (2026-08-22 실제 요청 캡처)
+
+**폼을 흉내 내지 않는다. 실제 요청을 재현한다.** 쿠플러스는 Vue SPA라 입력칸에 `id`도
+`name`도 없고, Vue 모델은 값을 직접 넣어도 안 바뀐다. WING을 다루는 방식과 같다
+(`extension/CLAUDE.md`: 캡처한 실제 요청을 재사용한다).
+
+| 메서드 | 경로 | 무엇 | 본문 |
+|---|---|---|---|
+| POST | `/api/getGrowthDBV2` | 화면 열 때 상품 목록 | 없음(Content-Length: 0) |
+| POST | `/api/reqpurchase/requestpurchase` | **구매요청 실행** | 줄 객체의 **배열** |
+| POST | `/api/reqpurchase/savereqlist` | 현재상태저장(임시) | 줄 객체의 배열(빈 배열도 됨) |
+| POST | `/api/reqpurchase/getlists` | 구매요청내역 조회 | `{start, end, …}` epoch ms |
+| POST | `/api/reqpurchase/deletereqpurchase` | 삭제 | 줄 객체의 배열(`_id` 필요) |
+| GET | `/api/deposit/getBalance/growth` | **예치금 잔액** | — (`growth` = companyid) |
+
+**인증은 `connect.sid` 쿠키 하나다**(express-session). 토큰도 헤더도 없다.
+→ **확장프로그램이 그 도메인에서 요청하면 로그인 상태가 그대로 따라온다.** 별도 로그인 처리 불필요.
+localStorage 에는 `rememberLogin`·`userEmail`·`wasLoggedIn`·`cdt:v1:*`(화면별 캐시) 뿐이고
+인증 토큰은 없다.
+
+**VPS 워커로는 못 한다** — 세션이 사용자 브라우저에 있다. 쿠팡 쓰기(고정 IP·API 키)와 성격이 정반대다.
+
+### 요청 한 줄의 모양
+
+키 이름이 **한국어**다. 아래 영문 키는 캡처에서 확정된 것이고, 한글 키는 아직 정확한
+철자를 못 받았다(Windows `Copy as cURL (cmd)` 가 한글을 공백으로 날렸다).
+
+```
+{
+  checked, showspinner,
+  <바코드>, <제품명>, <제품명>init, <구매링크>, <구매링크>init,
+  <옵션1_중국어>, <옵션2_중국어>, <이미지>, <옵션목록>{ 옵션명: [{name, imageUrl}] },
+  <구매재고>: 5451, <구매요청수량>: "2"(문자열), <판매구성수량>: 1(숫자), <묶음구성>: false,
+  HSCODE: "6401.10-1000", reqtype, sizeX, sizeY, sizeZ, weight,
+  <요청사항>: {
+    default, poarrange, <기본검수>, barcode, sticker, sewing, stamp, tag,
+    reqcontent,          // 배대지 작업요청사항
+    reqcontentPurchase,  // 1688판매자와의 협의 사항
+    opp, LDPE, airpacking, masking, auto,
+    exportType: "box",
+    destination: "coupang",       // 도착지
+    customsType: "integrated"     // ★ 통관 방식
+  },
+  <한글표시사항>: { 10개 항목 },
+  polists: [], selectpo: "",
+  item: { …1688 원문 통째로… },
+  companyid: "growth", <등록시각>: 1787387761943, _id: ""
+}
+```
+
+삭제 요청에는 `_id`·`processStatus`·`processHistory[{fromStatus,toStatus,changedAt,changedBy,changedByName,memo}]`
+가 더 붙어 있다 — **서버가 요청의 상태 흐름을 들고 있다.**
+
+### 캡처에서 새로 알게 된 것
+
+1. **`customsType` 을 요청마다 고른다**(`integrated` = 통합통관). 화면 상단의
+   `통합통관 300원/위안` · `단독통관 220.39원/위안` 과 짝이다. **환율이 여기서 갈린다** —
+   폼 캡처만 봤을 땐 이 선택지의 존재를 몰랐다.
+2. **`item` 에 1688 원문이 통째로 실린다.** `productSkuInfos`(옵션별 가격·재고·specId),
+   `skuShippingDetails`(**옵션별 무게**), `productAttribute`, 판매자 점수까지.
+   우리가 물류 화면에서 손으로 넣는 무게가 여기 이미 있다.
+3. **예치금 잔액 API가 있다.** 지금 우리 문서는 "잔액은 사진으로만 통보 → 수기 입력"인데
+   `GET /api/deposit/getBalance/{companyid}` 로 읽힌다. 대사(對査) 자동화의 입구다.
+4. `구매요청수량`은 문자열, `판매구성수량`은 숫자다. 타입이 섞여 있으니 그대로 흉내 낸다.
+5. **대량주문 엑셀은 바코드·수량 두 칸뿐이다**(사용자 확인). 요청사항·포장·통관을 못 실어서
+   우리 용도로는 부족하다 → API 경로로 간다.
+
+**아직 모르는 것**: 한글 키의 정확한 철자, 응답 모양, `reqtype`·`exportType`의 다른 값,
+모달 5~7번 항목.
+
 ## 환율 — 두 개고, 주문 시각에 고정된다
 
 | 용도 | 값(2026-08) | 성격 |
