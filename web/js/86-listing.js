@@ -711,3 +711,45 @@ function lstWatchQueue(queueId, projectId) {
   setTimeout(tick, 3000);
 }
 
+
+/* ============================================================
+   순서 강제 — 카테고리가 먼저다 (사용자 결정 2026-08-21)
+   ------------------------------------------------------------
+   **카테고리에 따라 채워야 할 게 달라진다** — 필수속성·검색필터·고시정보 종류·
+   수수료·입출고비가 전부 카테고리에서 나온다. 카테고리를 안 정한 채로 다른 걸
+   먼저 채우면 나중에 안 맞아서 다시 해야 한다.
+
+   막는 방식은 **열리되 입력만 잠그는 것**이다(사용자 선택). 아예 못 열게 하면
+   그 화면에 뭐가 있는지도 볼 수 없다.
+   ============================================================ */
+function lstGuardCategory(p, bodyEl) {
+  if (!bodyEl) return true;
+  const has = !!(p && p.display_category_code);
+  const host = bodyEl.parentNode;
+  let g = host.querySelector('.lst-guard');
+
+  if (has) {
+    if (g) g.remove();
+    bodyEl.classList.remove('dim-block');
+    return true;
+  }
+  if (!g) {
+    g = document.createElement('div');
+    g.className = 'msg err lst-guard';
+    host.insertBefore(g, bodyEl);
+  }
+  g.innerHTML = '<b>카테고리를 먼저 정해야 합니다.</b> '
+    + '카테고리에 따라 필수속성·검색필터·고시정보·수수료가 전부 달라집니다 — '
+    + '먼저 정하지 않으면 여기서 채운 값이 나중에 안 맞습니다. '
+    + '<button class="btn btn-sm lst-go-cat" style="margin-left:6px">카테고리 정하러 가기</button>';
+  bodyEl.classList.add('dim-block');
+  return false;
+}
+
+/* 배너의 버튼. 화면마다 따로 걸지 않고 한 번만 건다(위임). */
+document.addEventListener('click', (ev) => {
+  if (!ev.target.closest('.lst-go-cat')) return;
+  const btn = Array.from(document.querySelectorAll('.nav-item'))
+    .find((b) => b.dataset.page === 'listing-category');
+  if (btn) btn.click();
+});

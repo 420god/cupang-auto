@@ -60,6 +60,7 @@ async function lpLoadCurrent() {
   LP.removed = [];
 
   $('#lpSteps').innerHTML = lstStepBar(prog, 'price');
+  lstGuardCategory(p, $('#lpItems'));
   $('#lpSummary').textContent = (p && p.product_name)
     ? `${p.product_name} · 옵션 ${items.length}개`
     : `옵션 ${items.length}개`;

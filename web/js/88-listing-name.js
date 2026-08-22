@@ -45,6 +45,7 @@ async function lnLoadCurrent() {
   LN.p = p;
 
   $('#lnSteps').innerHTML = lstStepBar(prog, 'name');
+  lstGuardCategory(p, $('#lnBody'));
   $('#lnName').value = p.product_name || '';
   $('#lnDisplayName').value = p.display_product_name || '';
   $('#lnBrand').value = p.brand || '';

@@ -101,45 +101,46 @@
         <span>즐겨찾기</span>
         </button>
       </div>
-      <!-- 등록 — 소싱에서 넘어온 상품을 단계별로 채워 쿠팡에 올리는 묶음.
-           채우는 화면들은 다음 단계에서 이 그룹에 함께 들어온다. -->
+      <!-- 등록 — **카테고리가 먼저다.** 카테고리에 따라 필수속성·검색필터·고시정보·
+           수수료가 전부 달라져서, 먼저 정하지 않으면 뒤에 채운 게 안 맞는다.
+           나비게이션 순서가 곧 작업 순서다(사용자 결정 2026-08-21). -->
       <div class="nav-group">
         <div class="nav-group-label">등록</div>
         <button class="nav-item" data-page="listing">
         <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
         <span>상품등록</span>
         </button>
-        <button class="nav-item" data-page="listing-price">
-        <svg viewBox="0 0 24 24"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
-        <span>옵션·가격</span>
+        <button class="nav-item" data-page="listing-category">
+        <svg viewBox="0 0 24 24"><path d="M3 5h8v6H3zM13 5h8v6h-8zM3 13h8v6H3zM13 13h8v6h-8z"/></svg>
+        <span>① 카테고리</span>
+        </button>
+        <button class="nav-item" data-page="listing-filter">
+        <svg viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>
+        <span>② 검색필터</span>
         </button>
         <button class="nav-item" data-page="listing-name">
         <svg viewBox="0 0 24 24"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg>
-        <span>상품명·검색어</span>
+        <span>③ 상품명·검색어</span>
         </button>
-        <button class="nav-item" data-page="listing-category">
-        <svg viewBox="0 0 24 24"><path d="M3 5h8v6H3zM13 5h8v6h-8zM3 13h8v6H3zM13 13h8v6h-8z"/></svg>
-        <span>카테고리</span>
-        </button>
-        <button class="nav-item" data-page="listing-catalog">
-        <svg viewBox="0 0 24 24"><path d="M11 4a7 7 0 100 14 7 7 0 000-14zM16 16l5 5"/></svg>
-        <span>카탈로그 매칭</span>
+        <button class="nav-item" data-page="listing-price">
+        <svg viewBox="0 0 24 24"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+        <span>④ 옵션·가격</span>
         </button>
         <button class="nav-item" data-page="listing-image">
         <svg viewBox="0 0 24 24"><path d="M3 5h18v14H3zM3 15l5-5 4 4 3-3 6 6"/></svg>
-        <span>대표이미지</span>
+        <span>⑤ 대표이미지</span>
         </button>
         <button class="nav-item" data-page="listing-detail">
         <svg viewBox="0 0 24 24"><path d="M6 3h12v6H6zM6 11h12v4H6zM6 17h12v4H6z"/></svg>
-        <span>상세페이지</span>
+        <span>⑥ 상세페이지</span>
         </button>
         <button class="nav-item" data-page="listing-logistics">
         <svg viewBox="0 0 24 24"><path d="M3 8l9-5 9 5v8l-9 5-9-5zM3 8l9 5 9-5M12 13v8"/></svg>
-        <span>물류·바코드</span>
+        <span>⑦ 물류·바코드</span>
         </button>
-        <button class="nav-item" data-page="listing-template">
-        <svg viewBox="0 0 24 24"><path d="M4 4h16v4H4zM4 12h7v8H4zM15 12h5v8h-5z"/></svg>
-        <span>뼈대 설정</span>
+        <button class="nav-item" data-page="listing-settings">
+        <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 100-6 3 3 0 000 6zM19 12l2 2-2 3-3-1-2 2-3-1-1-3-3-1 1-3-1-3 3-1 1-3 3 1 2-2 3 1z"/></svg>
+        <span>등록 설정</span>
         </button>
       </div>
       <div class="nav-group">
@@ -587,6 +588,41 @@
         </div>
       </section>
 
+      <!-- ── 검색필터 ──
+           카테고리마다 항목이 다르다. 카테고리 메타의 선택 속성을 그대로 연다.
+           필수속성(색상·무게 등)은 등록할 때 자동으로 채우므로 여기 안 나온다. -->
+      <section id="page-listing-filter" class="page hidden">
+        <div class="page-head">
+          <div>
+            <h2>검색필터</h2>
+            <p class="muted sm">카테고리 속성 · 고객이 검색에서 걸러낼 때 쓰는 값</p>
+          </div>
+          <div class="page-actions">
+            <select id="lfPicker" class="ship-filter"></select>
+            <button id="lfSaveDefault" class="btn btn-sm">이 카테고리 기본값으로</button>
+            <button id="lfSave" class="btn btn-sm btn-primary">저장</button>
+          </div>
+        </div>
+
+        <div class="lst-chips" id="lfSteps" style="margin-bottom:10px"></div>
+
+        <p id="lfEmpty" class="muted hidden">준비 중인 상품이 없습니다 —
+          소싱 → 즐겨찾기에서 [등록 준비]를 누르거나, 상품등록 화면에서 새로 만드세요.</p>
+
+        <div id="lfBody">
+          <div class="hint-box">
+            <div id="lfNote"></div>
+            <div class="muted sm" style="margin-top:6px">
+              쿠팡 API 는 필수속성과 검색필터를 <b>한 배열로</b> 받습니다 — 화면만 나뉘어 있습니다.
+              어느 속성이 WING 의 '검색필터'에 해당하는지는 <b>아직 실물로 확정 못 했습니다</b>
+              (필수가 아닌 속성을 전부 여기 엽니다).
+            </div>
+          </div>
+          <div id="lfRows"></div>
+          <div id="lfMsg" class="msg hidden"></div>
+        </div>
+      </section>
+
       <!-- ── 등록 카테고리 ──
            소싱 탭의 '카테고리'(수집 대상 고르기)와 다른 화면이다. 여기서 고른 코드가
            쿠팡 등록 몸통의 displayCategoryCode 가 된다.
@@ -609,6 +645,24 @@
 
         <div id="lcBody">
           <div class="filter-panel" id="lcCurrent"></div>
+
+          <!-- 카탈로그 매칭 — 카테고리를 찾는 수단이라 이 화면 안에 둔다(사용자 결정 2026-08-21).
+               정보만 가져온다: 카테고리·브랜드·제조사·조회수·판매량. -->
+          <details class="filter-panel" id="lkBox" open>
+            <summary><b>카탈로그에서 찾기</b>
+              <span class="muted sm">— 비슷한 상품의 카테고리를 그대로 가져옵니다</span></summary>
+            <div id="lkBody" style="margin-top:10px">
+              <label class="field"><span>상품명 · 쿠팡 상품번호 · 상품 URL 중 하나</span>
+                <div class="range">
+                  <input id="lkQuery" type="search" placeholder="예: 9671949069 · 상품 URL 붙여넣기도 됩니다" />
+                  <button id="lkSearchBtn" class="btn btn-sm btn-primary">검색</button>
+                </div></label>
+              <p class="muted sm">확장프로그램이 WING 세션으로 대신 조회합니다.
+                <b>사람이 누를 때만 1회씩</b> 부릅니다 — 자동으로 반복 호출하지 않습니다.</p>
+              <div id="lkResults"></div>
+              <div id="lkMsg" class="msg hidden"></div>
+            </div>
+          </details>
 
           <div class="filter-panel">
             <div class="two">
@@ -679,39 +733,6 @@
            WING 상품등록의 '카탈로그 매칭하기'와 같은 것. **정보만 가져온다** —
            카탈로그에 결합해달라고 신청하는 게 아니다(등록 몸통에 그런 필드가 없다).
            웹은 WING을 직접 못 부르므로 확장프로그램에 시킨다. -->
-      <section id="page-listing-catalog" class="page hidden">
-        <div class="page-head">
-          <div>
-            <h2>카탈로그 매칭</h2>
-            <p class="muted sm">브랜드 · 제조사 · 카테고리 · 조회수를 가져옵니다</p>
-          </div>
-          <div class="page-actions">
-            <select id="lkPicker" class="ship-filter"></select>
-          </div>
-        </div>
-
-        <div class="lst-chips" id="lkSteps" style="margin-bottom:10px"></div>
-
-        <p id="lkEmpty" class="muted hidden">준비 중인 상품이 없습니다 —
-          소싱 → 즐겨찾기에서 [등록 준비]를 누르거나, 상품등록 화면에서 새로 만드세요.</p>
-
-        <div id="lkBody">
-          <div class="filter-panel" id="lkCurrent"></div>
-
-          <div class="filter-panel">
-            <label class="field"><span>상품명 · 쿠팡 상품번호 · 상품 URL 중 하나</span>
-              <div class="range">
-                <input id="lkQuery" type="search" placeholder="예: 9671949069 · 상품 URL 붙여넣기도 됩니다" />
-                <button id="lkSearchBtn" class="btn btn-sm btn-primary">검색</button>
-              </div></label>
-            <p class="muted sm">확장프로그램이 WING 세션으로 대신 조회합니다.
-              <b>사람이 누를 때만 1회씩</b> 부릅니다 — 자동으로 반복 호출하지 않습니다.</p>
-          </div>
-
-          <div id="lkResults"></div>
-          <div id="lkMsg" class="msg hidden"></div>
-        </div>
-      </section>
 
       <!-- ── 상세페이지 ──
            여러 장이 한 덩어리라 **세트 단위**로 고른다. 한 장짜리 긴 이미지도
@@ -804,11 +825,11 @@
       <!-- ── 뼈대 설정 ──
            이미 등록에 성공한 상품에서 뜬다. 쿠팡이 받아준 실제 값이라 가장 확실하다.
            뜬 뒤에 고칠 수 있다. -->
-      <section id="page-listing-template" class="page hidden">
+      <section id="page-listing-settings" class="page hidden">
         <div class="page-head">
           <div>
-            <h2>뼈대 설정</h2>
-            <p class="muted sm">배송 · 반품지 · 과세유형 · 고시정보 · 인증</p>
+            <h2>등록 설정</h2>
+            <p class="muted sm">상품이 달라도 늘 같은 값 · 돌려 쓰는 양식</p>
           </div>
         </div>
 
@@ -1772,7 +1793,7 @@
 <script src="js/88-listing-name.js"></script>
 <script src="js/89-listing-category.js"></script>
 <script src="js/90-listing-image.js"></script>
-<script src="js/91-listing-catalog.js"></script>
+<script src="js/91-listing-filter.js"></script>
 <script src="js/92-listing-detail.js"></script>
 <script src="js/93-listing-logistics.js"></script>
 <script src="js/94-listing-template.js"></script>

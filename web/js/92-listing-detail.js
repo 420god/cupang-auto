@@ -63,6 +63,7 @@ async function ldLoadCurrent() {
   LD.assets = assets || [];
 
   $('#ldSteps').innerHTML = lstStepBar(prog, 'detail');
+  lstGuardCategory(p, $('#ldBody'));
   $('#ldUseClone').checked = (p.detail_source === 'clone');
   ldRender();
 
